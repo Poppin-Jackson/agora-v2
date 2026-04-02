@@ -126,6 +126,37 @@ class ConnectionManager:
                 await ws.send_json(message)
 
 
+# ========================
+# 状态机规则
+# ========================
+
+# 合法的 phase 转换映射
+PHASE_TRANSITIONS: dict = {
+    RoomPhase.INITIATED: [RoomPhase.SELECTING],
+    RoomPhase.SELECTING: [RoomPhase.THINKING],
+    RoomPhase.THINKING: [RoomPhase.SHARING],
+    RoomPhase.SHARING: [RoomPhase.DEBATE, RoomPhase.CONVERGING],
+    RoomPhase.DEBATE: [RoomPhase.CONVERGING, RoomPhase.SHARING],
+    RoomPhase.CONVERGING: [RoomPhase.HIERARCHICAL_REVIEW, RoomPhase.DECISION],
+    RoomPhase.HIERARCHICAL_REVIEW: [RoomPhase.DECISION, RoomPhase.PROBLEM_DETECTED],
+    RoomPhase.DECISION: [RoomPhase.EXECUTING, RoomPhase.PROBLEM_DETECTED],
+    RoomPhase.EXECUTING: [RoomPhase.COMPLETED, RoomPhase.PROBLEM_DETECTED],
+    RoomPhase.COMPLETED: [],
+    RoomPhase.PROBLEM_DETECTED: [RoomPhase.INITIATED],
+}
+
+
+def can_transition(from_phase: RoomPhase, to_phase: RoomPhase) -> bool:
+    """检查 phase 转换是否合法"""
+    allowed = PHASE_TRANSITIONS.get(from_phase, [])
+    return to_phase in allowed
+
+
+def get_next_phases(current: RoomPhase) -> list:
+    """获取当前 phase 的所有合法下一 phase"""
+    return [p.value for p in PHASE_TRANSITIONS.get(current, [])]
+
+
 ws_manager = ConnectionManager()
 
 
@@ -215,6 +246,59 @@ async def add_participant(room_id: str, data: ParticipantAdd):
         "participant": p,
     })
     return p
+
+
+@app.post("/rooms/{room_id}/phase")
+async def transition_phase(room_id: str, to_phase: RoomPhase):
+    """Phase 状态转换"""
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    room = _rooms[room_id]
+    current = RoomPhase(room["phase"])
+
+    if not can_transition(current, to_phase):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_transition",
+                "current_phase": current.value,
+                "requested_phase": to_phase.value,
+                "allowed_phases": get_next_phases(current),
+            }
+        )
+
+    old = current.value
+    _rooms[room_id]["phase"] = to_phase.value
+
+    await ws_manager.broadcast(room_id, {
+        "type": "phase_change",
+        "from_phase": old,
+        "to_phase": to_phase.value,
+    })
+
+    return {
+        "room_id": room_id,
+        "from_phase": old,
+        "to_phase": to_phase.value,
+        "allowed_next": get_next_phases(to_phase),
+    }
+
+
+@app.get("/rooms/{room_id}/phase")
+async def get_phase(room_id: str):
+    """获取当前 phase 及可转换目标"""
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    room = _rooms[room_id]
+    current = RoomPhase(room["phase"])
+
+    return {
+        "room_id": room_id,
+        "current_phase": current.value,
+        "allowed_next": get_next_phases(current),
+    }
 
 
 @app.post("/rooms/{room_id}/speech")
