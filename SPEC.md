@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.5 | 日期：2026-04-05（Step 51）
+> 版本：v2.4 | 日期：2026-04-05（Step 50）
 > 版本：v2.3 | 日期：2026-04-04（Step 49）
 > 版本：v2.1 | 日期：2026-04-04（Step 47）
 > 版本：v2.0 | 日期：2026-04-04（Step 46）
@@ -654,6 +656,43 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - Docker Web 镜像已重建并重启
 
 ## 迭代记录
+
+### v2.5 (2026-04-05 07:18)
+**Step 51: Analytics Dashboard UI（数据分析仪表盘）**
+- 问题：后端 analytics API 返回丰富的多维度数据（rooms.by_phase / tasks.by_status / tasks.by_priority / hours / decisions / risks / edicts），Plan Detail 概览只有简单数字卡片，无可视化分析面板
+- 修复：Plan Detail 新增第 14 个 Tab「分析」（位于 Activities 和 Snapshots 之间）
+- Analytics Dashboard 内容：
+  - 摘要卡片行：讨论室（总数/活跃/已完成）、任务（总数/已完成/进行中）、决策总数、风险总数
+  - 两列网格布局：
+    - 讨论室阶段分布：横向进度条 + 百分比
+    - 任务状态分析：状态横向条（已完成/进行中/阻塞/待处理）+ 优先级分布
+    - 整体进度：SVG 环形进度图（完成率）+ 详细统计（平均进度/各状态计数）
+    - 工时估算：预估 vs 实际横向对比条 + 偏差百分比
+    - 其他统计：2×2 网格（决策/风险/圣旨/活跃房间）
+- 新增函数：`loadAnalyticsData()` — analytics Tab 激活时加载数据
+- watch 监听：`activePlanTab === 'analytics'` 时自动调用 `loadAnalyticsData()`
+- TypeScript 修复：`status`/`priority` 迭代键使用 `String()` 显式转换解决与字符串字面量比较的类型错误
+- `npm run build` 成功（78 modules, 238.71 kB），pytest 129/129 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.4 (2026-04-05 07:08)
+**Step 50: Problem Management Panel UI（问题管理面板）**
+- 问题：后端问题处理流程 API 已完整实现（PROBLEM_DETECTED → PROBLEM_ANALYSIS → PROBLEM_DISCUSSION → PLAN_UPDATE → RESUMING），但前端无独立 UI，只有阶段推进按钮
+- 修复：Room 侧边栏新增「问题管理面板」，进入问题阶段时自动显示，等效于 DEBATE 阶段的辩论面板
+- 新增状态：`problemStates` / `currentProblem` / `problemAnalysis` / `problemDiscussion` / `showReportProblem` / `reportProblemForm` / `analyzeForm` / `discussForm` / `planUpdateForm` / `resumingForm` / `problemActionLoading` / `isProblemPhase` computed
+- 新增函数：`loadProblemState()` / `handleReportProblem()` / `handleAnalyzeProblem()` / `handleDiscussProblem()` / `handleUpdatePlan()` / `handleResumeExecution()` / `getProblemPhaseFromStatus()`
+- Phase colors/labels：新增 `problem_analysis` / `problem_discussion` / `plan_update` / `resuming` 四个阶段配色和标签
+- Problem Panel 内容（按阶段显示）：
+  - `PROBLEM_DETECTED`：问题信息（标题/类型/严重程度/描述）+「开始分析」按钮
+  - `PROBLEM_ANALYSIS`：根因分析表单（根因/置信度/影响范围/进度影响/解决方案选项）
+  - `PROBLEM_DISCUSSION`：分析摘要 + 解决方案投票
+  - `PLAN_UPDATE`：计划更新表单（版本号/更新类型/描述）
+  - `RESUMING`：恢复执行表单（版本号/恢复任务点/检查点）
+  - `EXECUTING`：显示「⚠️ 报告问题」按钮 + 问题报告表单
+- CSS 样式：问题面板/阶段徽章/严重程度标签/解决方案投票/报告问题按钮
+- API 导入：新增 `getProblems` / `getProblem` / `analyzeProblem` / `discussProblem` / `updatePlan` / `resumeExecution`
+- 验证：`npm run build` 成功（78 modules, 228.90 kB），pytest 129/129 通过 ✅
+- Docker Web/API 镜像已重建并重启
 
 ### v2.3 (2026-04-04 18:58)
 **Step 49: Approval Management UI（审批管理 UI）**

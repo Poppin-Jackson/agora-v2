@@ -68,6 +68,12 @@ import api, {
   getBlockedTasks,
   validateTaskDependencies,
   escalateRoom,
+  getProblems,
+  getProblem,
+  analyzeProblem,
+  discussProblem,
+  updatePlan,
+  resumeExecution,
   listTaskComments,
   createTaskComment,
   listTaskCheckpoints,
@@ -93,7 +99,7 @@ const planVersions = ref<any[]>([])
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
-const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'snapshots'>('overview')
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'analytics' | 'snapshots'>('overview')
 const planDetailActiveVersion = ref<string>('')
 
 // ─── Decisions State ─────────────────────────────────────
@@ -247,6 +253,60 @@ const escalationForm = reactive({
 })
 const escalationLoading = ref(false)
 
+// ─── Problem Management State ──────────────────────────────────────
+const problemStates = ['PROBLEM_DETECTED', 'PROBLEM_ANALYSIS', 'PROBLEM_DISCUSSION', 'PLAN_UPDATE', 'RESUMING']
+const currentProblem = ref<any>(null)
+const problemAnalysis = ref<any>(null)
+const problemDiscussion = ref<any>(null)
+const showReportProblem = ref(false)
+const reportProblemForm = reactive({
+  type: 'execution_blocker',
+  title: '',
+  description: '',
+  severity: 'medium',
+  affected_tasks: [] as string[],
+  progress_delay: '',
+  related_context: '',
+})
+const reportProblemLoading = ref(false)
+const analyzeForm = reactive({
+  root_cause: '',
+  root_cause_confidence: 0.8,
+  impact_scope: '',
+  affected_tasks: [] as string[],
+  progress_impact: '',
+  severity_reassessment: '',
+  solution_options: [] as Array<{ description: string; pros: string[]; cons: string[] }>,
+  recommended_option: 0,
+  requires_discussion: false,
+  discussion_needed_aspects: [] as string[],
+})
+const discussForm = reactive({
+  participants: [] as Array<{ id: string; name: string; level: number }>,
+  discussion_focus: [] as Array<{ aspect: string; notes: string }>,
+  proposed_solutions: [] as Array<{ solution: string; proposed_by: string }>,
+  votes: {} as Record<string, string>,
+})
+const planUpdateForm = reactive({
+  new_version: '',
+  parent_version: '',
+  update_type: 'problem_recovery',
+  description: '',
+  changes: {} as Record<string, unknown>,
+  task_updates: [] as Array<{ task_id: string; status: string }>,
+})
+const resumingForm = reactive({
+  new_version: '',
+  resuming_from_task: 0,
+  checkpoint: '',
+  resume_instructions: {} as Record<string, unknown>,
+})
+const problemActionLoading = ref(false)
+const isProblemPhase = computed(() => {
+  const phase = currentPhase.value?.current_phase
+  return phase && problemStates.includes(phase)
+})
+
 // ─── Create Room State ──────────────────────────────────
 const showCreateRoom = ref(false)
 const newRoomForm = reactive({ topic: '', title: '', mode: 'hierarchical' as string })
@@ -383,6 +443,10 @@ const phaseColors: Record<string, string> = {
   executing: '#0ea5e9',
   completed: '#22c55e',
   problem_detected: '#dc2626',
+  problem_analysis: '#f59e0b',
+  problem_discussion: '#a78bfa',
+  plan_update: '#3b82f6',
+  resuming: '#10b981',
 }
 
 const phaseLabel: Record<string, string> = {
@@ -397,6 +461,10 @@ const phaseLabel: Record<string, string> = {
   executing: '执行中',
   completed: '已完成',
   problem_detected: '问题',
+  problem_analysis: '问题分析',
+  problem_discussion: '问题讨论',
+  plan_update: '计划更新',
+  resuming: '恢复执行',
 }
 
 const statusLabel: Record<string, string> = {
@@ -587,6 +655,16 @@ async function viewSnapshot(snap: any) {
   }
 }
 
+async function loadAnalyticsData() {
+  if (!currentPlan.value) return
+  try {
+    const res = await api.get(`/plans/${currentPlan.value.plan_id}/analytics`)
+    planMetrics.value = res.data
+  } catch (e) {
+    console.error('loadAnalyticsData failed', e)
+  }
+}
+
 // Watch tab switch to load snapshots when entering the tab
 watch(activePlanTab, (newTab) => {
   if (newTab === 'snapshots') {
@@ -594,6 +672,9 @@ watch(activePlanTab, (newTab) => {
   }
   if (newTab === 'approvals') {
     loadApprovalFlow()
+  }
+  if (newTab === 'analytics') {
+    loadAnalyticsData()
   }
 })
 
@@ -1417,6 +1498,11 @@ async function enterRoom(roomId: string) {
       debateState.value = null
     }
 
+    // Load problem state if room is in a problem phase
+    if (problemStates.includes(phaseRes.data?.current_phase)) {
+      await loadProblemState(roomId, planId)
+    }
+
     connectWs(roomId)
     phasePollInterval = setInterval(async () => {
       try {
@@ -1427,6 +1513,12 @@ async function enterRoom(roomId: string) {
           try {
             const ds = await getDebateState(roomId)
             debateState.value = ds.data
+          } catch {}
+        }
+        // Refresh problem state when in problem phases
+        if (problemStates.includes(r.data?.current_phase)) {
+          try {
+            await loadProblemState(roomId, currentRoom.value?.plan_id)
           } catch {}
         }
       } catch {}
@@ -1630,6 +1722,231 @@ async function handleEscalateRoom() {
     alert('升级失败：' + (e instanceof Error ? e.message : String(e)))
   } finally {
     escalationLoading.value = false
+  }
+}
+
+// ─── Problem Management ──────────────────────────────────────────
+async function loadProblemState(roomId: string, planId?: string) {
+  if (!planId) return
+  try {
+    const problemsRes = await getProblems(planId)
+    const problems = problemsRes.data?.problems || []
+    // Find the most recent problem for this room
+    const roomProblem = problems.find((p: any) => p.room_id === roomId && problemStates.includes(getProblemPhaseFromStatus(p.status)))
+    if (roomProblem) {
+      currentProblem.value = roomProblem
+      // Load analysis if in ANALYSIS or later
+      if (['analyzed', 'discussion', 'plan_update', 'resuming'].includes(roomProblem.status)) {
+        try {
+          const analysisRes = await api.get(`/problems/${roomProblem.issue_id}/analysis`)
+          problemAnalysis.value = analysisRes.data
+        } catch {
+          problemAnalysis.value = null
+        }
+      }
+      // Load discussion if in DISCUSSION or later
+      if (['discussion', 'plan_update', 'resuming'].includes(roomProblem.status)) {
+        try {
+          const discussRes = await api.get(`/problems/${roomProblem.issue_id}/discussion`)
+          problemDiscussion.value = discussRes.data
+        } catch {
+          problemDiscussion.value = null
+        }
+      }
+    } else {
+      currentProblem.value = null
+      problemAnalysis.value = null
+      problemDiscussion.value = null
+    }
+  } catch (e) {
+    console.error('loadProblemState failed', e)
+    currentProblem.value = null
+  }
+}
+
+function getProblemPhaseFromStatus(status: string): string {
+  const map: Record<string, string> = {
+    detected: 'PROBLEM_DETECTED',
+    analyzed: 'PROBLEM_ANALYSIS',
+    discussion: 'PROBLEM_DISCUSSION',
+    plan_update: 'PLAN_UPDATE',
+    resuming: 'RESUMING',
+  }
+  return map[status] || status
+}
+
+async function handleReportProblem() {
+  if (!currentRoom.value || !currentPlan.value) return
+  if (!reportProblemForm.title.trim()) {
+    alert('请填写问题标题')
+    return
+  }
+  reportProblemLoading.value = true
+  try {
+    await api.post('/problems/report', {
+      plan_id: currentPlan.value.plan_id,
+      room_id: currentRoom.value.room_id,
+      type: reportProblemForm.type,
+      title: reportProblemForm.title,
+      description: reportProblemForm.description,
+      severity: reportProblemForm.severity,
+      detected_by: currentUser.name,
+      affected_tasks: reportProblemForm.affected_tasks,
+      progress_delay: reportProblemForm.progress_delay,
+      related_context: reportProblemForm.related_context,
+    })
+    showReportProblem.value = false
+    reportProblemForm.type = 'execution_blocker'
+    reportProblemForm.title = ''
+    reportProblemForm.description = ''
+    reportProblemForm.severity = 'medium'
+    reportProblemForm.affected_tasks = []
+    reportProblemForm.progress_delay = ''
+    reportProblemForm.related_context = ''
+    // Reload phase and problem state
+    const phaseRes = await getPhase(currentRoom.value.room_id)
+    currentPhase.value = phaseRes.data
+    await loadProblemState(currentRoom.value.room_id, currentPlan.value.plan_id)
+    await loadNotifications()
+  } catch (e) {
+    console.error('reportProblem failed', e)
+    alert('报告问题失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    reportProblemLoading.value = false
+  }
+}
+
+async function handleAnalyzeProblem() {
+  if (!currentProblem.value || !currentRoom.value) return
+  if (!analyzeForm.root_cause.trim()) {
+    alert('请填写根因分析')
+    return
+  }
+  problemActionLoading.value = true
+  try {
+    await analyzeProblem(currentProblem.value.issue_id, {
+      root_cause: analyzeForm.root_cause,
+      root_cause_confidence: analyzeForm.root_cause_confidence,
+      impact_scope: analyzeForm.impact_scope,
+      affected_tasks: analyzeForm.affected_tasks,
+      progress_impact: analyzeForm.progress_impact,
+      severity_reassessment: analyzeForm.severity_reassessment,
+      solution_options: analyzeForm.solution_options,
+      recommended_option: analyzeForm.recommended_option,
+      requires_discussion: analyzeForm.requires_discussion,
+      discussion_needed_aspects: analyzeForm.discussion_needed_aspects,
+    })
+    // Reset form
+    analyzeForm.root_cause = ''
+    analyzeForm.root_cause_confidence = 0.8
+    analyzeForm.impact_scope = ''
+    analyzeForm.affected_tasks = []
+    analyzeForm.progress_impact = ''
+    analyzeForm.severity_reassessment = ''
+    analyzeForm.solution_options = []
+    analyzeForm.recommended_option = 0
+    analyzeForm.requires_discussion = false
+    analyzeForm.discussion_needed_aspects = []
+    // Refresh
+    const phaseRes = await getPhase(currentRoom.value.room_id)
+    currentPhase.value = phaseRes.data
+    await loadProblemState(currentRoom.value.room_id, currentPlan.value?.plan_id)
+  } catch (e) {
+    console.error('analyzeProblem failed', e)
+    alert('分析问题失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    problemActionLoading.value = false
+  }
+}
+
+async function handleDiscussProblem() {
+  if (!currentProblem.value || !currentRoom.value) return
+  problemActionLoading.value = true
+  try {
+    await discussProblem(currentProblem.value.issue_id, {
+      participants: discussForm.participants,
+      discussion_focus: discussForm.discussion_focus,
+      proposed_solutions: discussForm.proposed_solutions,
+      votes: discussForm.votes,
+    })
+    // Reset
+    discussForm.participants = []
+    discussForm.discussion_focus = []
+    discussForm.proposed_solutions = []
+    discussForm.votes = {}
+    // Refresh
+    const phaseRes = await getPhase(currentRoom.value.room_id)
+    currentPhase.value = phaseRes.data
+    await loadProblemState(currentRoom.value.room_id, currentPlan.value?.plan_id)
+  } catch (e) {
+    console.error('discussProblem failed', e)
+    alert('讨论问题失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    problemActionLoading.value = false
+  }
+}
+
+async function handleUpdatePlan() {
+  if (!currentProblem.value || !currentPlan.value) return
+  if (!planUpdateForm.new_version.trim()) {
+    alert('请填写新版本号')
+    return
+  }
+  problemActionLoading.value = true
+  try {
+    await updatePlan(currentPlan.value.plan_id, {
+      new_version: planUpdateForm.new_version,
+      parent_version: planUpdateForm.parent_version || currentPlan.value.current_version,
+      update_type: planUpdateForm.update_type,
+      description: planUpdateForm.description,
+      changes: planUpdateForm.changes,
+      task_updates: planUpdateForm.task_updates,
+    })
+    planUpdateForm.new_version = ''
+    planUpdateForm.parent_version = ''
+    planUpdateForm.description = ''
+    planUpdateForm.changes = {}
+    planUpdateForm.task_updates = []
+    // Refresh
+    const phaseRes = await getPhase(currentRoom.value.room_id)
+    currentPhase.value = phaseRes.data
+    await loadProblemState(currentRoom.value.room_id, currentPlan.value?.plan_id)
+    await openPlanDetail(currentPlan.value.plan_id)
+  } catch (e) {
+    console.error('updatePlan failed', e)
+    alert('更新计划失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    problemActionLoading.value = false
+  }
+}
+
+async function handleResumeExecution() {
+  if (!currentProblem.value || !currentPlan.value) return
+  if (!resumingForm.new_version.trim()) {
+    alert('请填写新版本号')
+    return
+  }
+  problemActionLoading.value = true
+  try {
+    await resumeExecution(currentPlan.value.plan_id, {
+      new_version: resumingForm.new_version,
+      resuming_from_task: resumingForm.resuming_from_task,
+      checkpoint: resumingForm.checkpoint,
+      resume_instructions: resumingForm.resume_instructions,
+    })
+    resumingForm.new_version = ''
+    resumingForm.resuming_from_task = 0
+    resumingForm.checkpoint = ''
+    resumingForm.resume_instructions = {}
+    // Refresh
+    const phaseRes = await getPhase(currentRoom.value.room_id)
+    currentPhase.value = phaseRes.data
+    await loadProblemState(currentRoom.value.room_id, currentPlan.value?.plan_id)
+  } catch (e) {
+    console.error('resumeExecution failed', e)
+    alert('恢复执行失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    problemActionLoading.value = false
   }
 }
 
@@ -1845,13 +2162,13 @@ onUnmounted(() => {
       <!-- Plan Tabs -->
       <div class="plan-tabs">
         <button
-          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'snapshots']"
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'analytics', 'snapshots']"
           :key="tab"
           class="plan-tab"
           :class="{ active: activePlanTab === tab }"
           @click="activePlanTab = tab as any"
         >
-          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : '快照' }}
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : '快照' }}
         </button>
       </div>
 
@@ -3244,6 +3561,241 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Analytics Tab -->
+      <div v-else-if="activePlanTab === 'analytics'" class="plan-content">
+        <div class="tab-header-row">
+          <div class="tab-title">📊 数据分析</div>
+          <button class="btn-primary" @click="loadAnalyticsData">刷新</button>
+        </div>
+
+        <!-- Summary Cards -->
+        <div v-if="planMetrics" class="analytics-summary-cards">
+          <div class="analytics-card rooms-card">
+            <div class="analytics-card-icon">🏛️</div>
+            <div class="analytics-card-body">
+              <div class="analytics-card-num">{{ planMetrics.rooms?.total || 0 }}</div>
+              <div class="analytics-card-label">讨论室</div>
+              <div class="analytics-card-sub">
+                <span class="sub-active">{{ planMetrics.rooms?.active || 0 }} 活跃</span>
+                <span class="sub-div">|</span>
+                <span class="sub-done">{{ planMetrics.rooms?.completed || 0 }} 已完成</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-card tasks-card">
+            <div class="analytics-card-icon">📋</div>
+            <div class="analytics-card-body">
+              <div class="analytics-card-num">{{ planMetrics.tasks?.total || 0 }}</div>
+              <div class="analytics-card-label">任务总数</div>
+              <div class="analytics-card-sub">
+                <span class="sub-done">✅ {{ planMetrics.tasks?.completed || 0 }} 已完成</span>
+                <span class="sub-div">|</span>
+                <span class="sub-progress">🔄 {{ planMetrics.tasks?.in_progress || 0 }} 进行中</span>
+              </div>
+            </div>
+          </div>
+          <div class="analytics-card decisions-card">
+            <div class="analytics-card-icon">⚖️</div>
+            <div class="analytics-card-body">
+              <div class="analytics-card-num">{{ planMetrics.decisions?.total || 0 }}</div>
+              <div class="analytics-card-label">决策总数</div>
+            </div>
+          </div>
+          <div class="analytics-card risks-card">
+            <div class="analytics-card-icon">🚨</div>
+            <div class="analytics-card-body">
+              <div class="analytics-card-num">{{ planMetrics.risks?.total || 0 }}</div>
+              <div class="analytics-card-label">风险总数</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div v-if="planMetrics" class="analytics-grid">
+          <!-- Rooms Phase Distribution -->
+          <div class="analytics-panel">
+            <div class="analytics-panel-title">🏛️ 讨论室阶段分布</div>
+            <div class="analytics-empty" v-if="!planMetrics.rooms?.by_phase || Object.keys(planMetrics.rooms.by_phase).length === 0">
+              暂无数据
+            </div>
+            <div v-else class="phase-distribution">
+              <div
+                v-for="(count, phase) in planMetrics.rooms.by_phase"
+                :key="phase"
+                class="phase-row"
+              >
+                <div class="phase-label-row">
+                  <span class="phase-name">{{ phaseLabel[phase] || phase }}</span>
+                  <span class="phase-count">{{ count }}</span>
+                </div>
+                <div class="phase-bar-track">
+                  <div
+                    class="phase-bar-fill"
+                    :style="{
+                      width: (count / planMetrics.rooms.total * 100) + '%',
+                      background: phaseColors[phase] || '#6b7280'
+                    }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tasks Status Breakdown -->
+          <div class="analytics-panel">
+            <div class="analytics-panel-title">📋 任务状态分析</div>
+            <div class="task-status-breakdown">
+              <div
+                v-for="(count, status) in planMetrics.tasks?.by_status"
+                :key="status"
+                class="task-status-row"
+              >
+                <div class="task-status-label">
+                  <span class="task-status-dot" :class="'dot-' + status"></span>
+                  <span>{{ String(status) === 'completed' ? '✅ 已完成' : String(status) === 'in_progress' ? '🔄 进行中' : String(status) === 'blocked' ? '🚫 阻塞' : String(status) === 'pending' ? '⏳ 待处理' : status }}</span>
+                  <span class="task-status-count">{{ count }}</span>
+                </div>
+                <div class="task-status-bar-track">
+                  <div
+                    class="task-status-bar-fill"
+                    :class="'fill-' + status"
+                    :style="{ width: ((count as number) / planMetrics.tasks.total * 100) + '%' }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Task Priority Distribution -->
+            <div class="analytics-panel-title" style="margin-top:20px">🎯 任务优先级</div>
+            <div class="priority-breakdown">
+              <div
+                v-for="(count, priority) in planMetrics.tasks?.by_priority"
+                :key="priority"
+                class="priority-row"
+              >
+                <span class="priority-label">{{ String(priority) === 'critical' ? '🔴 紧急' : String(priority) === 'high' ? '🟠 高' : String(priority) === 'medium' ? '🟡 中' : '🟢 低' }}</span>
+                <div class="priority-bar-track">
+                  <div
+                    class="priority-bar-fill"
+                    :class="'fill-' + priority"
+                    :style="{ width: ((count as number) / planMetrics.tasks.total * 100) + '%' }"
+                  ></div>
+                </div>
+                <span class="priority-count">{{ count }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tasks Completion Rate -->
+          <div class="analytics-panel wide">
+            <div class="analytics-panel-title">📈 整体进度</div>
+            <div class="completion-overview">
+              <div class="completion-big-ring">
+                <svg viewBox="0 0 120 120" class="ring-svg">
+                  <circle cx="60" cy="60" r="50" fill="none" stroke="#e5e7eb" stroke-width="12"/>
+                  <circle
+                    cx="60" cy="60" r="50" fill="none"
+                    :stroke="planMetrics.tasks?.completion_rate >= 70 ? '#22c55e' : planMetrics.tasks?.completion_rate >= 40 ? '#f59e0b' : '#ef4444'"
+                    stroke-width="12"
+                    stroke-linecap="round"
+                    :stroke-dasharray="314"
+                    :stroke-dashoffset="314 - (314 * (planMetrics.tasks?.completion_rate || 0))"
+                    transform="rotate(-90 60 60)"
+                  />
+                </svg>
+                <div class="ring-label">
+                  <div class="ring-pct">{{ ((planMetrics.tasks?.completion_rate || 0) * 100).toFixed(0) }}%</div>
+                  <div class="ring-sub">完成率</div>
+                </div>
+              </div>
+              <div class="completion-stats">
+                <div class="stat-row">
+                  <span class="stat-lbl">平均进度</span>
+                  <span class="stat-val">{{ ((planMetrics.tasks?.average_progress || 0) * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-lbl">已完成</span>
+                  <span class="stat-val done">{{ planMetrics.tasks?.completed || 0 }}</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-lbl">进行中</span>
+                  <span class="stat-val progress">{{ planMetrics.tasks?.in_progress || 0 }}</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-lbl">阻塞</span>
+                  <span class="stat-val blocked">{{ planMetrics.tasks?.blocked || 0 }}</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-lbl">待处理</span>
+                  <span class="stat-val pending">{{ planMetrics.tasks?.pending || 0 }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Hours Estimate -->
+          <div class="analytics-panel" v-if="planMetrics.tasks?.total_estimated_hours > 0">
+            <div class="analytics-panel-title">⏱️ 工时估算</div>
+            <div class="hours-comparison">
+              <div class="hours-row">
+                <span class="hours-label">预估</span>
+                <div class="hours-bar-track">
+                  <div class="hours-bar-fill estimated" :style="{ width: Math.min(100, (planMetrics.tasks.total_estimated_hours / Math.max(planMetrics.tasks.total_estimated_hours, planMetrics.tasks.total_actual_hours || 1) * 100)) + '%' }"></div>
+                </div>
+                <span class="hours-num">{{ planMetrics.tasks.total_estimated_hours.toFixed(1) }}h</span>
+              </div>
+              <div class="hours-row">
+                <span class="hours-label">实际</span>
+                <div class="hours-bar-track">
+                  <div class="hours-bar-fill actual" :style="{ width: Math.min(100, (planMetrics.tasks.total_actual_hours / Math.max(planMetrics.tasks.total_estimated_hours, planMetrics.tasks.total_actual_hours || 1) * 100)) + '%' }"></div>
+                </div>
+                <span class="hours-num">{{ (planMetrics.tasks.total_actual_hours || 0).toFixed(1) }}h</span>
+              </div>
+              <div class="hours-variance" v-if="planMetrics.tasks.total_actual_hours > 0">
+                <span class="variance-label">偏差:</span>
+                <span class="variance-val" :class="planMetrics.tasks.total_actual_hours > planMetrics.tasks.total_estimated_hours ? 'over' : 'under'">
+                  {{ planMetrics.tasks.total_actual_hours > planMetrics.tasks.total_estimated_hours ? '+' : '' }}{{ (planMetrics.tasks.total_actual_hours - planMetrics.tasks.total_estimated_hours).toFixed(1) }}h
+                  ({{ (((planMetrics.tasks.total_actual_hours / planMetrics.tasks.total_estimated_hours - 1) * 100)).toFixed(0) }}%)
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Decisions, Risks, Edicts Counts -->
+          <div class="analytics-panel">
+            <div class="analytics-panel-title">📦 其他统计</div>
+            <div class="other-stats-grid">
+              <div class="other-stat-card">
+                <div class="other-stat-icon">⚖️</div>
+                <div class="other-stat-num">{{ planMetrics.decisions?.total || 0 }}</div>
+                <div class="other-stat-label">决策</div>
+              </div>
+              <div class="other-stat-card">
+                <div class="other-stat-icon">🚨</div>
+                <div class="other-stat-num">{{ planMetrics.risks?.total || 0 }}</div>
+                <div class="other-stat-label">风险</div>
+              </div>
+              <div class="other-stat-card">
+                <div class="other-stat-icon">📜</div>
+                <div class="other-stat-num">{{ planMetrics.edicts?.total || 0 }}</div>
+                <div class="other-stat-label">圣旨</div>
+              </div>
+              <div class="other-stat-card">
+                <div class="other-stat-icon">🏛️</div>
+                <div class="other-stat-num">{{ planMetrics.rooms?.active || 0 }}</div>
+                <div class="other-stat-label">活跃房间</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!planMetrics" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">暂无分析数据</div>
+          <button class="btn-primary" @click="loadAnalyticsData">加载数据</button>
+        </div>
+      </div>
+
       <!-- Snapshots Tab -->
       <div v-else-if="activePlanTab === 'snapshots'" class="plan-content">
         <div class="tab-header-row">
@@ -3617,6 +4169,168 @@ onUnmounted(() => {
 
             <div v-if="!debateState?.all_points?.length && !showAddDebatePoint" class="sidebar-empty">
               暂无议题，发起第一个辩论议题
+            </div>
+          </div>
+
+          <!-- Problem Management Panel (problem phases only) -->
+          <div v-if="isProblemPhase" class="sidebar-section problem-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">⚠️ 问题管理 ({{ currentProblem?.issue_number || '' }})</div>
+              <div class="problem-phase-badge" :class="'phase-' + (currentPhase?.current_phase || '').toLowerCase()">
+                {{ phaseLabel[currentPhase?.current_phase] || currentPhase?.current_phase }}
+              </div>
+            </div>
+
+            <!-- Problem Info (all phases) -->
+            <div v-if="currentProblem" class="problem-info">
+              <div class="info-row">
+                <span class="info-label">问题标题</span>
+                <span class="info-value">{{ currentProblem.title }}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">类型</span>
+                <span class="info-value">{{ currentProblem.type }}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">严重程度</span>
+                <span class="severity-badge" :class="'severity-' + (currentProblem.severity || 'medium')">
+                  {{ currentProblem.severity }}
+                </span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">报告人</span>
+                <span class="info-value">{{ currentProblem.detected_by }}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">发现时间</span>
+                <span class="info-value">{{ currentProblem.detected_at ? new Date(currentProblem.detected_at).toLocaleString() : '-' }}</span>
+              </div>
+              <div v-if="currentProblem.description" class="problem-desc">
+                {{ currentProblem.description }}
+              </div>
+            </div>
+
+            <!-- PROBLEM_DETECTED: Report form + next step -->
+            <div v-if="currentPhase?.current_phase === 'PROBLEM_DETECTED'" class="problem-phase-content">
+              <div class="problem-hint">问题已记录，等待开始分析</div>
+              <button class="btn-primary sidebar-btn" @click="async () => {
+                if (!currentRoom.value) return
+                problemActionLoading = true
+                try {
+                  await api.post(`/problems/${currentProblem?.issue_id}/analyze`, { root_cause: '待分析' })
+                  const phaseRes = await getPhase(currentRoom.value.room_id)
+                  currentPhase.value = phaseRes.data
+                  await loadProblemState(currentRoom.value.room_id, currentPlan.value?.plan_id)
+                } catch {}
+                problemActionLoading = false
+              }">开始分析</button>
+            </div>
+
+            <!-- PROBLEM_ANALYSIS: Analysis form -->
+            <div v-if="currentPhase?.current_phase === 'PROBLEM_ANALYSIS'" class="problem-phase-content">
+              <div class="problem-section-title">📊 根因分析</div>
+              <textarea v-model="analyzeForm.root_cause" class="input sidebar-input problem-textarea" placeholder="分析问题的根本原因..." rows="3"></textarea>
+              <div class="form-row">
+                <label class="form-label">置信度</label>
+                <input v-model.number="analyzeForm.root_cause_confidence" type="range" min="0" max="1" step="0.1" class="problem-slider" />
+                <span class="slider-value">{{ (analyzeForm.root_cause_confidence * 100).toFixed(0) }}%</span>
+              </div>
+              <input v-model="analyzeForm.impact_scope" class="input sidebar-input" placeholder="影响范围" />
+              <textarea v-model="analyzeForm.progress_impact" class="input sidebar-input problem-textarea" placeholder="进度影响..." rows="2"></textarea>
+              <div class="problem-section-title" style="margin-top:12px">💡 解决方案选项</div>
+              <div v-for="(opt, idx) in analyzeForm.solution_options" :key="'opt-' + idx" class="solution-option">
+                <input v-model="opt.description" class="input" placeholder="方案描述" />
+                <div class="option-pros-cons">
+                  <input v-model="opt.pros" class="input" placeholder="优点 (逗号分隔)" />
+                  <input v-model="opt.cons" class="input" placeholder="缺点 (逗号分隔)" />
+                </div>
+              </div>
+              <button class="btn-add-participant" @click="analyzeForm.solution_options.push({ description: '', pros: [], cons: [] })">+ 添加方案</button>
+              <button class="btn-primary sidebar-btn" :disabled="problemActionLoading" @click="handleAnalyzeProblem">
+                {{ problemActionLoading ? '提交中...' : '提交分析' }}
+              </button>
+            </div>
+
+            <!-- PROBLEM_DISCUSSION: Discussion form -->
+            <div v-if="currentPhase?.current_phase === 'PROBLEM_DISCUSSION'" class="problem-phase-content">
+              <div class="problem-section-title">💬 问题讨论</div>
+              <div v-if="problemAnalysis" class="analysis-summary">
+                <div class="info-row"><span class="info-label">根因</span><span class="info-value">{{ problemAnalysis.root_cause }}</span></div>
+                <div class="info-row"><span class="info-label">置信度</span><span class="info-value">{{ ((problemAnalysis.root_cause_confidence || 0) * 100).toFixed(0) }}%</span></div>
+              </div>
+              <!-- Solution Voting -->
+              <div v-if="problemAnalysis?.solution_options?.length" class="solutions-voting">
+                <div class="problem-section-title">投票选择方案</div>
+                <div v-for="(opt, idx) in problemAnalysis.solution_options" :key="'so-' + idx" class="solution-vote-row">
+                  <span class="solution-desc">{{ opt.description }}</span>
+                  <button
+                    class="vote-btn"
+                    :class="{ selected: discussForm.votes[currentUser.name] === String(idx) }"
+                    @click="discussForm.votes[currentUser.name] = String(idx)"
+                  >{{ discussForm.votes[currentUser.name] === String(idx) ? '✅ 已投' : '投票' }}</button>
+                </div>
+              </div>
+              <button class="btn-primary sidebar-btn" :disabled="problemActionLoading" @click="handleDiscussProblem">
+                {{ problemActionLoading ? '提交中...' : '提交讨论结果' }}
+              </button>
+            </div>
+
+            <!-- PLAN_UPDATE: Plan update status -->
+            <div v-if="currentPhase?.current_phase === 'PLAN_UPDATE'" class="problem-phase-content">
+              <div class="problem-section-title">📋 计划更新</div>
+              <div class="problem-hint">分析完成，正在更新计划</div>
+              <input v-model="planUpdateForm.new_version" class="input sidebar-input" placeholder="新版本号 (如 v1.1)" />
+              <select v-model="planUpdateForm.update_type" class="input sidebar-input">
+                <option value="problem_recovery">问题恢复</option>
+                <option value="plan_revision">计划修订</option>
+                <option value="scope_change">范围变更</option>
+                <option value="resource_adjustment">资源调整</option>
+              </select>
+              <textarea v-model="planUpdateForm.description" class="input sidebar-input problem-textarea" placeholder="更新描述..." rows="3"></textarea>
+              <button class="btn-primary sidebar-btn" :disabled="problemActionLoading" @click="handleUpdatePlan">
+                {{ problemActionLoading ? '更新中...' : '确认计划更新' }}
+              </button>
+            </div>
+
+            <!-- RESUMING: Resume execution -->
+            <div v-if="currentPhase?.current_phase === 'RESUMING'" class="problem-phase-content">
+              <div class="problem-section-title">▶️ 恢复执行</div>
+              <div class="problem-hint">问题已解决，准备恢复执行</div>
+              <input v-model="resumingForm.new_version" class="input sidebar-input" placeholder="版本号" />
+              <input v-model.number="resumingForm.resuming_from_task" type="number" class="input sidebar-input" placeholder="从第N个任务恢复" />
+              <input v-model="resumingForm.checkpoint" class="input sidebar-input" placeholder="检查点描述" />
+              <button class="btn-primary sidebar-btn" :disabled="problemActionLoading" @click="handleResumeExecution">
+                {{ problemActionLoading ? '恢复中...' : '恢复执行 →' }}
+              </button>
+            </div>
+
+            <!-- Report Problem Button (for EXECUTING rooms) -->
+            <div v-if="currentPhase?.current_phase === 'EXECUTING'" class="problem-report-area">
+              <button class="btn-report-problem" @click="showReportProblem = !showReportProblem">
+                ⚠️ 报告问题
+              </button>
+              <div v-if="showReportProblem" class="report-problem-form">
+                <input v-model="reportProblemForm.title" class="input sidebar-input" placeholder="问题标题 *" />
+                <textarea v-model="reportProblemForm.description" class="input sidebar-input problem-textarea" placeholder="问题描述..." rows="3"></textarea>
+                <select v-model="reportProblemForm.type" class="input sidebar-input">
+                  <option value="execution_blocker">执行阻塞</option>
+                  <option value="resource_shortage">资源短缺</option>
+                  <option value="scope_creep">范围蔓延</option>
+                  <option value="quality_issue">质量问题</option>
+                  <option value="risk_realized">风险实现</option>
+                  <option value="other">其他</option>
+                </select>
+                <select v-model="reportProblemForm.severity" class="input sidebar-input">
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                  <option value="critical">严重</option>
+                </select>
+                <input v-model="reportProblemForm.progress_delay" class="input sidebar-input" placeholder="预计进度延迟" />
+                <button class="btn-primary sidebar-btn" :disabled="reportProblemLoading" @click="handleReportProblem">
+                  {{ reportProblemLoading ? '提交中...' : '提交问题报告' }}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -5246,6 +5960,167 @@ body {
 .exchange-position { font-size: 0.9rem; }
 .exchange-point { color: #8b8ba0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ─── Problem Section ─── */
+.problem-section {
+  background: #13131f;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #dc2626;
+}
+.problem-phase-badge {
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.problem-phase-badge.phase-problem_detected { background: rgba(239,68,68,0.2); color: #f87171; }
+.problem-phase-badge.phase-problem_analysis { background: rgba(251,191,36,0.2); color: #fbbf24; }
+.problem-phase-badge.phase-problem_discussion { background: rgba(167,139,250,0.2); color: #a78bfa; }
+.problem-phase-badge.phase-plan_update { background: rgba(59,130,246,0.2); color: #60a5fa; }
+.problem-phase-badge.phase-resuming { background: rgba(34,197,94,0.2); color: #4ade80; }
+.problem-info {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.problem-desc {
+  font-size: 0.82rem;
+  color: #9ca3af;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.problem-phase-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.problem-section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.problem-hint {
+  font-size: 0.8rem;
+  color: #6b7280;
+  text-align: center;
+  padding: 8px 0;
+}
+.problem-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-size: 0.82rem;
+}
+.problem-slider {
+  flex: 1;
+  accent-color: #dc2626;
+}
+.slider-value {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  min-width: 36px;
+  text-align: right;
+}
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-label {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  min-width: 60px;
+}
+.solution-option {
+  background: #1e1e2e;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 6px;
+}
+.option-pros-cons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.analysis-summary {
+  background: #1e1e2e;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.solutions-voting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.solution-vote-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.solution-desc {
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  flex: 1;
+}
+.vote-btn {
+  font-size: 0.72rem;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid #3a3a5e;
+  background: transparent;
+  color: #8b8ba0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.vote-btn.selected {
+  background: rgba(34,197,94,0.15);
+  border-color: #4ade80;
+  color: #4ade80;
+}
+.severity-badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.severity-badge.severity-low { background: rgba(34,197,94,0.15); color: #4ade80; }
+.severity-badge.severity-medium { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.severity-badge.severity-high { background: rgba(249,115,22,0.15); color: #f97316; }
+.severity-badge.severity-critical { background: rgba(239,68,68,0.15); color: #f87171; }
+.problem-report-area {
+  margin-top: 8px;
+}
+.btn-report-problem {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px dashed #dc2626;
+  background: rgba(239,68,68,0.05);
+  color: #f87171;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-report-problem:hover {
+  background: rgba(239,68,68,0.1);
+  border-style: solid;
+}
+.report-problem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 /* ─── Task Dependencies Modal ─── */
 .task-dependencies-modal { max-width: 600px; width: 95vw; max-height: 85vh; overflow-y: auto; }
 .dep-summary-bar {
@@ -6274,4 +7149,283 @@ body {
   font-weight: 600;
 }
 .btn-escalate:hover { background: rgba(239, 68, 68, 0.25); }
+
+/* ── Analytics Dashboard ─────────────────────────────── */
+.analytics-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.analytics-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.analytics-card-icon {
+  font-size: 2.2rem;
+  line-height: 1;
+}
+.analytics-card-body {
+  flex: 1;
+}
+.analytics-card-num {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  line-height: 1.1;
+}
+.analytics-card-label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 2px 0;
+}
+.analytics-card-sub {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+.sub-div { margin: 0 4px; }
+.sub-active { color: #34d399; }
+.sub-done { color: #60a5fa; }
+.sub-progress { color: #fbbf24; }
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.analytics-panel {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 20px;
+}
+.analytics-panel.wide {
+  grid-column: span 2;
+}
+.analytics-panel-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 16px;
+}
+.analytics-empty {
+  color: #64748b;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 20px 0;
+}
+
+/* Phase Distribution */
+.phase-distribution {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.phase-row { display: flex; flex-direction: column; gap: 4px; }
+.phase-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.phase-name { font-size: 0.82rem; color: #cbd5e1; }
+.phase-count { font-size: 0.82rem; color: #94a3b8; font-weight: 600; }
+.phase-bar-track {
+  height: 8px;
+  background: #0f172a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.phase-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+  min-width: 4px;
+}
+
+/* Task Status Breakdown */
+.task-status-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-status-row { display: flex; flex-direction: column; gap: 4px; }
+.task-status-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: #cbd5e1;
+}
+.task-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-completed { background: #22c55e; }
+.dot-in_progress { background: #fbbf24; }
+.dot-blocked { background: #ef4444; }
+.dot-pending { background: #64748b; }
+.dot-default { background: #94a3b8; }
+.task-status-count {
+  margin-left: auto;
+  font-weight: 600;
+  color: #94a3b8;
+}
+.task-status-bar-track {
+  height: 6px;
+  background: #0f172a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.task-status-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  min-width: 2px;
+}
+.fill-completed { background: #22c55e; }
+.fill-in_progress { background: #fbbf24; }
+.fill-blocked { background: #ef4444; }
+.fill-pending { background: #64748b; }
+.fill-default { background: #94a3b8; }
+
+/* Priority Distribution */
+.priority-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.priority-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.priority-label { font-size: 0.8rem; color: #cbd5e1; width: 60px; flex-shrink: 0; }
+.priority-bar-track {
+  flex: 1;
+  height: 6px;
+  background: #0f172a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.priority-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  min-width: 2px;
+}
+.fill-critical { background: #ef4444; }
+.fill-high { background: #f97316; }
+.fill-medium { background: #eab308; }
+.fill-low { background: #22c55e; }
+.priority-count { font-size: 0.78rem; color: #94a3b8; width: 20px; text-align: right; }
+
+/* Completion Ring */
+.completion-overview {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+.completion-big-ring {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+.ring-svg { width: 120px; height: 120px; }
+.ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.ring-pct {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  line-height: 1;
+}
+.ring-sub { font-size: 0.7rem; color: #64748b; }
+.completion-stats {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.stat-lbl { color: #94a3b8; }
+.stat-val { color: #e2e8f0; font-weight: 600; }
+.stat-val.done { color: #22c55e; }
+.stat-val.progress { color: #fbbf24; }
+.stat-val.blocked { color: #ef4444; }
+.stat-val.pending { color: #64748b; }
+
+/* Hours Comparison */
+.hours-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hours-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hours-label { font-size: 0.8rem; color: #94a3b8; width: 36px; flex-shrink: 0; }
+.hours-bar-track {
+  flex: 1;
+  height: 8px;
+  background: #0f172a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hours-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+.hours-bar-fill.estimated { background: #60a5fa; }
+.hours-bar-fill.actual { background: #34d399; }
+.hours-num { font-size: 0.8rem; color: #cbd5e1; width: 50px; text-align: right; }
+.hours-variance {
+  font-size: 0.8rem;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.variance-label { color: #64748b; }
+.variance-val.over { color: #ef4444; }
+.variance-val.under { color: #22c55e; }
+
+/* Other Stats Grid */
+.other-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.other-stat-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+}
+.other-stat-icon { font-size: 1.4rem; margin-bottom: 4px; }
+.other-stat-num { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; line-height: 1.1; }
+.other-stat-label { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
 </style>
