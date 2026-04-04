@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.7 | 日期：2026-04-05（Step 53）
+> 版本：v2.6 | 日期：2026-04-05（Step 52）
 > 版本：v2.5 | 日期：2026-04-05（Step 51）
 > 版本：v2.4 | 日期：2026-04-05（Step 50）
 > 版本：v2.3 | 日期：2026-04-04（Step 49）
@@ -656,6 +658,47 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - Docker Web 镜像已重建并重启
 
 ## 迭代记录
+
+### v2.7 (2026-04-05 07:44)
+**Step 53: Debate Exchange UI（辩论交锋 UI）**
+- 问题：后端 `submitDebateExchange` API 已实现，前端 API 客户端参数不完整（缺少 `exchange_type`/`from_agent`/`target_agent`），且 Room 辩论面板无交锋触发入口
+- Bug：辩论面板"最近交锋"展示区使用错误字段名（`ex.agent_id`/`ex.position`/`ex.point`），后端返回字段为 `from_agent`/`type`/`content`
+- 修复1：前端 API 客户端 `submitDebateExchange` 参数修正为正确字段
+  - `point_id` → `exchange_type`（challenge/response/evidence/update_position/consensus_building）
+  - `agent_id` → `from_agent`
+  - 新增 `target_agent`（可选）
+- 修复2：前端 API 客户端新增 `advanceDebateRound(roomId)` — 调用 `POST /rooms/{room_id}/debate/round`
+- 修复3：Recent Exchanges 展示区字段修正为 `ex.from_agent`/`ex.type`/`ex.content`，并增加类型图标和目标人显示
+- 修复4：辩论面板新增交锋表单（+ 交锋按钮）
+  - 交锋类型选择：🔴挑战 / 🔵回应 / 📊证据 / 🔄更新立场 / 🤝共识建设
+  - 发起人输入（必填）+ 目标人输入（可选）+ 内容输入
+  - 提交后自动刷新辩论状态
+- 修复5：辩论面板新增「推进轮次」按钮
+  - 显示当前轮次 / 最大轮次
+  - 点击调用 `advanceDebateRound` API，推进后自动刷新辩论状态
+- 来源：07-State-Machine-Details.md §2.5 - 辩论交锋（recent_exchanges）
+- 验证：`npm run build` 成功（78 modules, 245.67 kB），pytest 129/129 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.6 (2026-04-05 07:30)
+**Step 52: Escalation Path Preview + Version Comparison UI**
+- 问题1：升级 Modal 的路径预览使用硬编码 JS 公式计算，未调用后端 `_calculate_escalation_path` API（跨级汇报/紧急汇报边界情况与后端实现不一致）
+- 问题2：版本 Tab 只有版本列表，无版本对比功能
+- 修复1：
+  - 前端 API 新增 `getEscalationPath(roomId, fromLevel, mode)` — 调用 `GET /rooms/{room_id}/escalation-path`
+  - 升级 Modal 新增 `escalationPathPreview` / `escalationPathLoading` 状态
+  - watch 监听 `escalationForm.from_level / to_level / mode` 变化，自动调用 API 刷新路径预览
+  - 路径预览区域：加载中显示「计算中...」，成功时显示 `path_description`，fallback 到原有 JS 公式
+- 修复2：
+  - Versions Tab 新增「版本对比」按钮（版本数≥2时可用）
+  - Version Compare Panel：两个版本下拉选择器 + 对比按钮
+  - 对比内容：房间数/任务数/决策数/风险数/圣旨数 统计对比
+  - 任务列表：显示版本 B 的所有任务（编号/标题/状态）
+  - 新增状态：`showVersionCompare` / `compareVersionA` / `compareVersionB` / `compareDataA` / `compareDataB` / `compareLoading`
+  - 新增函数：`loadVersionCompare()` / `openVersionCompare()` / `closeVersionCompare()`
+  - 新增 CSS：`.versions-toolbar` / `.version-compare-panel` / `.compare-*`
+- 验证：`npm run build` 成功（78 modules, 243.09 kB），pytest 129/129 通过 ✅
+- Docker Web 镜像已重建并重启
 
 ### v2.5 (2026-04-05 07:18)
 **Step 51: Analytics Dashboard UI（数据分析仪表盘）**

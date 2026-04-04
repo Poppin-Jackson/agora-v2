@@ -276,6 +276,9 @@ export const escalateRoom = (roomId: string, data: {
   notes?: string
 }) => api.post(`/rooms/${roomId}/escalate`, data)
 
+export const getEscalationPath = (roomId: string, fromLevel: number, mode: string) =>
+  api.get(`/rooms/${roomId}/escalation-path`, { params: { from_level: fromLevel, mode } })
+
 // ─── Room Hierarchy ─────────────────────────────────────────────────────────────
 export const getRoomHierarchy = (roomId: string) =>
   api.get(`/rooms/${roomId}/hierarchy`)
@@ -377,10 +380,14 @@ export const submitDebatePosition = (roomId: string, data: {
 }) => api.post(`/rooms/${roomId}/debate/position`, data)
 
 export const submitDebateExchange = (roomId: string, data: {
-  point_id: string
+  exchange_type: 'challenge' | 'response' | 'evidence' | 'update_position' | 'consensus_building'
+  from_agent: string
+  target_agent?: string
   content: string
-  agent_id?: string
 }) => api.post(`/rooms/${roomId}/debate/exchange`, data)
+
+export const advanceDebateRound = (roomId: string) =>
+  api.post(`/rooms/${roomId}/debate/round`)
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
 export type NotificationType =

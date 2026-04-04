@@ -60,6 +60,8 @@ import api, {
   getDebateState,
   createDebatePoint,
   submitDebatePosition,
+  submitDebateExchange,
+  advanceDebateRound,
   Notification,
   getRoomHierarchy,
   linkRoom,
@@ -68,6 +70,7 @@ import api, {
   getBlockedTasks,
   validateTaskDependencies,
   escalateRoom,
+  getEscalationPath,
   getProblems,
   getProblem,
   analyzeProblem,
@@ -96,6 +99,12 @@ const newPlanForm = reactive({ title: '', topic: '' })
 // ─── Plan Detail State ──────────────────────────────────
 const currentPlan = ref<any>(null)
 const planVersions = ref<any[]>([])
+const showVersionCompare = ref(false)
+const compareVersionA = ref('')
+const compareVersionB = ref('')
+const compareDataA = ref<any>(null)
+const compareDataB = ref<any>(null)
+const compareLoading = ref(false)
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
@@ -241,6 +250,15 @@ const debateState = ref<any>(null)
 const showAddDebatePoint = ref(false)
 const newDebatePoint = reactive({ content: '', point_type: 'proposal' })
 const debatePositions = reactive<Record<string, 'support' | 'oppose'>>({})
+const showAddExchange = ref(false)
+const newExchange = reactive({
+  exchange_type: 'challenge' as 'challenge' | 'response' | 'evidence' | 'update_position' | 'consensus_building',
+  from_agent: '',
+  target_agent: '',
+  content: '',
+})
+const exchangeLoading = ref(false)
+const roundAdvancing = ref(false)
 
 // ─── Escalation State ─────────────────────────────────────
 const showEscalationModal = ref(false)
@@ -252,6 +270,8 @@ const escalationForm = reactive({
   notes: '',
 })
 const escalationLoading = ref(false)
+const escalationPathPreview = ref<any>(null)
+const escalationPathLoading = ref(false)
 
 // ─── Problem Management State ──────────────────────────────────────
 const problemStates = ['PROBLEM_DETECTED', 'PROBLEM_ANALYSIS', 'PROBLEM_DISCUSSION', 'PLAN_UPDATE', 'RESUMING']
@@ -609,6 +629,38 @@ async function switchPlanVersion(version: string) {
   }
 }
 
+async function loadVersionCompare() {
+  if (!currentPlan.value || !compareVersionA.value || !compareVersionB.value) return
+  compareLoading.value = true
+  try {
+    const [resA, resB] = await Promise.all([
+      getVersionPlanJson(currentPlan.value.plan_id, compareVersionA.value),
+      getVersionPlanJson(currentPlan.value.plan_id, compareVersionB.value),
+    ])
+    compareDataA.value = resA.data
+    compareDataB.value = resB.data
+  } catch (e) {
+    console.error('loadVersionCompare failed', e)
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+function openVersionCompare() {
+  if (planVersions.value.length < 2) return
+  showVersionCompare.value = true
+  compareVersionA.value = planVersions.value[planVersions.value.length - 2] || ''
+  compareVersionB.value = planVersions.value[planVersions.value.length - 1] || ''
+  compareDataA.value = null
+  compareDataB.value = null
+}
+
+function closeVersionCompare() {
+  showVersionCompare.value = false
+  compareDataA.value = null
+  compareDataB.value = null
+}
+
 async function loadPlanDecisions() {
   if (!currentPlan.value) return
   try {
@@ -675,6 +727,24 @@ watch(activePlanTab, (newTab) => {
   }
   if (newTab === 'analytics') {
     loadAnalyticsData()
+  }
+})
+
+// Watch escalation form to load path preview
+watch([() => escalationForm.from_level, () => escalationForm.to_level, () => escalationForm.mode], async () => {
+  if (!showEscalationModal.value || !currentRoom.value) return
+  if (escalationForm.to_level <= escalationForm.from_level) {
+    escalationPathPreview.value = null
+    return
+  }
+  escalationPathLoading.value = true
+  try {
+    const res = await getEscalationPath(currentRoom.value.room_id, escalationForm.from_level, escalationForm.mode)
+    escalationPathPreview.value = res.data
+  } catch {
+    escalationPathPreview.value = null
+  } finally {
+    escalationPathLoading.value = false
   }
 })
 
@@ -1686,6 +1756,45 @@ async function handleSubmitDebatePosition(pointId: string, position: 'support' |
   }
 }
 
+async function handleSubmitExchange() {
+  if (!currentRoom.value || !newExchange.content.trim() || !newExchange.from_agent.trim()) return
+  exchangeLoading.value = true
+  try {
+    await submitDebateExchange(currentRoom.value.room_id, {
+      exchange_type: newExchange.exchange_type,
+      from_agent: newExchange.from_agent,
+      target_agent: newExchange.target_agent || undefined,
+      content: newExchange.content,
+    })
+    newExchange.content = ''
+    newExchange.from_agent = ''
+    newExchange.target_agent = ''
+    showAddExchange.value = false
+    // Refresh debate state
+    const ds = await getDebateState(currentRoom.value.room_id)
+    debateState.value = ds.data
+  } catch (e) {
+    console.error('submitDebateExchange failed', e)
+  } finally {
+    exchangeLoading.value = false
+  }
+}
+
+async function handleAdvanceRound() {
+  if (!currentRoom.value) return
+  roundAdvancing.value = true
+  try {
+    await advanceDebateRound(currentRoom.value.room_id)
+    // Refresh debate state
+    const ds = await getDebateState(currentRoom.value.room_id)
+    debateState.value = ds.data
+  } catch (e) {
+    console.error('advanceDebateRound failed', e)
+  } finally {
+    roundAdvancing.value = false
+  }
+}
+
 async function handleEscalateRoom() {
   if (!currentRoom.value) return
   if (!escalationForm.reason.trim()) {
@@ -2479,7 +2588,11 @@ onUnmounted(() => {
             </div>
             <div class="escalation-path-preview" v-if="escalationForm.from_level && escalationForm.to_level && escalationForm.to_level > escalationForm.from_level">
               <span class="path-label">升级路径：</span>
-              <span class="path-steps">
+              <span v-if="escalationPathLoading" class="path-loading">计算中...</span>
+              <span v-else-if="escalationPathPreview" class="path-steps">
+                {{ escalationPathPreview.path_description || escalationPathPreview.escalation_path?.join(' → ') || '' }}
+              </span>
+              <span v-else class="path-steps">
                 <template v-if="escalationForm.mode === 'level_by_level'">
                   {{ Array.from({length: escalationForm.to_level - escalationForm.from_level + 1}, (_, i) => 'L' + (escalationForm.from_level + i)).join(' → ') }}
                 </template>
@@ -3030,6 +3143,11 @@ onUnmounted(() => {
 
       <!-- Versions Tab -->
       <div v-else-if="activePlanTab === 'versions'" class="plan-content">
+        <div class="versions-toolbar">
+          <button class="btn-secondary" @click="openVersionCompare" :disabled="planVersions.length < 2">
+            📊 版本对比
+          </button>
+        </div>
         <div class="versions-list">
           <div v-for="v in planVersions" :key="v" class="version-row">
             <div class="version-badge-lg">v{{ v }}</div>
@@ -3045,6 +3163,65 @@ onUnmounted(() => {
           <div v-if="planVersions.length === 0" class="empty-state" style="padding: 60px 0">
             <div class="empty-icon">🗂️</div>
             <div class="empty-text">暂无版本记录</div>
+          </div>
+        </div>
+
+        <!-- Version Compare Panel -->
+        <div v-if="showVersionCompare" class="version-compare-panel">
+          <div class="compare-panel-header">
+            <div class="compare-title">📊 版本对比</div>
+            <button class="modal-close" @click="closeVersionCompare">✕</button>
+          </div>
+          <div class="compare-selectors">
+            <div class="form-group">
+              <label>版本 A</label>
+              <select v-model="compareVersionA" class="input" @change="loadVersionCompare">
+                <option v-for="v in planVersions" :key="v" :value="v">v{{ v }}</option>
+              </select>
+            </div>
+            <div class="compare-arrow">↔</div>
+            <div class="form-group">
+              <label>版本 B</label>
+              <select v-model="compareVersionB" class="input" @change="loadVersionCompare">
+                <option v-for="v in planVersions" :key="v" :value="v">v{{ v }}</option>
+              </select>
+            </div>
+            <button class="btn-primary" @click="loadVersionCompare" :disabled="compareLoading">
+              {{ compareLoading ? '加载中...' : '对比' }}
+            </button>
+          </div>
+          <div v-if="compareDataA && compareDataB" class="compare-content">
+            <div class="compare-summary">
+              <div class="compare-col">
+                <div class="compare-col-header">v{{ compareVersionA }}</div>
+                <div class="compare-stat">房间: {{ compareDataA.rooms?.length || 0 }}</div>
+                <div class="compare-stat">任务: {{ compareDataA.tasks?.length || 0 }}</div>
+                <div class="compare-stat">决策: {{ compareDataA.decisions?.length || 0 }}</div>
+                <div class="compare-stat">风险: {{ compareDataA.risks?.length || 0 }}</div>
+                <div class="compare-stat">圣旨: {{ compareDataA.edicts?.length || 0 }}</div>
+              </div>
+              <div class="compare-col">
+                <div class="compare-col-header">v{{ compareVersionB }}</div>
+                <div class="compare-stat">房间: {{ compareDataB.rooms?.length || 0 }}</div>
+                <div class="compare-stat">任务: {{ compareDataB.tasks?.length || 0 }}</div>
+                <div class="compare-stat">决策: {{ compareDataB.decisions?.length || 0 }}</div>
+                <div class="compare-stat">风险: {{ compareDataB.risks?.length || 0 }}</div>
+                <div class="compare-stat">圣旨: {{ compareDataB.edicts?.length || 0 }}</div>
+              </div>
+            </div>
+            <div class="compare-details">
+              <div class="compare-section">
+                <div class="compare-section-title">任务差异</div>
+                <div class="compare-tasks">
+                  <div v-for="task in (compareDataB.tasks || [])" :key="task.task_id" class="compare-task-row">
+                    <span class="task-num">#{{ task.task_number }}</span>
+                    <span class="task-title">{{ task.title }}</span>
+                    <span class="task-status" :class="'status-' + task.status">{{ task.status }}</span>
+                  </div>
+                  <div v-if="!compareDataB.tasks?.length" class="empty-compare">无任务</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -4074,9 +4251,46 @@ onUnmounted(() => {
           <div v-if="currentPhase?.current_phase === 'DEBATE'" class="sidebar-section debate-section">
             <div class="sidebar-title-row">
               <div class="sidebar-title">💬 辩论 ({{ debateState?.all_points?.length || 0 }})</div>
-              <button class="btn-add-participant" @click="showAddDebatePoint = !showAddDebatePoint">
-                {{ showAddDebatePoint ? '取消' : '+ 议题' }}
-              </button>
+              <div class="debate-title-btns">
+                <button class="btn-add-participant" @click="showAddExchange = !showAddExchange">
+                  {{ showAddExchange ? '取消' : '+ 交锋' }}
+                </button>
+                <button class="btn-add-participant" @click="showAddDebatePoint = !showAddDebatePoint">
+                  {{ showAddDebatePoint ? '取消' : '+ 议题' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Add Exchange Form -->
+            <div v-if="showAddExchange" class="add-debate-form">
+              <select v-model="newExchange.exchange_type" class="input sidebar-input">
+                <option value="challenge">🔴 挑战</option>
+                <option value="response">🔵 回应</option>
+                <option value="evidence">📊 证据</option>
+                <option value="update_position">🔄 更新立场</option>
+                <option value="consensus_building">🤝 共识建设</option>
+              </select>
+              <input
+                v-model="newExchange.from_agent"
+                class="input sidebar-input"
+                placeholder="发起人姓名..."
+              />
+              <input
+                v-model="newExchange.target_agent"
+                class="input sidebar-input"
+                placeholder="目标人（可选）..."
+              />
+              <textarea
+                v-model="newExchange.content"
+                class="input sidebar-textarea"
+                placeholder="交锋内容..."
+                rows="2"
+              ></textarea>
+              <button
+                class="btn-primary sidebar-btn"
+                :disabled="exchangeLoading || !newExchange.content.trim() || !newExchange.from_agent.trim()"
+                @click="handleSubmitExchange"
+              >{{ exchangeLoading ? '提交中...' : '发起交锋' }}</button>
             </div>
 
             <!-- Consensus Score -->
@@ -4161,10 +4375,21 @@ onUnmounted(() => {
                 :key="'ex-' + idx"
                 class="exchange-row"
               >
-                <span class="exchange-agent">{{ ex.agent_id }}</span>
-                <span class="exchange-position" :class="ex.position">{{ ex.position === 'support' ? '👍' : '👎' }}</span>
-                <span class="exchange-point">{{ ex.point }}</span>
+                <span class="exchange-type-badge">{{ ex.type === 'challenge' ? '🔴' : ex.type === 'response' ? '🔵' : ex.type === 'evidence' ? '📊' : ex.type === 'update_position' ? '🔄' : '🤝' }}</span>
+                <span class="exchange-agent">{{ ex.from_agent }}</span>
+                <span v-if="ex.target_agent" class="exchange-target">→ {{ ex.target_agent }}</span>
+                <span class="exchange-content">{{ ex.content }}</span>
               </div>
+            </div>
+
+            <!-- Advance Round Button -->
+            <div v-if="debateState" class="advance-round-row">
+              <span class="round-info">第 {{ debateState.round }} / {{ debateState.max_rounds }} 轮</span>
+              <button
+                class="btn-advance-round"
+                :disabled="roundAdvancing || debateState.round >= debateState.max_rounds"
+                @click="handleAdvanceRound"
+              >{{ roundAdvancing ? '推进中...' : '推进轮次 →' }}</button>
             </div>
 
             <div v-if="!debateState?.all_points?.length && !showAddDebatePoint" class="sidebar-empty">
@@ -5437,6 +5662,93 @@ body {
 }
 .btn-switch-version:hover { border-color: #5b5bd6; color: #a0a0ff; }
 
+.versions-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.version-compare-panel {
+  margin-top: 20px;
+  background: #13121c;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+}
+.compare-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.compare-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #d0d0e8;
+}
+.compare-selectors {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.compare-selectors .form-group { flex: 1; margin: 0; }
+.compare-arrow {
+  font-size: 1.4rem;
+  color: #5b5bd6;
+  padding-bottom: 8px;
+}
+.compare-content { margin-top: 12px; }
+.compare-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.compare-col {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.compare-col-header {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #a0a0ff;
+  margin-bottom: 8px;
+}
+.compare-stat {
+  font-size: 0.85rem;
+  color: #8b8ba0;
+  padding: 3px 0;
+}
+.compare-details { margin-top: 12px; }
+.compare-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #d0d0e8;
+  margin-bottom: 8px;
+}
+.compare-task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1e1e2e;
+  font-size: 0.85rem;
+}
+.task-num { color: #5b5bd6; font-weight: 600; min-width: 40px; }
+.task-title { flex: 1; color: #c0c0d8; }
+.task-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.status-completed, .status-done { background: #0f3020; color: #4ade80; }
+.status-in_progress, .status-in-progress { background: #1a2a0f; color: #a3e635; }
+.status-pending { background: #1e1e2e; color: #8b8ba0; }
+.status-blocked { background: #2a0f0f; color: #f87171; }
+.empty-compare { color: #5a5a7a; font-size: 0.85rem; padding: 12px 0; }
+
 /* ─── Risks Tab ─── */
 .risks-toolbar {
   display: flex;
@@ -5959,6 +6271,16 @@ body {
 .exchange-agent { color: #a78bfa; font-weight: 500; }
 .exchange-position { font-size: 0.9rem; }
 .exchange-point { color: #8b8ba0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exchange-type-badge { font-size: 0.75rem; }
+.exchange-target { color: #6b7280; font-size: 0.7rem; }
+.exchange-content { color: #d1d5db; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.debate-title-btns { display: flex; gap: 4px; }
+.sidebar-textarea { resize: vertical; min-height: 48px; font-family: inherit; }
+.advance-round-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3e; }
+.round-info { font-size: 0.75rem; color: #8b8ba0; }
+.btn-advance-round { font-size: 0.75rem; padding: 4px 10px; background: rgba(59,130,246,0.15); border: 1px solid #60a5fa; color: #60a5fa; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+.btn-advance-round:hover:not(:disabled) { background: rgba(59,130,246,0.3); }
+.btn-advance-round:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ─── Problem Section ─── */
 .problem-section {
