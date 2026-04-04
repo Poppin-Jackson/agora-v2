@@ -1,0 +1,6277 @@
+<script setup lang="ts">
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import api, {
+  wsUrl,
+  createPlan,
+  getRoom,
+  getPlan,
+  listPlans,
+  listTasks,
+  createTask,
+  updateTask,
+  updateTaskProgress,
+  getTaskMetrics,
+  getRoomsByPlan,
+  addParticipant,
+  getPhase,
+  transitionPhase,
+  addSpeech,
+  getApproval,
+  startApproval,
+  approvalAction,
+  getApprovalLevels,
+  getVersionPlanJson,
+  listSnapshots,
+  getSnapshot,
+  listDecisions,
+  createDecision,
+  updateDecision,
+  listEdicts,
+  createEdict,
+  updateEdict,
+  deleteEdict,
+  acknowledgeEdict,
+  listEdictAcknowledgments,
+  deleteEdictAcknowledgment,
+  listRisks,
+  createRisk,
+  updateRisk,
+  deleteRisk,
+  listConstraints,
+  createConstraint,
+  updateConstraint,
+  deleteConstraint,
+  listStakeholders,
+  createStakeholder,
+  updateStakeholder,
+  deleteStakeholder,
+  listRequirements,
+  createRequirement,
+  updateRequirement,
+  deleteRequirement,
+  listActivities,
+  getActivityStats,
+  getActivity,
+  listNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  getUnreadNotificationCount,
+  deleteNotification,
+  getDebateState,
+  createDebatePoint,
+  submitDebatePosition,
+  Notification,
+  getRoomHierarchy,
+  linkRoom,
+  concludeRoom,
+  getTaskDependencyGraph,
+  getBlockedTasks,
+  validateTaskDependencies,
+  escalateRoom,
+  listTaskComments,
+  createTaskComment,
+  listTaskCheckpoints,
+  createTaskCheckpoint,
+} from './api'
+
+// ─── View State ──────────────────────────────────────────
+// home = plan list dashboard, plan_detail = plan detail, room = discussion
+type View = 'home' | 'plan_detail' | 'room'
+const view = ref<View>('home')
+
+// ─── Home/Dashboard State ───────────────────────────────
+const plans = ref<any[]>([])
+const searchQuery = ref('')
+const sortBy = ref<'recent' | 'name'>('recent')
+const selectedPlanStatuses = ref<string[]>([])
+const showCreatePlan = ref(false)
+const newPlanForm = reactive({ title: '', topic: '' })
+
+// ─── Plan Detail State ──────────────────────────────────
+const currentPlan = ref<any>(null)
+const planVersions = ref<any[]>([])
+const planRooms = ref<any[]>([])
+const planMetrics = ref<any>(null)
+const planTasks = ref<any[]>([])
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'snapshots'>('overview')
+const planDetailActiveVersion = ref<string>('')
+
+// ─── Decisions State ─────────────────────────────────────
+const planDecisions = ref<any[]>([])
+const showAddDecision = ref(false)
+const newDecisionForm = reactive({
+  title: '',
+  decision_text: '',
+  description: '',
+  rationale: '',
+  alternatives_considered: '',
+  agreed_by: '',
+  disagreed_by: '',
+  decided_by: '',
+  room_id: '',
+})
+const editingDecisionId = ref<string | null>(null)
+
+// ─── Edicts State ──────────────────────────────────────
+const planEdicts = ref<any[]>([])
+const showAddEdict = ref(false)
+const newEdictForm = reactive({
+  title: '',
+  content: '',
+  issued_by: '',
+  effective_from: '',
+  recipients: '',
+  status: 'draft',
+})
+const editingEdictId = ref<string | null>(null)
+const edictAcknowledgments = ref<Record<string, any[]>>({})
+const showAckForm = ref(false)
+const ackForm = reactive({ acknowledged_by: '', level: 5, comment: '' })
+const ackEdictId = ref<string | null>(null)
+
+// ─── Approvals State ─────────────────────────────────────
+const approvalFlow = ref<any>(null)
+const approvalLevels = ref<any[]>([])
+const showStartApproval = ref(false)
+const startApprovalForm = reactive({ initiator_id: 'user-1', initiator_name: '当前用户', skip_levels: [] as number[] })
+const approvalActionComment = ref<Record<number, string>>({})
+const loadingApproval = ref(false)
+const skipLevelsInput = ref('')
+
+// ─── Risks State ────────────────────────────────────────
+const planRisks = ref<any[]>([])
+const showAddRisk = ref(false)
+const editingRiskId = ref<string | null>(null)
+const newRiskForm = reactive({
+  title: '',
+  description: '',
+  probability: 'medium' as string,
+  impact: 'medium' as string,
+  mitigation: '',
+  contingency: '',
+  status: 'identified',
+})
+
+// ─── Constraints State ────────────────────────────────────
+const planConstraints = ref<any[]>([])
+const showAddConstraint = ref(false)
+const editingConstraintId = ref<string | null>(null)
+const newConstraintForm = reactive({
+  type: 'budget' as string,
+  value: '',
+  unit: '',
+  description: '',
+})
+
+// ─── Stakeholders State ──────────────────────────────────
+const planStakeholders = ref<any[]>([])
+const showAddStakeholder = ref(false)
+const editingStakeholderId = ref<string | null>(null)
+const newStakeholderForm = reactive({
+  name: '',
+  level: 5 as number,
+  interest: '',
+  influence: '',
+  description: '',
+})
+
+// ─── Requirements State ─────────────────────────────────
+const planRequirements = ref<any[]>([])
+const showAddRequirement = ref(false)
+const editingRequirementId = ref<string | null>(null)
+const newRequirementForm = reactive({
+  description: '',
+  priority: 'medium' as string,
+  category: 'other' as string,
+  status: 'pending' as string,
+  notes: '',
+})
+
+// ─── Activities State ───────────────────────────────────
+const planActivities = ref<any[]>([])
+const activityStats = ref<any>(null)
+const selectedActivity = ref<any>(null)
+const activityFilterType = ref<string>('')
+
+// ─── Snapshots State ─────────────────────────────────────
+const planSnapshots = ref<any[]>([])
+const selectedSnapshot = ref<any>(null)
+
+// ─── Room State ─────────────────────────────────────────
+const currentRoom = ref<any>(null)
+const currentPhase = ref<any>(null)
+const messages = ref<any[]>([])
+const participants = ref<any[]>([])
+const newMessage = reactive({ agent_id: 'user-1', content: '' })
+const agentInfo = reactive({ agent_id: 'user-1', name: '访客', level: 5, role: 'Member' })
+const showAddParticipant = ref(false)
+const newParticipant = reactive({ name: '', agent_id: '', role: 'Member', level: 5 })
+
+// ─── Task State ─────────────────────────────────────────
+const tasks = ref<any[]>([])
+const taskMetrics = ref<any>(null)
+const showAddTask = ref(false)
+const newTask = reactive<{ title: string; description: string; priority: 'low' | 'medium' | 'high' | 'critical'; assigned_to: string }>({ title: '', description: '', priority: 'medium', assigned_to: '' })
+const activeTaskTab = ref<'list' | 'add'>('list')
+
+// ─── Task Dependencies State ─────────────────────────────
+const showTaskDependencies = ref(false)
+const dependencyGraph = ref<any>(null)
+const blockedTasks = ref<any[]>([])
+const dependencyLoading = ref(false)
+
+// ─── Task Detail Modal State ──────────────────────────────
+const showTaskDetail = ref(false)
+const selectedTaskForDetail = ref<any>(null)
+const taskDetailComments = ref<any[]>([])
+const taskDetailCheckpoints = ref<any[]>([])
+const taskDetailActiveTab = ref<'comments' | 'checkpoints'>('comments')
+const newCommentForm = reactive({ author_name: '', content: '' })
+const newCheckpointForm = reactive({ name: '', status: 'pending' })
+const taskDetailLoading = ref(false)
+
+// ─── Debate State ───────────────────────────────────────
+const debateState = ref<any>(null)
+const showAddDebatePoint = ref(false)
+const newDebatePoint = reactive({ content: '', point_type: 'proposal' })
+const debatePositions = reactive<Record<string, 'support' | 'oppose'>>({})
+
+// ─── Escalation State ─────────────────────────────────────
+const showEscalationModal = ref(false)
+const escalationForm = reactive({
+  from_level: 5,
+  to_level: 6,
+  mode: 'level_by_level',
+  reason: '',
+  notes: '',
+})
+const escalationLoading = ref(false)
+
+// ─── Create Room State ──────────────────────────────────
+const showCreateRoom = ref(false)
+const newRoomForm = reactive({ topic: '', title: '', mode: 'hierarchical' as string })
+
+// ─── Room Hierarchy State ────────────────────────────────
+const showRoomHierarchy = ref(false)
+const selectedRoomForHierarchy = ref<any>(null)
+const roomHierarchyData = ref<any>(null)
+const hierarchyLoading = ref(false)
+const hierarchyLinkForm = reactive({
+  parent_room_id: '',
+  child_rooms: [] as string[],
+  related_rooms: [] as string[],
+})
+const hierarchyConcludeForm = reactive({
+  summary: '',
+  conclusion: '',
+})
+const hierarchyActiveTab = ref<'view' | 'link' | 'conclude'>('view')
+const hierarchyActionLoading = ref(false)
+
+// ─── Notifications State ─────────────────────────────────
+const notifications = ref<Notification[]>([])
+const unreadCount = ref(0)
+const showNotifications = ref(false)
+const currentUser = reactive({ user_id: 'user-1', name: '访客', level: 5 })
+
+const notificationTypeLabel: Record<string, string> = {
+  task_assigned: '📋 任务分配',
+  task_completed: '✅ 任务完成',
+  task_blocked: '🚫 任务阻塞',
+  problem_reported: '⚠️ 问题报告',
+  problem_resolved: '✔️ 问题解决',
+  approval_requested: '📨 审批请求',
+  approval_completed: '📗 审批完成',
+  edict_published: '📜 圣旨颁布',
+  escalation_received: '🔺 升级通知',
+}
+
+const notificationTypeColor: Record<string, string> = {
+  task_assigned: '#3b82f6',
+  task_completed: '#22c55e',
+  task_blocked: '#ef4444',
+  problem_reported: '#f59e0b',
+  problem_resolved: '#10b981',
+  approval_requested: '#8b5cf6',
+  approval_completed: '#14b8a6',
+  edict_published: '#f59e0b',
+  escalation_received: '#dc2626',
+}
+
+async function loadNotifications() {
+  try {
+    const res = await listNotifications({ recipient_id: currentUser.user_id, limit: 50 })
+    notifications.value = res.data?.notifications || []
+  } catch (e) {
+    console.error('loadNotifications failed', e)
+  }
+}
+
+async function loadUnreadCount() {
+  try {
+    const res = await getUnreadNotificationCount(currentUser.user_id)
+    unreadCount.value = res.data?.count || 0
+  } catch (e) {
+    console.error('loadUnreadCount failed', e)
+  }
+}
+
+async function handleMarkRead(notificationId: string) {
+  try {
+    await markNotificationRead(notificationId)
+    const n = notifications.value.find(n => n.notification_id === notificationId)
+    if (n) n.read = true
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  } catch (e) {
+    console.error('markNotificationRead failed', e)
+  }
+}
+
+async function handleMarkAllRead() {
+  try {
+    await markAllNotificationsRead(currentUser.user_id)
+    notifications.value.forEach(n => { n.read = true })
+    unreadCount.value = 0
+  } catch (e) {
+    console.error('markAllNotificationsRead failed', e)
+  }
+}
+
+async function handleDeleteNotification(notificationId: string) {
+  try {
+    await deleteNotification(notificationId)
+    const idx = notifications.value.findIndex(n => n.notification_id === notificationId)
+    if (idx !== -1) {
+      if (!notifications.value[idx].read) unreadCount.value = Math.max(0, unreadCount.value - 1)
+      notifications.value.splice(idx, 1)
+    }
+  } catch (e) {
+    console.error('deleteNotification failed', e)
+  }
+}
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+  if (showNotifications.value && notifications.value.length === 0) {
+    loadNotifications()
+  }
+}
+
+function closeNotifications(e: MouseEvent) {
+  const panel = document.querySelector('.notification-panel')
+  const bell = document.querySelector('.notification-bell')
+  if (panel && bell && !panel.contains(e.target as Node) && !bell.contains(e.target as Node)) {
+    showNotifications.value = false
+  }
+}
+
+// ─── WebSocket ──────────────────────────────────────────
+let ws: WebSocket | null = null
+let phasePollInterval: ReturnType<typeof setInterval> | null = null
+let homePollInterval: ReturnType<typeof setInterval> | null = null
+
+// ─── Computed ──────────────────────────────────────────
+const phaseColors: Record<string, string> = {
+  initiated: '#6b7280',
+  selecting: '#3b82f6',
+  thinking: '#8b5cf6',
+  sharing: '#f59e0b',
+  debate: '#ef4444',
+  converging: '#10b981',
+  hierarchical_review: '#6366f1',
+  decision: '#14b8a6',
+  executing: '#0ea5e9',
+  completed: '#22c55e',
+  problem_detected: '#dc2626',
+}
+
+const phaseLabel: Record<string, string> = {
+  initiated: '初始化',
+  selecting: '选择中',
+  thinking: '思考中',
+  sharing: '分享中',
+  debate: '辩论中',
+  converging: '收敛中',
+  hierarchical_review: '层级评审',
+  decision: '决策中',
+  executing: '执行中',
+  completed: '已完成',
+  problem_detected: '问题',
+}
+
+const statusLabel: Record<string, string> = {
+  pending: '⏳ 待处理',
+  in_progress: '🔄 进行中',
+  completed: '✅ 完成',
+  blocked: '🚫 阻塞',
+  cancelled: '❌ 已取消',
+}
+
+const filteredPlans = computed(() => {
+  let result = plans.value
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase()
+    result = result.filter(p =>
+      (p.title || '').toLowerCase().includes(q) ||
+      (p.topic || '').toLowerCase().includes(q) ||
+      (p.plan_number || '').toLowerCase().includes(q)
+    )
+  }
+  if (sortBy.value === 'recent') {
+    result = [...result].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  }
+  return result
+})
+
+const filteredActivities = computed(() => {
+  if (!activityFilterType.value) return planActivities.value
+  return planActivities.value.filter(a =>
+    (a.action_type || '').includes(activityFilterType.value)
+  )
+})
+
+// ─── Home/Dashboard Actions ─────────────────────────────
+async function loadPlans() {
+  try {
+    const res = await listPlans()
+    plans.value = res.data || []
+  } catch (e) {
+    console.error('loadPlans failed', e)
+  }
+}
+
+async function handleCreatePlan() {
+  if (!newPlanForm.topic.trim()) return
+  try {
+    const res = await createPlan({
+      title: newPlanForm.title || newPlanForm.topic,
+      topic: newPlanForm.topic,
+      requirements: [],
+    })
+    const plan = res.data
+    newPlanForm.topic = ''
+    newPlanForm.title = ''
+    showCreatePlan.value = false
+    // Navigate to the new plan's detail
+    await openPlanDetail(plan.plan_id)
+  } catch (e) {
+    console.error('createPlan failed', e)
+  }
+}
+
+async function openPlanDetail(planId: string) {
+  try {
+    const [planRes, versionsRes, roomsRes, metricsRes] = await Promise.all([
+      getPlan(planId),
+      api.get(`/plans/${planId}/versions`),
+      getRoomsByPlan(planId),
+      api.get(`/plans/${planId}/analytics`),
+    ])
+    currentPlan.value = planRes.data
+    planVersions.value = versionsRes.data?.versions || []
+    planRooms.value = roomsRes.data?.rooms || []
+    planMetrics.value = metricsRes.data
+    planDetailActiveVersion.value = planRes.data.current_version || planRes.data.version || 'v1.0'
+
+    // Load tasks, decisions, edicts, risks, constraints, stakeholders, requirements for current version
+    try {
+      const version = planDetailActiveVersion.value
+      const [tasksRes, metricsR, decisionsRes, edictsRes, risksRes, constraintsRes, stakeholdersRes, requirementsRes, activitiesRes, statsRes] = await Promise.all([
+        listTasks(planId, version),
+        getTaskMetrics(planId, version),
+        listDecisions(planId, version),
+        listEdicts(planId, version),
+        listRisks(planId, version),
+        listConstraints(planId),
+        listStakeholders(planId),
+        listRequirements(planId),
+        listActivities(planId),
+        getActivityStats(planId),
+      ])
+      planTasks.value = tasksRes.data?.tasks || []
+      planMetrics.value = metricsR.data
+      planDecisions.value = decisionsRes.data?.decisions || []
+      planEdicts.value = edictsRes.data?.edicts || []
+      planRisks.value = risksRes.data?.risks || []
+      planConstraints.value = constraintsRes.data?.constraints || []
+      planStakeholders.value = stakeholdersRes.data?.stakeholders || []
+      planRequirements.value = requirementsRes.data || []
+      planActivities.value = activitiesRes.data?.activities || []
+      activityStats.value = statsRes.data
+    } catch {}
+
+    view.value = 'plan_detail'
+  } catch (e) {
+    console.error('openPlanDetail failed', e)
+  }
+}
+
+async function switchPlanVersion(version: string) {
+  planDetailActiveVersion.value = version
+  try {
+    const [tasksRes, metricsRes, decisionsRes, edictsRes, risksRes, constraintsRes, stakeholdersRes, requirementsRes] = await Promise.all([
+      listTasks(currentPlan.value.plan_id, version),
+      getTaskMetrics(currentPlan.value.plan_id, version),
+      listDecisions(currentPlan.value.plan_id, version),
+      listEdicts(currentPlan.value.plan_id, version),
+      listRisks(currentPlan.value.plan_id, version),
+      listConstraints(currentPlan.value.plan_id),
+      listStakeholders(currentPlan.value.plan_id),
+      listRequirements(currentPlan.value.plan_id),
+    ])
+    planTasks.value = tasksRes.data?.tasks || []
+    planMetrics.value = metricsRes.data
+    planDecisions.value = decisionsRes.data?.decisions || []
+    planEdicts.value = edictsRes.data?.edicts || []
+    planRisks.value = risksRes.data?.risks || []
+    planConstraints.value = constraintsRes.data?.constraints || []
+    planStakeholders.value = stakeholdersRes.data?.stakeholders || []
+    planRequirements.value = requirementsRes.data || []
+    // Activities are plan-level, reload on version switch
+    const [activitiesRes, statsRes] = await Promise.all([
+      listActivities(currentPlan.value.plan_id),
+      getActivityStats(currentPlan.value.plan_id),
+    ])
+    planActivities.value = activitiesRes.data?.activities || []
+    activityStats.value = statsRes.data
+    // Snapshots are version-level, reload on version switch
+    await loadPlanSnapshots()
+  } catch (e) {
+    console.error('switchPlanVersion failed', e)
+  }
+}
+
+async function loadPlanDecisions() {
+  if (!currentPlan.value) return
+  try {
+    const res = await listDecisions(currentPlan.value.plan_id, planDetailActiveVersion.value)
+    planDecisions.value = res.data?.decisions || []
+  } catch (e) {
+    console.error('loadPlanDecisions failed', e)
+  }
+}
+
+async function loadPlanActivities() {
+  if (!currentPlan.value) return
+  try {
+    const [actsRes, statsRes] = await Promise.all([
+      listActivities(currentPlan.value.plan_id),
+      getActivityStats(currentPlan.value.plan_id),
+    ])
+    planActivities.value = actsRes.data?.activities || []
+    activityStats.value = statsRes.data
+  } catch (e) {
+    console.error('loadPlanActivities failed', e)
+  }
+}
+
+async function loadPlanSnapshots() {
+  if (!currentPlan.value || !planDetailActiveVersion.value) return
+  try {
+    const res = await listSnapshots(currentPlan.value.plan_id, planDetailActiveVersion.value)
+    planSnapshots.value = res.data?.snapshots || []
+  } catch (e) {
+    console.error('loadPlanSnapshots failed', e)
+  }
+}
+
+async function viewSnapshot(snap: any) {
+  if (!currentPlan.value || !planDetailActiveVersion.value) return
+  try {
+    const res = await getSnapshot(currentPlan.value.plan_id, planDetailActiveVersion.value, snap.snapshot_id)
+    selectedSnapshot.value = res.data?.snapshot || res.data || snap
+  } catch (e) {
+    // fallback to basic data if full fetch fails
+    selectedSnapshot.value = snap
+    console.error('viewSnapshot failed', e)
+  }
+}
+
+// Watch tab switch to load snapshots when entering the tab
+watch(activePlanTab, (newTab) => {
+  if (newTab === 'snapshots') {
+    loadPlanSnapshots()
+  }
+  if (newTab === 'approvals') {
+    loadApprovalFlow()
+  }
+})
+
+async function handleCreateDecision() {
+  if (!newDecisionForm.title.trim() || !currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const data: any = {
+      title: newDecisionForm.title,
+      decision_text: newDecisionForm.decision_text,
+    }
+    if (newDecisionForm.description) data.description = newDecisionForm.description
+    if (newDecisionForm.rationale) data.rationale = newDecisionForm.rationale
+    if (newDecisionForm.alternatives_considered) data.alternatives_considered = newDecisionForm.alternatives_considered.split('\n').filter(Boolean)
+    if (newDecisionForm.agreed_by) data.agreed_by = newDecisionForm.agreed_by.split(',').map(s => s.trim()).filter(Boolean)
+    if (newDecisionForm.disagreed_by) data.disagreed_by = newDecisionForm.disagreed_by.split(',').map(s => s.trim()).filter(Boolean)
+    if (newDecisionForm.decided_by) data.decided_by = newDecisionForm.decided_by
+    if (newDecisionForm.room_id) data.room_id = newDecisionForm.room_id
+
+    const res = await createDecision(planId, version, data)
+    planDecisions.value.push(res.data)
+    // Reset form
+    newDecisionForm.title = ''
+    newDecisionForm.decision_text = ''
+    newDecisionForm.description = ''
+    newDecisionForm.rationale = ''
+    newDecisionForm.alternatives_considered = ''
+    newDecisionForm.agreed_by = ''
+    newDecisionForm.disagreed_by = ''
+    newDecisionForm.decided_by = ''
+    newDecisionForm.room_id = ''
+    showAddDecision.value = false
+    editingDecisionId.value = null
+  } catch (e) {
+    console.error('handleCreateDecision failed', e)
+  }
+}
+
+async function handleUpdateDecision(decisionId: string) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  const data: any = {}
+  if (newDecisionForm.title) data.title = newDecisionForm.title
+  if (newDecisionForm.decision_text) data.decision_text = newDecisionForm.decision_text
+  if (newDecisionForm.description) data.description = newDecisionForm.description
+  if (newDecisionForm.rationale) data.rationale = newDecisionForm.rationale
+  try {
+    await updateDecision(planId, version, decisionId, data)
+    // Reload decisions
+    await loadPlanDecisions()
+    showAddDecision.value = false
+    editingDecisionId.value = null
+  } catch (e) {
+    console.error('handleUpdateDecision failed', e)
+  }
+}
+
+function startEditDecision(decision: any) {
+  newDecisionForm.title = decision.title || ''
+  newDecisionForm.decision_text = decision.decision_text || ''
+  newDecisionForm.description = decision.description || ''
+  newDecisionForm.rationale = decision.rationale || ''
+  newDecisionForm.alternatives_considered = (decision.alternatives_considered || []).join('\n')
+  newDecisionForm.agreed_by = (decision.agreed_by || []).join(', ')
+  newDecisionForm.disagreed_by = (decision.disagreed_by || []).join(', ')
+  newDecisionForm.decided_by = decision.decided_by || ''
+  newDecisionForm.room_id = decision.room_id || ''
+  editingDecisionId.value = decision.decision_id
+  showAddDecision.value = true
+}
+
+function cancelEditDecision() {
+  showAddDecision.value = false
+  editingDecisionId.value = null
+  newDecisionForm.title = ''
+  newDecisionForm.decision_text = ''
+  newDecisionForm.description = ''
+  newDecisionForm.rationale = ''
+  newDecisionForm.alternatives_considered = ''
+  newDecisionForm.agreed_by = ''
+  newDecisionForm.disagreed_by = ''
+  newDecisionForm.decided_by = ''
+  newDecisionForm.room_id = ''
+}
+
+// ─── Edicts Functions ───────────────────────────────────
+async function loadPlanEdicts() {
+  if (!currentPlan.value) return
+  try {
+    const res = await listEdicts(currentPlan.value.plan_id, planDetailActiveVersion.value)
+    planEdicts.value = res.data?.edicts || []
+    // 加载每个圣旨的签收记录
+    for (const edict of planEdicts.value) {
+      await loadEdictAcks(edict.edict_id)
+    }
+  } catch (e) {
+    console.error('loadPlanEdicts failed', e)
+  }
+}
+
+async function handleCreateEdict() {
+  if (!newEdictForm.title.trim() || !newEdictForm.content.trim() || !currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const data: any = {
+      title: newEdictForm.title,
+      content: newEdictForm.content,
+    }
+    if (newEdictForm.issued_by) data.issued_by = newEdictForm.issued_by
+    if (newEdictForm.recipients) data.recipients = newEdictForm.recipients.split(',').map((s: string) => s.trim()).filter(Boolean)
+    if (newEdictForm.effective_from) data.effective_from = newEdictForm.effective_from
+    if (newEdictForm.status) data.status = newEdictForm.status
+    const res = await createEdict(planId, version, data)
+    planEdicts.value.push(res.data)
+    newEdictForm.title = ''
+    newEdictForm.content = ''
+    newEdictForm.issued_by = ''
+    newEdictForm.recipients = ''
+    newEdictForm.effective_from = ''
+    newEdictForm.status = 'draft'
+    showAddEdict.value = false
+    editingEdictId.value = null
+  } catch (e) {
+    console.error('handleCreateEdict failed', e)
+  }
+}
+
+async function handleUpdateEdict(edictId: string) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  const data: any = {}
+  if (newEdictForm.title) data.title = newEdictForm.title
+  if (newEdictForm.content) data.content = newEdictForm.content
+  if (newEdictForm.issued_by) data.issued_by = newEdictForm.issued_by
+  if (newEdictForm.recipients) data.recipients = newEdictForm.recipients.split(',').map((s: string) => s.trim()).filter(Boolean)
+  if (newEdictForm.effective_from) data.effective_from = newEdictForm.effective_from
+  if (newEdictForm.status) data.status = newEdictForm.status
+  try {
+    await updateEdict(planId, version, edictId, data)
+    await loadPlanEdicts()
+    showAddEdict.value = false
+    editingEdictId.value = null
+  } catch (e) {
+    console.error('handleUpdateEdict failed', e)
+  }
+}
+
+async function handleDeleteEdict(edictId: string) {
+  if (!currentPlan.value) return
+  if (!confirm('确认删除此圣旨？')) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    await deleteEdict(planId, version, edictId)
+    planEdicts.value = planEdicts.value.filter(e => e.edict_id !== edictId)
+  } catch (e) {
+    console.error('handleDeleteEdict failed', e)
+  }
+}
+
+function startEditEdict(edict: any) {
+  newEdictForm.title = edict.title || ''
+  newEdictForm.content = edict.content || ''
+  newEdictForm.issued_by = edict.issued_by || ''
+  newEdictForm.recipients = edict.recipients ? (Array.isArray(edict.recipients) ? edict.recipients.join(', ') : edict.recipients) : ''
+  newEdictForm.effective_from = edict.effective_from || ''
+  newEdictForm.status = edict.status || 'draft'
+  editingEdictId.value = edict.edict_id
+  showAddEdict.value = true
+}
+
+function cancelEditEdict() {
+  showAddEdict.value = false
+  editingEdictId.value = null
+  newEdictForm.title = ''
+  newEdictForm.content = ''
+  newEdictForm.issued_by = ''
+  newEdictForm.recipients = ''
+  newEdictForm.effective_from = ''
+  newEdictForm.status = 'draft'
+}
+
+async function loadEdictAcks(edictId: string) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const res = await listEdictAcknowledgments(planId, version, edictId)
+    edictAcknowledgments.value[edictId] = res.data?.acknowledgments || []
+  } catch (e) {
+    console.error('loadEdictAcks failed', e)
+  }
+}
+
+function startAckEdict(edictId: string) {
+  ackEdictId.value = edictId
+  ackForm.acknowledged_by = ''
+  ackForm.level = 5
+  ackForm.comment = ''
+  showAckForm.value = true
+  loadEdictAcks(edictId)
+}
+
+async function handleAcknowledgeEdict() {
+  if (!ackForm.acknowledged_by.trim() || !ackEdictId.value || !currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    await acknowledgeEdict(planId, version, ackEdictId.value, {
+      acknowledged_by: ackForm.acknowledged_by,
+      level: ackForm.level,
+      comment: ackForm.comment || undefined,
+    })
+    await loadEdictAcks(ackEdictId.value)
+    ackForm.acknowledged_by = ''
+    ackForm.level = 5
+    ackForm.comment = ''
+    showAckForm.value = false
+    ackEdictId.value = null
+  } catch (e) {
+    console.error('handleAcknowledgeEdict failed', e)
+  }
+}
+
+async function handleDeleteAck(edictId: string, ackId: string) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    await deleteEdictAcknowledgment(planId, version, edictId, ackId)
+    await loadEdictAcks(edictId)
+  } catch (e) {
+    console.error('handleDeleteAck failed', e)
+  }
+}
+
+async function loadPlanRisks() {
+  if (!currentPlan.value) return
+  try {
+    const res = await listRisks(currentPlan.value.plan_id, planDetailActiveVersion.value)
+    planRisks.value = res.data?.risks || []
+  } catch (e) {
+    console.error('loadPlanRisks failed', e)
+  }
+}
+
+async function handleCreateRisk() {
+  if (!newRiskForm.title.trim() || !currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const data: any = {
+      title: newRiskForm.title,
+    }
+    if (newRiskForm.description) data.description = newRiskForm.description
+    if (newRiskForm.probability) data.probability = newRiskForm.probability
+    if (newRiskForm.impact) data.impact = newRiskForm.impact
+    if (newRiskForm.mitigation) data.mitigation = newRiskForm.mitigation
+    if (newRiskForm.contingency) data.contingency = newRiskForm.contingency
+    if (newRiskForm.status) data.status = newRiskForm.status
+    const res = await createRisk(planId, version, data)
+    planRisks.value.push(res.data)
+    newRiskForm.title = ''
+    newRiskForm.description = ''
+    newRiskForm.probability = 'medium'
+    newRiskForm.impact = 'medium'
+    newRiskForm.mitigation = ''
+    newRiskForm.contingency = ''
+    newRiskForm.status = 'identified'
+    showAddRisk.value = false
+    editingRiskId.value = null
+  } catch (e) {
+    console.error('handleCreateRisk failed', e)
+  }
+}
+
+async function handleUpdateRisk(riskId: string) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  const data: any = {}
+  if (newRiskForm.title) data.title = newRiskForm.title
+  if (newRiskForm.description !== undefined) data.description = newRiskForm.description
+  if (newRiskForm.probability) data.probability = newRiskForm.probability
+  if (newRiskForm.impact) data.impact = newRiskForm.impact
+  if (newRiskForm.mitigation !== undefined) data.mitigation = newRiskForm.mitigation
+  if (newRiskForm.contingency !== undefined) data.contingency = newRiskForm.contingency
+  if (newRiskForm.status) data.status = newRiskForm.status
+  try {
+    await updateRisk(planId, version, riskId, data)
+    await loadPlanRisks()
+    showAddRisk.value = false
+    editingRiskId.value = null
+  } catch (e) {
+    console.error('handleUpdateRisk failed', e)
+  }
+}
+
+async function handleDeleteRisk(riskId: string) {
+  if (!currentPlan.value) return
+  if (!confirm('确认删除此风险？')) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    await deleteRisk(planId, version, riskId)
+    planRisks.value = planRisks.value.filter(r => r.risk_id !== riskId)
+  } catch (e) {
+    console.error('handleDeleteRisk failed', e)
+  }
+}
+
+function startEditRisk(risk: any) {
+  newRiskForm.title = risk.title || ''
+  newRiskForm.description = risk.description || ''
+  newRiskForm.probability = risk.probability || 'medium'
+  newRiskForm.impact = risk.impact || 'medium'
+  newRiskForm.mitigation = risk.mitigation || ''
+  newRiskForm.contingency = risk.contingency || ''
+  newRiskForm.status = risk.status || 'identified'
+  editingRiskId.value = risk.risk_id
+  showAddRisk.value = true
+}
+
+function cancelEditRisk() {
+  showAddRisk.value = false
+  editingRiskId.value = null
+  newRiskForm.title = ''
+  newRiskForm.description = ''
+  newRiskForm.probability = 'medium'
+  newRiskForm.impact = 'medium'
+  newRiskForm.mitigation = ''
+  newRiskForm.contingency = ''
+  newRiskForm.status = 'identified'
+}
+
+// ─── Approval Functions ─────────────────────────────────
+async function loadApprovalFlow() {
+  if (!currentPlan.value) return
+  loadingApproval.value = true
+  try {
+    const [flowRes, levelsRes] = await Promise.all([
+      getApproval(currentPlan.value.plan_id),
+      getApprovalLevels(currentPlan.value.plan_id),
+    ])
+    approvalFlow.value = flowRes.data
+    approvalLevels.value = levelsRes.data || []
+  } catch (e: any) {
+    if (e.response?.status === 404) {
+      approvalFlow.value = null
+      approvalLevels.value = []
+    }
+  } finally {
+    loadingApproval.value = false
+  }
+}
+
+async function handleStartApproval() {
+  if (!currentPlan.value) return
+  const skipLevels = skipLevelsInput.value
+    ? skipLevelsInput.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
+    : []
+  try {
+    await startApproval(currentPlan.value.plan_id, {
+      initiator_id: startApprovalForm.initiator_id,
+      initiator_name: startApprovalForm.initiator_name,
+      skip_levels: skipLevels,
+    })
+    showStartApproval.value = false
+    skipLevelsInput.value = ''
+    await loadApprovalFlow()
+  } catch (e) {
+    console.error('startApproval failed', e)
+  }
+}
+
+async function handleApprovalAction(level: number, action: string) {
+  if (!currentPlan.value) return
+  try {
+    await approvalAction(currentPlan.value.plan_id, level, {
+      action,
+      actor_id: startApprovalForm.initiator_id,
+      actor_name: startApprovalForm.initiator_name,
+      comment: approvalActionComment[level] || '',
+    })
+    approvalActionComment[level] = ''
+    await loadApprovalFlow()
+  } catch (e) {
+    console.error('approvalAction failed', e)
+  }
+}
+
+// ─── Constraints Handlers ────────────────────────────────
+async function handleCreateConstraint() {
+  if (!newConstraintForm.value.trim() || !currentPlan.value) return
+  try {
+    const res = await createConstraint(currentPlan.value.plan_id, {
+      type: newConstraintForm.type,
+      value: newConstraintForm.value,
+      unit: newConstraintForm.unit,
+      description: newConstraintForm.description,
+    })
+    planConstraints.value.push(res.data)
+    cancelEditConstraint()
+  } catch (e) {
+    console.error('handleCreateConstraint failed', e)
+  }
+}
+
+async function handleUpdateConstraint(constraintId: string) {
+  if (!currentPlan.value) return
+  try {
+    await updateConstraint(currentPlan.value.plan_id, constraintId, {
+      type: newConstraintForm.type,
+      value: newConstraintForm.value,
+      unit: newConstraintForm.unit,
+      description: newConstraintForm.description,
+    })
+    const idx = planConstraints.value.findIndex(c => c.constraint_id === constraintId)
+    if (idx !== -1) {
+      planConstraints.value[idx] = { ...planConstraints.value[idx], ...newConstraintForm }
+    }
+    cancelEditConstraint()
+  } catch (e) {
+    console.error('handleUpdateConstraint failed', e)
+  }
+}
+
+async function handleDeleteConstraint(constraintId: string) {
+  if (!currentPlan.value) return
+  try {
+    await deleteConstraint(currentPlan.value.plan_id, constraintId)
+    planConstraints.value = planConstraints.value.filter(c => c.constraint_id !== constraintId)
+  } catch (e) {
+    console.error('handleDeleteConstraint failed', e)
+  }
+}
+
+function startEditConstraint(constraint: any) {
+  editingConstraintId.value = constraint.constraint_id
+  showAddConstraint.value = true
+  newConstraintForm.type = constraint.type
+  newConstraintForm.value = constraint.value
+  newConstraintForm.unit = constraint.unit || ''
+  newConstraintForm.description = constraint.description || ''
+}
+
+function cancelEditConstraint() {
+  showAddConstraint.value = false
+  editingConstraintId.value = null
+  newConstraintForm.type = 'budget'
+  newConstraintForm.value = ''
+  newConstraintForm.unit = ''
+  newConstraintForm.description = ''
+}
+
+// ─── Stakeholders Handlers ───────────────────────────────
+async function handleCreateStakeholder() {
+  if (!newStakeholderForm.name.trim() || !currentPlan.value) return
+  try {
+    const res = await createStakeholder(currentPlan.value.plan_id, {
+      name: newStakeholderForm.name,
+      level: newStakeholderForm.level,
+      interest: newStakeholderForm.interest,
+      influence: newStakeholderForm.influence,
+      description: newStakeholderForm.description,
+    })
+    planStakeholders.value.push(res.data)
+    cancelEditStakeholder()
+  } catch (e) {
+    console.error('handleCreateStakeholder failed', e)
+  }
+}
+
+async function handleUpdateStakeholder(stakeholderId: string) {
+  if (!currentPlan.value) return
+  try {
+    await updateStakeholder(currentPlan.value.plan_id, stakeholderId, {
+      name: newStakeholderForm.name,
+      level: newStakeholderForm.level,
+      interest: newStakeholderForm.interest,
+      influence: newStakeholderForm.influence,
+      description: newStakeholderForm.description,
+    })
+    const idx = planStakeholders.value.findIndex(s => s.stakeholder_id === stakeholderId)
+    if (idx !== -1) {
+      planStakeholders.value[idx] = { ...planStakeholders.value[idx], ...newStakeholderForm }
+    }
+    cancelEditStakeholder()
+  } catch (e) {
+    console.error('handleUpdateStakeholder failed', e)
+  }
+}
+
+async function handleDeleteStakeholder(stakeholderId: string) {
+  if (!currentPlan.value) return
+  try {
+    await deleteStakeholder(currentPlan.value.plan_id, stakeholderId)
+    planStakeholders.value = planStakeholders.value.filter(s => s.stakeholder_id !== stakeholderId)
+  } catch (e) {
+    console.error('handleDeleteStakeholder failed', e)
+  }
+}
+
+function startEditStakeholder(stakeholder: any) {
+  editingStakeholderId.value = stakeholder.stakeholder_id
+  showAddStakeholder.value = true
+  newStakeholderForm.name = stakeholder.name
+  newStakeholderForm.level = stakeholder.level || 5
+  newStakeholderForm.interest = stakeholder.interest || ''
+  newStakeholderForm.influence = stakeholder.influence || ''
+  newStakeholderForm.description = stakeholder.description || ''
+}
+
+function cancelEditStakeholder() {
+  showAddStakeholder.value = false
+  editingStakeholderId.value = null
+  newStakeholderForm.name = ''
+  newStakeholderForm.level = 5
+  newStakeholderForm.interest = ''
+  newStakeholderForm.influence = ''
+  newStakeholderForm.description = ''
+}
+
+// ─── Requirements Handlers ───────────────────────────────────────────────────────
+async function handleCreateRequirement() {
+  if (!newRequirementForm.description.trim() || !currentPlan.value) return
+  try {
+    const res = await createRequirement(currentPlan.value.plan_id, {
+      description: newRequirementForm.description,
+      priority: newRequirementForm.priority,
+      category: newRequirementForm.category,
+      status: newRequirementForm.status,
+      notes: newRequirementForm.notes,
+    })
+    planRequirements.value.push(res.data)
+    cancelEditRequirement()
+  } catch (e) {
+    console.error('handleCreateRequirement failed', e)
+  }
+}
+
+async function handleUpdateRequirement(reqId: string) {
+  if (!currentPlan.value) return
+  try {
+    await updateRequirement(currentPlan.value.plan_id, reqId, {
+      description: newRequirementForm.description,
+      priority: newRequirementForm.priority,
+      category: newRequirementForm.category,
+      status: newRequirementForm.status,
+      notes: newRequirementForm.notes,
+    })
+    const idx = planRequirements.value.findIndex(r => r.id === reqId)
+    if (idx !== -1) {
+      planRequirements.value[idx] = {
+        ...planRequirements.value[idx],
+        description: newRequirementForm.description,
+        priority: newRequirementForm.priority,
+        category: newRequirementForm.category,
+        status: newRequirementForm.status,
+        notes: newRequirementForm.notes,
+      }
+    }
+    cancelEditRequirement()
+  } catch (e) {
+    console.error('handleUpdateRequirement failed', e)
+  }
+}
+
+async function handleDeleteRequirement(reqId: string) {
+  if (!currentPlan.value) return
+  try {
+    await deleteRequirement(currentPlan.value.plan_id, reqId)
+    planRequirements.value = planRequirements.value.filter(r => r.id !== reqId)
+  } catch (e) {
+    console.error('handleDeleteRequirement failed', e)
+  }
+}
+
+function startEditRequirement(req: any) {
+  editingRequirementId.value = req.id
+  showAddRequirement.value = true
+  newRequirementForm.description = req.description || ''
+  newRequirementForm.priority = req.priority || 'medium'
+  newRequirementForm.category = req.category || 'other'
+  newRequirementForm.status = req.status || 'pending'
+  newRequirementForm.notes = req.notes || ''
+}
+
+function cancelEditRequirement() {
+  showAddRequirement.value = false
+  editingRequirementId.value = null
+  newRequirementForm.description = ''
+  newRequirementForm.priority = 'medium'
+  newRequirementForm.category = 'other'
+  newRequirementForm.status = 'pending'
+  newRequirementForm.notes = ''
+}
+
+async function handleCreateRoom() {
+  if (!newRoomForm.topic.trim() || !currentPlan.value) return
+  try {
+    const res = await api.post('/rooms', {
+      topic: newRoomForm.topic,
+      title: newRoomForm.title || newRoomForm.topic,
+      plan_id: currentPlan.value.plan_id,
+      version: planDetailActiveVersion.value,
+      mode: newRoomForm.mode,
+    })
+    const room = res.data
+    newRoomForm.topic = ''
+    newRoomForm.title = ''
+    showCreateRoom.value = false
+    // Refresh rooms list
+    const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+    planRooms.value = roomsRes.data?.rooms || []
+    // Enter the room
+    await enterRoom(room.room_id)
+  } catch (e) {
+    console.error('createRoom failed', e)
+  }
+}
+
+async function openRoomHierarchy(room: any, event: Event) {
+  event.stopPropagation()
+  event.preventDefault()
+  selectedRoomForHierarchy.value = room
+  showRoomHierarchy.value = true
+  hierarchyActiveTab.value = 'view'
+  hierarchyLoading.value = true
+  try {
+    const res = await getRoomHierarchy(room.room_id)
+    roomHierarchyData.value = res.data
+    // Pre-fill link form with current values
+    hierarchyLinkForm.parent_room_id = res.data.parent?.room_id || ''
+    hierarchyLinkForm.child_rooms = (res.data.children || []).map((c: any) => c.room_id)
+    hierarchyLinkForm.related_rooms = (res.data.related || []).map((r: any) => r.room_id)
+  } catch (e) {
+    console.error('load hierarchy failed', e)
+    roomHierarchyData.value = { room_id: room.room_id, parent: null, children: [], related: [] }
+  } finally {
+    hierarchyLoading.value = false
+  }
+}
+
+async function handleLinkRoom() {
+  if (!selectedRoomForHierarchy.value) return
+  hierarchyActionLoading.value = true
+  try {
+    await linkRoom(selectedRoomForHierarchy.value.room_id, {
+      parent_room_id: hierarchyLinkForm.parent_room_id || undefined,
+      child_rooms: hierarchyLinkForm.child_rooms.length ? hierarchyLinkForm.child_rooms : undefined,
+      related_rooms: hierarchyLinkForm.related_rooms.length ? hierarchyLinkForm.related_rooms : undefined,
+    })
+    // Reload hierarchy
+    const res = await getRoomHierarchy(selectedRoomForHierarchy.value.room_id)
+    roomHierarchyData.value = res.data
+    hierarchyLinkForm.parent_room_id = res.data.parent?.room_id || ''
+    hierarchyLinkForm.child_rooms = (res.data.children || []).map((c: any) => c.room_id)
+    hierarchyLinkForm.related_rooms = (res.data.related || []).map((r: any) => r.room_id)
+  } catch (e) {
+    console.error('link room failed', e)
+    alert('链接房间失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    hierarchyActionLoading.value = false
+  }
+}
+
+async function handleConcludeRoom() {
+  if (!selectedRoomForHierarchy.value) return
+  hierarchyActionLoading.value = true
+  try {
+    await concludeRoom(selectedRoomForHierarchy.value.room_id, {
+      summary: hierarchyConcludeForm.summary || undefined,
+      conclusion: hierarchyConcludeForm.conclusion || undefined,
+    })
+    hierarchyConcludeForm.summary = ''
+    hierarchyConcludeForm.conclusion = ''
+    hierarchyActiveTab.value = 'view'
+    // Reload rooms list
+    if (currentPlan.value) {
+      const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+      planRooms.value = roomsRes.data?.rooms || []
+    }
+  } catch (e) {
+    console.error('conclude room failed', e)
+    alert('结束房间失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    hierarchyActionLoading.value = false
+  }
+}
+
+function getTaskTitle(taskId: string): string {
+  const task = planTasks.value.find(t => t.task_id === taskId)
+  return task ? (task.task_number ? `${task.task_number} ${task.title}` : task.title) : ''
+}
+
+async function openTaskDependencies() {
+  if (!currentPlan.value) return
+  showTaskDependencies.value = true
+  dependencyLoading.value = true
+  try {
+    const version = planDetailActiveVersion.value || currentPlan.value.current_version
+    const [graphRes, blockedRes] = await Promise.all([
+      getTaskDependencyGraph(currentPlan.value.plan_id, version),
+      getBlockedTasks(currentPlan.value.plan_id, version),
+    ])
+    dependencyGraph.value = graphRes.data
+    blockedTasks.value = blockedRes.data?.tasks || []
+  } catch (e) {
+    console.error('load dependency graph failed', e)
+    dependencyGraph.value = null
+  } finally {
+    dependencyLoading.value = false
+  }
+}
+
+async function openTaskDetail(task: any) {
+  if (!currentPlan.value) return
+  selectedTaskForDetail.value = task
+  showTaskDetail.value = true
+  taskDetailActiveTab.value = 'comments'
+  taskDetailLoading.value = true
+  try {
+    const version = planDetailActiveVersion.value || currentPlan.value.current_version
+    const [commentsRes, checkpointsRes] = await Promise.all([
+      listTaskComments(currentPlan.value.plan_id, version, task.task_id),
+      listTaskCheckpoints(currentPlan.value.plan_id, version, task.task_id),
+    ])
+    taskDetailComments.value = commentsRes.data?.comments || commentsRes.data || []
+    taskDetailCheckpoints.value = checkpointsRes.data?.checkpoints || checkpointsRes.data || []
+  } catch (e) {
+    console.error('load task detail failed', e)
+    taskDetailComments.value = []
+    taskDetailCheckpoints.value = []
+  } finally {
+    taskDetailLoading.value = false
+  }
+}
+
+async function handleCreateComment() {
+  if (!currentPlan.value || !selectedTaskForDetail.value || !newCommentForm.content.trim()) return
+  const version = planDetailActiveVersion.value || currentPlan.value.current_version
+  try {
+    await createTaskComment(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id, {
+      author_name: newCommentForm.author_name || 'Guest',
+      content: newCommentForm.content,
+    })
+    newCommentForm.content = ''
+    // reload comments
+    const commentsRes = await listTaskComments(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id)
+    taskDetailComments.value = commentsRes.data?.comments || commentsRes.data || []
+  } catch (e) {
+    console.error('create comment failed', e)
+  }
+}
+
+async function handleCreateCheckpoint() {
+  if (!currentPlan.value || !selectedTaskForDetail.value || !newCheckpointForm.name.trim()) return
+  const version = planDetailActiveVersion.value || currentPlan.value.current_version
+  try {
+    await createTaskCheckpoint(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id, {
+      name: newCheckpointForm.name,
+      status: newCheckpointForm.status,
+    })
+    newCheckpointForm.name = ''
+    newCheckpointForm.status = 'pending'
+    // reload checkpoints
+    const checkpointsRes = await listTaskCheckpoints(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id)
+    taskDetailCheckpoints.value = checkpointsRes.data?.checkpoints || checkpointsRes.data || []
+  } catch (e) {
+    console.error('create checkpoint failed', e)
+  }
+}
+
+async function enterRoom(roomId: string) {
+  try {
+    const [roomRes, phaseRes] = await Promise.all([
+      getRoom(roomId),
+      getPhase(roomId),
+    ])
+    currentRoom.value = roomRes.data
+    currentPhase.value = phaseRes.data
+    participants.value = roomRes.data.participants || []
+    messages.value = []
+
+    // Load existing context/history
+    try {
+      const ctx = await api.get(`/rooms/${roomId}/context`)
+      if (ctx.data?.recent_history?.length) {
+        messages.value = ctx.data.recent_history
+      }
+    } catch {}
+
+    // Load tasks for the plan
+    const planId = roomRes.data.plan_id
+    const version = roomRes.data.version || roomRes.data.current_version || 'v1.0'
+    if (planId) {
+      try {
+        const [tasksRes, metricsRes] = await Promise.all([
+          listTasks(planId, version),
+          getTaskMetrics(planId, version),
+        ])
+        tasks.value = tasksRes.data?.tasks || []
+        taskMetrics.value = metricsRes.data
+      } catch (e) {
+        console.error('loadTasks failed', e)
+        tasks.value = []
+        taskMetrics.value = null
+      }
+    }
+
+    // Load debate state if room is in DEBATE phase
+    try {
+      const ds = await getDebateState(roomId)
+      debateState.value = ds.data
+    } catch {
+      debateState.value = null
+    }
+
+    connectWs(roomId)
+    phasePollInterval = setInterval(async () => {
+      try {
+        const r = await getPhase(roomId)
+        currentPhase.value = r.data
+        // Refresh debate state when in DEBATE phase
+        if (r.data?.current_phase === 'DEBATE') {
+          try {
+            const ds = await getDebateState(roomId)
+            debateState.value = ds.data
+          } catch {}
+        }
+      } catch {}
+    }, 3000)
+
+    view.value = 'room'
+  } catch (e) {
+    console.error('enterRoom failed', e)
+  }
+}
+
+function leaveRoom() {
+  if (ws) { ws.close(); ws = null }
+  if (phasePollInterval) { clearInterval(phasePollInterval); phasePollInterval = null }
+  currentRoom.value = null
+  messages.value = []
+  showAddParticipant.value = false
+  showAddTask.value = false
+  tasks.value = []
+  taskMetrics.value = null
+  debateState.value = null
+  showAddDebatePoint.value = false
+  view.value = 'plan_detail'
+}
+
+function backToHome() {
+  view.value = 'home'
+  currentPlan.value = null
+  planVersions.value = []
+  planRooms.value = []
+  loadPlans()
+}
+
+// ─── Room Actions ────────────────────────────────────────
+function connectWs(roomId: string) {
+  if (ws) ws.close()
+  ws = new WebSocket(wsUrl(roomId))
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'phase_change') {
+      if (currentPhase.value) currentPhase.value.current_phase = msg.to_phase
+    } else if (msg.type === 'speech') {
+      messages.value.push(msg)
+    } else if (msg.type === 'participant_joined') {
+      if (!participants.value.find(p => p.participant_id === msg.participant?.participant_id)) {
+        participants.value.push(msg.participant)
+      }
+    }
+  }
+  ws.onclose = () => console.log('WS disconnected')
+}
+
+async function sendMessage() {
+  if (!newMessage.content.trim() || !currentRoom.value) return
+  try {
+    await addSpeech(currentRoom.value.room_id, {
+      agent_id: agentInfo.agent_id,
+      content: newMessage.content,
+    })
+    newMessage.content = ''
+  } catch (e) {
+    console.error('sendMessage failed', e)
+  }
+}
+
+async function addNewParticipant() {
+  if (!newParticipant.name.trim() || !currentRoom.value) return
+  const id = 'agent-' + Date.now()
+  try {
+    const res = await addParticipant(currentRoom.value.room_id, {
+      agent_id: id,
+      name: newParticipant.name,
+      level: newParticipant.level,
+      role: newParticipant.role,
+    })
+    participants.value.push(res.data)
+    newParticipant.name = ''
+    showAddParticipant.value = false
+  } catch (e) {
+    console.error('addParticipant failed', e)
+  }
+}
+
+async function handleCreateTask() {
+  if (!newTask.title.trim() || !currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const res = await createTask(planId, version, {
+      title: newTask.title,
+      description: newTask.description,
+      priority: newTask.priority,
+      assigned_to: newTask.assigned_to || undefined,
+    })
+    planTasks.value.push(res.data)
+    newTask.title = ''
+    newTask.description = ''
+    newTask.priority = 'medium'
+    newTask.assigned_to = ''
+    showAddTask.value = false
+  } catch (e) {
+    console.error('createTask failed', e)
+  }
+}
+
+async function handleUpdateTaskProgress(taskId: string, progress: number) {
+  if (!currentPlan.value) return
+  const planId = currentPlan.value.plan_id
+  const version = planDetailActiveVersion.value
+  try {
+    const status = progress >= 100 ? 'completed' : progress > 0 ? 'in_progress' : 'pending'
+    await updateTaskProgress(planId, version, taskId, { progress, status })
+    const task = planTasks.value.find(t => t.task_id === taskId)
+    if (task) {
+      task.progress = progress
+      task.status = status
+    }
+  } catch (e) {
+    console.error('updateTaskProgress failed', e)
+  }
+}
+
+async function advancePhase(toPhase: string) {
+  if (!currentRoom.value) return
+  try {
+    const res = await transitionPhase(currentRoom.value.room_id, toPhase)
+    currentPhase.value = res.data
+  } catch (e) {
+    console.error('advancePhase failed', e)
+  }
+}
+
+async function handleCreateDebatePoint() {
+  if (!currentRoom.value || !newDebatePoint.content.trim()) return
+  try {
+    const res = await createDebatePoint(currentRoom.value.room_id, {
+      content: newDebatePoint.content,
+      point_type: newDebatePoint.point_type,
+    })
+    newDebatePoint.content = ''
+    newDebatePoint.point_type = 'proposal'
+    showAddDebatePoint.value = false
+    // Refresh debate state
+    const ds = await getDebateState(currentRoom.value.room_id)
+    debateState.value = ds.data
+  } catch (e) {
+    console.error('createDebatePoint failed', e)
+  }
+}
+
+async function handleSubmitDebatePosition(pointId: string, position: 'support' | 'oppose') {
+  if (!currentRoom.value) return
+  try {
+    await submitDebatePosition(currentRoom.value.room_id, {
+      point_id: pointId,
+      position,
+      reasoning: '',
+      agent_id: agentInfo.agent_id,
+    })
+    // Refresh debate state
+    const ds = await getDebateState(currentRoom.value.room_id)
+    debateState.value = ds.data
+  } catch (e) {
+    console.error('submitDebatePosition failed', e)
+  }
+}
+
+async function handleEscalateRoom() {
+  if (!currentRoom.value) return
+  if (!escalationForm.reason.trim()) {
+    alert('请填写升级原因')
+    return
+  }
+  if (escalationForm.to_level <= escalationForm.from_level) {
+    alert('目标层级必须高于当前层级')
+    return
+  }
+  escalationLoading.value = true
+  try {
+    await escalateRoom(currentRoom.value.room_id, {
+      from_level: escalationForm.from_level,
+      to_level: escalationForm.to_level,
+      mode: escalationForm.mode,
+      content: {
+        escalated_by: currentUser.name,
+        reason: escalationForm.reason,
+      },
+      notes: escalationForm.notes,
+    })
+    showEscalationModal.value = false
+    escalationForm.reason = ''
+    escalationForm.notes = ''
+    escalationForm.mode = 'level_by_level'
+    escalationForm.from_level = 5
+    escalationForm.to_level = 6
+    // Refresh notifications
+    await loadNotifications()
+    await loadUnreadCount()
+  } catch (e) {
+    console.error('escalateRoom failed', e)
+    alert('升级失败：' + (e instanceof Error ? e.message : String(e)))
+  } finally {
+    escalationLoading.value = false
+  }
+}
+
+// ─── Lifecycle ──────────────────────────────────────────
+onMounted(() => {
+  loadPlans()
+  loadUnreadCount()
+  homePollInterval = setInterval(loadPlans, 10000)
+  document.addEventListener('click', closeNotifications)
+})
+onUnmounted(() => {
+  if (ws) ws.close()
+  if (phasePollInterval) clearInterval(phasePollInterval)
+  if (homePollInterval) clearInterval(homePollInterval)
+  document.removeEventListener('click', closeNotifications)
+})
+</script>
+
+<template>
+  <div class="app">
+    <!-- ══════════════════════════════════════════════════════ -->
+    <!-- HOME / PLAN DASHBOARD                                 -->
+    <!-- ══════════════════════════════════════════════════════ -->
+    <div v-if="view === 'home'" class="home">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="logo">
+          <span class="logo-icon">⚡</span>
+          <span class="logo-text">Agora</span>
+          <span class="logo-version">v2</span>
+        </div>
+        <div class="header-actions">
+          <button class="btn-primary" @click="showCreatePlan = !showCreatePlan">
+            {{ showCreatePlan ? '取消' : '+ 新计划' }}
+          </button>
+          <!-- Notification Bell -->
+          <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
+            🔔
+            <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Create Plan Form -->
+      <div v-if="showCreatePlan" class="create-panel">
+        <div class="create-inner">
+          <input
+            v-model="newPlanForm.topic"
+            class="input"
+            placeholder="计划主题 / 决策问题"
+            @keyup.enter="handleCreatePlan"
+            autofocus
+          />
+          <input
+            v-model="newPlanForm.title"
+            class="input"
+            placeholder="标题（可选）"
+            @keyup.enter="handleCreatePlan"
+          />
+          <button class="btn-primary" @click="handleCreatePlan">创建计划 →</button>
+        </div>
+      </div>
+
+      <!-- Search & Controls -->
+      <div class="search-bar">
+        <input
+          v-model="searchQuery"
+          class="input search-input"
+          placeholder="🔍 搜索计划..."
+        />
+        <div class="sort-controls">
+          <button
+            class="sort-btn"
+            :class="{ active: sortBy === 'recent' }"
+            @click="sortBy = 'recent'"
+          >最新</button>
+          <button
+            class="sort-btn"
+            :class="{ active: sortBy === 'name' }"
+            @click="sortBy = 'name'"
+          >名称</button>
+        </div>
+        <span class="plan-count">{{ filteredPlans.length }} 个计划</span>
+      </div>
+
+      <!-- Plan Grid -->
+      <div class="plans-grid">
+        <div
+          v-for="plan in filteredPlans"
+          :key="plan.plan_id"
+          class="plan-card"
+          @click="openPlanDetail(plan.plan_id)"
+        >
+          <div class="plan-card-header">
+            <span class="plan-number">{{ plan.plan_number }}</span>
+            <span class="version-badge">v{{ plan.current_version || plan.version || '1.0' }}</span>
+          </div>
+          <div class="plan-card-title">{{ plan.title || plan.topic || '未命名计划' }}</div>
+          <div class="plan-card-topic">{{ plan.topic }}</div>
+          <!-- Mini metrics -->
+          <div class="plan-card-metrics">
+            <span class="metric-chip">📋 {{ plan.room_count || plan.rooms?.length || 0 }} 房间</span>
+            <span class="metric-chip">🗂️ {{ plan.versions?.length || 1 }} 版本</span>
+          </div>
+          <div class="plan-card-footer">
+            <span class="meta-item">{{ new Date(plan.created_at).toLocaleDateString('zh-CN') }}</span>
+            <span class="meta-item">{{ plan.current_version || plan.version || 'v1.0' }}</span>
+          </div>
+        </div>
+
+        <!-- Empty State -->
+        <div v-if="filteredPlans.length === 0" class="empty-state">
+          <div class="empty-icon">🏛️</div>
+          <div class="empty-text">暂无计划</div>
+          <div class="empty-sub">点击上方「+ 新计划」创建第一个讨论计划</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Panel -->
+    <div v-if="showNotifications" class="notification-panel">
+      <div class="notification-panel-header">
+        <span class="notification-panel-title">通知</span>
+        <div class="notification-panel-actions">
+          <button v-if="unreadCount > 0" class="notification-action-btn" @click="handleMarkAllRead">全部已读</button>
+          <button class="notification-close-btn" @click="showNotifications = false">✕</button>
+        </div>
+      </div>
+      <div class="notification-list">
+        <div v-if="notifications.length === 0" class="notification-empty">
+          <div class="notification-empty-icon">🔔</div>
+          <div class="notification-empty-text">暂无通知</div>
+        </div>
+        <div
+          v-for="n in notifications"
+          :key="n.notification_id"
+          class="notification-item"
+          :class="{ unread: !n.read }"
+        >
+          <div class="notification-item-header">
+            <span
+              class="notification-type-badge"
+              :style="{ backgroundColor: notificationTypeColor[n.type] || '#6b7280' }"
+            >
+              {{ notificationTypeLabel[n.type] || n.type }}
+            </span>
+            <button class="notification-delete-btn" @click.stop="handleDeleteNotification(n.notification_id)" title="删除">✕</button>
+          </div>
+          <div class="notification-item-title">{{ n.title }}</div>
+          <div v-if="n.message" class="notification-item-message">{{ n.message }}</div>
+          <div class="notification-item-footer">
+            <span class="notification-time">{{ new Date(n.created_at).toLocaleString('zh-CN') }}</span>
+            <button
+              v-if="!n.read"
+              class="notification-mark-read-btn"
+              @click.stop="handleMarkRead(n.notification_id)"
+            >✓ 已读</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════ -->
+    <!-- PLAN DETAIL VIEW                                      -->
+    <!-- ══════════════════════════════════════════════════════ -->
+    <div v-else-if="view === 'plan_detail'" class="plan-detail">
+      <!-- Header -->
+      <header class="app-header">
+        <button class="btn-back" @click="backToHome">
+          ← 全部计划
+        </button>
+        <div class="plan-header-info">
+          <span class="plan-header-title">{{ currentPlan?.title || currentPlan?.topic || '计划详情' }}</span>
+          <span class="plan-number">{{ currentPlan?.plan_number }}</span>
+        </div>
+        <button class="btn-primary" @click="showCreateRoom = !showCreateRoom">
+          {{ showCreateRoom ? '取消' : '+ 新房间' }}
+        </button>
+        <!-- Notification Bell -->
+        <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
+          🔔
+          <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+        </button>
+      </header>
+
+      <!-- Create Room Form -->
+      <div v-if="showCreateRoom" class="create-panel">
+        <div class="create-inner">
+          <input
+            v-model="newRoomForm.topic"
+            class="input"
+            placeholder="房间话题"
+            @keyup.enter="handleCreateRoom"
+            autofocus
+          />
+          <input
+            v-model="newRoomForm.title"
+            class="input"
+            placeholder="标题（可选）"
+            @keyup.enter="handleCreateRoom"
+          />
+          <div class="mode-select-row">
+            <label class="mode-label">模式：</label>
+            <select v-model="newRoomForm.mode" class="input mode-select">
+              <option value="hierarchical">层级模式</option>
+              <option value="flat">扁平模式</option>
+            </select>
+          </div>
+          <button class="btn-primary" @click="handleCreateRoom">创建房间 →</button>
+        </div>
+      </div>
+
+      <!-- Plan Tabs -->
+      <div class="plan-tabs">
+        <button
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'snapshots']"
+          :key="tab"
+          class="plan-tab"
+          :class="{ active: activePlanTab === tab }"
+          @click="activePlanTab = tab as any"
+        >
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : '快照' }}
+        </button>
+      </div>
+
+      <!-- Overview Tab -->
+      <div v-if="activePlanTab === 'overview'" class="plan-content">
+        <div class="overview-grid">
+          <!-- Plan Info -->
+          <div class="overview-card">
+            <div class="overview-card-title">计划信息</div>
+            <div class="info-row">
+              <span class="info-label">计划号</span>
+              <span class="info-value">{{ currentPlan?.plan_number }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">主题</span>
+              <span class="info-value">{{ currentPlan?.topic }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">当前版本</span>
+              <span class="info-value">{{ planDetailActiveVersion }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">创建时间</span>
+              <span class="info-value">{{ new Date(currentPlan?.created_at || '').toLocaleDateString('zh-CN') }}</span>
+            </div>
+          </div>
+
+          <!-- Metrics -->
+          <div class="overview-card">
+            <div class="overview-card-title">统计概览</div>
+            <div class="metrics-row">
+              <div class="metric-box">
+                <div class="metric-val">{{ planMetrics?.total_tasks || planTasks.length || 0 }}</div>
+                <div class="metric-key">任务总数</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-val completed">{{ planMetrics?.completed_tasks || 0 }}</div>
+                <div class="metric-key">已完成</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-val rate">{{ planMetrics?.completion_rate || 0 }}%</div>
+                <div class="metric-key">完成率</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-val">{{ planRooms.length }}</div>
+                <div class="metric-key">讨论室</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rooms Summary -->
+          <div class="overview-card rooms-summary">
+            <div class="overview-card-title">讨论室 ({{ planRooms.length }})</div>
+            <div v-if="planRooms.length === 0" class="sidebar-empty">暂无讨论室</div>
+            <div
+              v-for="room in planRooms.slice(0, 5)"
+              :key="room.room_id"
+              class="room-mini-row"
+              @click="enterRoom(room.room_id)"
+            >
+              <span
+                class="phase-pill small"
+                :style="{ background: phaseColors[room.phase] || '#6b7280' }"
+              >{{ phaseLabel[room.phase] || room.phase }}</span>
+              <span class="room-mini-topic">{{ room.topic || room.title || '讨论室' }}</span>
+              <span class="room-mini-num">{{ room.room_number }}</span>
+            </div>
+            <div v-if="planRooms.length > 5" class="see-more" @click="activePlanTab = 'rooms'">
+              查看全部 {{ planRooms.length }} 个房间 →
+            </div>
+          </div>
+
+          <!-- Tasks Summary -->
+          <div class="overview-card tasks-summary">
+            <div class="overview-card-title">任务 ({{ planTasks.length }})</div>
+            <div v-if="planTasks.length === 0" class="sidebar-empty">暂无任务</div>
+            <div
+              v-for="task in planTasks.slice(0, 5)"
+              :key="task.task_id"
+              class="task-mini-row"
+            >
+              <span class="task-mini-title">{{ task.title }}</span>
+              <span class="task-mini-progress">{{ task.progress || 0 }}%</span>
+            </div>
+            <div v-if="planTasks.length > 5" class="see-more" @click="activePlanTab = 'tasks'">
+              查看全部 {{ planTasks.length }} 个任务 →
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rooms Tab -->
+      <div v-else-if="activePlanTab === 'rooms'" class="plan-content">
+        <div class="rooms-grid">
+          <div
+            v-for="room in planRooms"
+            :key="room.room_id"
+            class="plan-room-card"
+            @click="enterRoom(room.room_id)"
+          >
+            <div class="plan-room-header">
+              <span
+                class="phase-pill"
+                :style="{ background: phaseColors[room.phase] || '#6b7280' }"
+              >{{ phaseLabel[room.phase] || room.phase }}</span>
+              <span class="room-number">{{ room.room_number }}</span>
+            </div>
+            <div class="plan-room-topic">{{ room.topic || room.title || '讨论室' }}</div>
+            <div class="plan-room-meta">
+              <span>👥 {{ room.participant_count || 0 }}</span>
+              <span>{{ new Date(room.created_at).toLocaleDateString('zh-CN') }}</span>
+            </div>
+            <!-- Hierarchy indicators -->
+            <div class="room-hierarchy-indicators" @click.stop>
+              <span
+                v-if="room.parent_room_id"
+                class="hierarchy-badge parent"
+                title="子房间"
+              >↑ 父</span>
+              <span
+                v-if="room.child_rooms?.length"
+                class="hierarchy-badge child"
+                title="子房间"
+              >↓ {{ room.child_rooms.length }}子</span>
+              <span
+                v-if="room.related_rooms?.length"
+                class="hierarchy-badge related"
+                title="关联房间"
+              >↔ {{ room.related_rooms.length }}关</span>
+              <button
+                class="hierarchy-btn"
+                title="层级管理"
+                @click="openRoomHierarchy(room, $event)"
+              >🔗</button>
+            </div>
+          </div>
+
+          <div v-if="planRooms.length === 0" class="empty-state" style="grid-column: 1/-1">
+            <div class="empty-icon">🚪</div>
+            <div class="empty-text">暂无讨论室</div>
+            <div class="empty-sub">点击上方「+ 新房间」创建第一个讨论室</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Room Hierarchy Modal -->
+      <div v-if="showRoomHierarchy" class="modal-overlay" @click.self="showRoomHierarchy = false">
+        <div class="modal-content room-hierarchy-modal">
+          <div class="modal-header">
+            <h3>🔗 讨论室层级管理</h3>
+            <button class="modal-close" @click="showRoomHierarchy = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="hierarchy-room-info">
+              <span class="phase-pill small" :style="{ background: phaseColors[selectedRoomForHierarchy?.phase] || '#6b7280' }">
+                {{ phaseLabel[selectedRoomForHierarchy?.phase] || selectedRoomForHierarchy?.phase || '' }}
+              </span>
+              <span class="hierarchy-room-topic">{{ selectedRoomForHierarchy?.topic || selectedRoomForHierarchy?.title || '' }}</span>
+              <span class="hierarchy-room-num">{{ selectedRoomForHierarchy?.room_number || '' }}</span>
+            </div>
+
+            <!-- Tabs -->
+            <div class="hierarchy-tabs">
+              <button :class="{ active: hierarchyActiveTab === 'view' }" @click="hierarchyActiveTab = 'view'">层级视图</button>
+              <button :class="{ active: hierarchyActiveTab === 'link' }" @click="hierarchyActiveTab = 'link'">链接房间</button>
+              <button :class="{ active: hierarchyActiveTab === 'conclude' }" @click="hierarchyActiveTab = 'conclude'">结束房间</button>
+            </div>
+
+            <!-- View Tab -->
+            <div v-if="hierarchyActiveTab === 'view'" class="hierarchy-view-tab">
+              <div v-if="hierarchyLoading" class="loading-state">加载中...</div>
+              <template v-else-if="roomHierarchyData">
+                <div class="hierarchy-section">
+                  <div class="hierarchy-section-title">上级房间</div>
+                  <div v-if="roomHierarchyData.parent" class="hierarchy-item parent-item" @click="enterRoom(roomHierarchyData.parent.room_id); showRoomHierarchy = false">
+                    <span class="hierarchy-icon">↑</span>
+                    <span class="hierarchy-item-topic">{{ roomHierarchyData.parent.topic }}</span>
+                    <span class="hierarchy-item-phase">{{ phaseLabel[roomHierarchyData.parent.phase] || roomHierarchyData.parent.phase }}</span>
+                  </div>
+                  <div v-else class="hierarchy-empty">无上级房间</div>
+                </div>
+                <div class="hierarchy-section">
+                  <div class="hierarchy-section-title">子房间 ({{ roomHierarchyData.children?.length || 0 }})</div>
+                  <div v-if="roomHierarchyData.children?.length" class="hierarchy-items-list">
+                    <div v-for="child in roomHierarchyData.children" :key="child.room_id" class="hierarchy-item child-item" @click="enterRoom(child.room_id); showRoomHierarchy = false">
+                      <span class="hierarchy-icon">↓</span>
+                      <span class="hierarchy-item-topic">{{ child.topic }}</span>
+                      <span class="hierarchy-item-phase">{{ phaseLabel[child.phase] || child.phase }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="hierarchy-empty">无子房间</div>
+                </div>
+                <div class="hierarchy-section">
+                  <div class="hierarchy-section-title">关联房间 ({{ roomHierarchyData.related?.length || 0 }})</div>
+                  <div v-if="roomHierarchyData.related?.length" class="hierarchy-items-list">
+                    <div v-for="rel in roomHierarchyData.related" :key="rel.room_id" class="hierarchy-item related-item" @click="enterRoom(rel.room_id); showRoomHierarchy = false">
+                      <span class="hierarchy-icon">↔</span>
+                      <span class="hierarchy-item-topic">{{ rel.topic }}</span>
+                      <span class="hierarchy-item-phase">{{ phaseLabel[rel.phase] || rel.phase }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="hierarchy-empty">无关联房间</div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Link Tab -->
+            <div v-if="hierarchyActiveTab === 'link'" class="hierarchy-link-tab">
+              <div class="form-group">
+                <label>上级房间</label>
+                <select v-model="hierarchyLinkForm.parent_room_id" class="input">
+                  <option value="">无（顶级房间）</option>
+                  <option v-for="r in planRooms.filter(r => r.room_id !== selectedRoomForHierarchy?.room_id)" :key="r.room_id" :value="r.room_id">
+                    {{ r.topic || r.title }} ({{ r.room_number }})
+                  </option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>子房间（多选）</label>
+                <div class="checkbox-group">
+                  <label v-for="r in planRooms.filter(r => r.room_id !== selectedRoomForHierarchy?.room_id)" :key="r.room_id" class="checkbox-item">
+                    <input type="checkbox" :value="r.room_id" v-model="hierarchyLinkForm.child_rooms" />
+                    {{ r.topic || r.title }} ({{ r.room_number }})
+                  </label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>关联房间（多选）</label>
+                <div class="checkbox-group">
+                  <label v-for="r in planRooms.filter(r => r.room_id !== selectedRoomForHierarchy?.room_id)" :key="r.room_id" class="checkbox-item">
+                    <input type="checkbox" :value="r.room_id" v-model="hierarchyLinkForm.related_rooms" />
+                    {{ r.topic || r.title }} ({{ r.room_number }})
+                  </label>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button class="btn-primary" :disabled="hierarchyActionLoading" @click="handleLinkRoom">
+                  {{ hierarchyActionLoading ? '保存中...' : '保存链接' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Conclude Tab -->
+            <div v-if="hierarchyActiveTab === 'conclude'" class="hierarchy-conclude-tab">
+              <div class="form-group">
+                <label>会议总结</label>
+                <textarea v-model="hierarchyConcludeForm.summary" class="input" rows="4" placeholder="描述本次讨论的主要结论..."></textarea>
+              </div>
+              <div class="form-group">
+                <label>结论</label>
+                <textarea v-model="hierarchyConcludeForm.conclusion" class="input" rows="3" placeholder="最终决策或下一步行动..."></textarea>
+              </div>
+              <div class="modal-actions">
+                <button class="btn-danger" :disabled="hierarchyActionLoading" @click="handleConcludeRoom">
+                  {{ hierarchyActionLoading ? '结束中...' : '确认结束房间' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Escalation Modal -->
+      <div v-if="showEscalationModal" class="modal-overlay" @click.self="showEscalationModal = false">
+        <div class="modal-content escalation-modal">
+          <div class="modal-header">
+            <h3>🔺 升级讨论</h3>
+            <button class="modal-close" @click="showEscalationModal = false">✕</button>
+          </div>
+          <div class="escalation-form">
+            <div class="form-group">
+              <label>当前层级</label>
+              <select v-model.number="escalationForm.from_level" class="input">
+                <option :value="1">L1 - 任务层</option>
+                <option :value="2">L2 - 岗位层</option>
+                <option :value="3">L3 - 班组层</option>
+                <option :value="4">L4 - 团队层</option>
+                <option :value="5">L5 - 部门层</option>
+                <option :value="6">L6 - 事业部层</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>目标层级</label>
+              <select v-model.number="escalationForm.to_level" class="input">
+                <option :value="2">L2 - 岗位层</option>
+                <option :value="3">L3 - 班组层</option>
+                <option :value="4">L4 - 团队层</option>
+                <option :value="5">L5 - 部门层</option>
+                <option :value="6">L6 - 事业部层</option>
+                <option :value="7">L7 - 战略层</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>升级模式</label>
+              <select v-model="escalationForm.mode" class="input">
+                <option value="level_by_level">逐级汇报 (L1→L2→L3→...)</option>
+                <option value="cross_level">跨级汇报 (L1→L3→L5→L7)</option>
+                <option value="emergency">紧急汇报 (L1→L5→L7)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>升级原因 <span class="required">*</span></label>
+              <textarea v-model="escalationForm.reason" class="input" rows="3" placeholder="请描述升级的原因和需要高层级决策的问题..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>补充说明（可选）</label>
+              <textarea v-model="escalationForm.notes" class="input" rows="2" placeholder="额外备注信息..."></textarea>
+            </div>
+            <div class="escalation-path-preview" v-if="escalationForm.from_level && escalationForm.to_level && escalationForm.to_level > escalationForm.from_level">
+              <span class="path-label">升级路径：</span>
+              <span class="path-steps">
+                <template v-if="escalationForm.mode === 'level_by_level'">
+                  {{ Array.from({length: escalationForm.to_level - escalationForm.from_level + 1}, (_, i) => 'L' + (escalationForm.from_level + i)).join(' → ') }}
+                </template>
+                <template v-else-if="escalationForm.mode === 'cross_level'">
+                  L{{ escalationForm.from_level }} → L{{ Math.min(escalationForm.from_level + 2, escalationForm.to_level) }} → L{{ escalationForm.to_level }}
+                </template>
+                <template v-else>
+                  L{{ escalationForm.from_level }} → L5 → L7
+                </template>
+              </span>
+            </div>
+            <div class="modal-actions">
+              <button class="btn-cancel" @click="showEscalationModal = false">取消</button>
+              <button class="btn-danger" :disabled="escalationLoading" @click="handleEscalateRoom">
+                {{ escalationLoading ? '升级中...' : '确认升级' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Task Dependencies Modal -->
+      <div v-if="showTaskDependencies" class="modal-overlay" @click.self="showTaskDependencies = false">
+        <div class="modal-content task-dependencies-modal">
+          <div class="modal-header">
+            <h3>🔗 任务依赖关系</h3>
+            <button class="modal-close" @click="showTaskDependencies = false">✕</button>
+          </div>
+
+          <div v-if="dependencyLoading" class="loading-state">加载中...</div>
+          <template v-else-if="dependencyGraph">
+            <!-- Summary Bar -->
+            <div class="dep-summary-bar">
+              <div class="dep-stat">
+                <span class="dep-stat-num">{{ dependencyGraph.total_tasks || 0 }}</span>
+                <span class="dep-stat-label">总任务</span>
+              </div>
+              <div class="dep-stat blocked">
+                <span class="dep-stat-num">{{ dependencyGraph.blocked_task_count || 0 }}</span>
+                <span class="dep-stat-label">被阻塞</span>
+              </div>
+              <div class="dep-stat edges">
+                <span class="dep-stat-num">{{ dependencyGraph.edges?.length || 0 }}</span>
+                <span class="dep-stat-label">依赖边</span>
+              </div>
+            </div>
+
+            <!-- Blocked Tasks Section -->
+            <div v-if="dependencyGraph.blocked_task_count > 0" class="dep-section">
+              <div class="dep-section-title">🚫 被阻塞的任务 ({{ blockedTasks.length }})</div>
+              <div v-for="task in blockedTasks" :key="task.task_id" class="dep-blocked-task">
+                <div class="dep-task-header">
+                  <span class="dep-task-num">{{ task.task_number || task.task_id.slice(0,8) }}</span>
+                  <span class="dep-task-title">{{ task.title }}</span>
+                </div>
+                <div class="dep-blocked-by">
+                  <span class="dep-blocked-label">被以下阻塞：</span>
+                  <span v-for="bid in task.blocked_by" :key="bid" class="dep-blocker-chip">
+                    {{ getTaskTitle(bid) || bid.slice(0,8) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dependency Graph Section -->
+            <div class="dep-section">
+              <div class="dep-section-title">📊 依赖关系图</div>
+              <div v-if="dependencyGraph.nodes?.length === 0" class="dep-empty">暂无任务</div>
+              <div v-else class="dep-graph-list">
+                <div v-for="node in dependencyGraph.nodes" :key="node.task_id" class="dep-node">
+                  <div class="dep-node-header">
+                    <span v-if="node.is_blocked" class="dep-blocked-badge">🚫</span>
+                    <span class="dep-node-num">{{ node.task_number || node.task_id.slice(0,8) }}</span>
+                    <span class="dep-node-title">{{ node.title }}</span>
+                    <span class="dep-node-status" :class="'s-' + node.status">{{ statusLabel[node.status] || node.status }}</span>
+                  </div>
+                  <div v-if="node.dependencies?.length > 0" class="dep-node-deps">
+                    <span class="dep-deps-label">依赖：</span>
+                    <span v-for="dep in node.dependencies" :key="dep" class="dep-dep-chip" :class="{ 'dep-missing': !getTaskTitle(dep) }">
+                      {{ getTaskTitle(dep) || dep.slice(0,8) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <div v-else class="dep-empty">加载失败，请重试</div>
+        </div>
+      </div>
+
+      <!-- Tasks Tab -->
+      <div v-else-if="activePlanTab === 'tasks'" class="plan-content">
+        <div class="tasks-toolbar">
+          <div class="version-selector">
+            <span class="version-label">版本：</span>
+            <select
+              v-model="planDetailActiveVersion"
+              class="input version-select"
+              @change="switchPlanVersion(planDetailActiveVersion)"
+            >
+              <option v-for="v in planVersions" :key="v" :value="v">{{ v }}</option>
+            </select>
+          </div>
+          <button class="btn-primary" @click="showAddTask = !showAddTask">
+            {{ showAddTask ? '取消' : '+ 添加任务' }}
+          </button>
+          <button class="btn-secondary" @click="openTaskDependencies">
+            🔗 依赖关系
+          </button>
+        </div>
+
+        <!-- Add Task Form -->
+        <div v-if="showAddTask" class="add-task-panel">
+          <input
+            v-model="newTask.title"
+            class="input"
+            placeholder="任务标题"
+            @keyup.enter="handleCreateTask"
+            autofocus
+          />
+          <textarea
+            v-model="newTask.description"
+            class="input task-desc-input"
+            placeholder="任务描述（可选）"
+            rows="2"
+          ></textarea>
+          <div class="task-form-row">
+            <select v-model="newTask.priority" class="input priority-select">
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+              <option value="critical">紧急</option>
+            </select>
+            <input
+              v-model="newTask.assigned_to"
+              class="input"
+              placeholder="负责人（可选）"
+            />
+          </div>
+          <button class="btn-primary" @click="handleCreateTask">创建任务</button>
+        </div>
+
+        <!-- Task Metrics -->
+        <div v-if="planMetrics" class="tasks-metrics">
+          <span>✅ 已完成 {{ planMetrics.completed_tasks || 0 }} / {{ planMetrics.total_tasks || planTasks.length || 0 }}</span>
+          <span class="metric-rate">完成率 {{ planMetrics.completion_rate || 0 }}%</span>
+        </div>
+
+        <!-- Task List -->
+        <div class="tasks-list">
+          <div v-if="planTasks.length === 0 && !showAddTask" class="empty-state" style="padding: 60px 0">
+            <div class="empty-icon">📋</div>
+            <div class="empty-text">暂无任务</div>
+            <div class="empty-sub">点击上方「+ 添加任务」创建第一个任务</div>
+          </div>
+          <div
+            v-for="task in planTasks"
+            :key="task.task_id"
+            class="task-card"
+            @click="openTaskDetail(task)"
+          >
+            <div class="task-card-header">
+              <div class="task-card-title">{{ task.title }}</div>
+              <div class="task-card-badges">
+                <span class="priority-dot" :class="'p-' + task.priority">
+                  {{ task.priority === 'critical' ? '🔴' : task.priority === 'high' ? '🟠' : task.priority === 'medium' ? '🟡' : '🟢' }}
+                </span>
+                <span class="status-chip" :class="'s-' + task.status">
+                  {{ task.status === 'completed' ? '✅ 完成' : task.status === 'in_progress' ? '🔄 进行中' : '⏳ 待处理' }}
+                </span>
+              </div>
+            </div>
+            <div v-if="task.description" class="task-card-desc">{{ task.description }}</div>
+            <div class="task-progress-row">
+              <div class="task-progress-bar">
+                <div
+                  class="task-progress-fill"
+                  :style="{ width: (task.progress || 0) + '%' }"
+                  :class="'fill-' + task.status"
+                ></div>
+              </div>
+              <span class="task-progress-val">{{ task.progress || 0 }}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              :value="task.progress || 0"
+              class="task-slider"
+              @click.stop
+              @change="(e) => handleUpdateTaskProgress(task.task_id, Number((e.target as HTMLInputElement).value))"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- Decisions Tab -->
+      <div v-else-if="activePlanTab === 'decisions'" class="plan-content">
+        <div class="decisions-toolbar">
+          <div class="version-selector">
+            <span class="version-label">版本：</span>
+            <select
+              v-model="planDetailActiveVersion"
+              class="input version-select"
+              @change="switchPlanVersion(planDetailActiveVersion)"
+            >
+              <option v-for="v in planVersions" :key="v" :value="v">v{{ v }}</option>
+            </select>
+          </div>
+          <button class="btn-primary" @click="showAddDecision = !showAddDecision; editingDecisionId = null; cancelEditDecision()">
+            {{ showAddDecision ? '取消' : '+ 创建决策' }}
+          </button>
+        </div>
+
+        <!-- Add/Edit Decision Form -->
+        <div v-if="showAddDecision" class="add-decision-panel">
+          <div class="decision-form-header">{{ editingDecisionId ? '编辑决策' : '创建决策' }}</div>
+          <input
+            v-model="newDecisionForm.title"
+            class="input"
+            placeholder="决策标题 *"
+            @keyup.enter="editingDecisionId ? handleUpdateDecision(editingDecisionId) : handleCreateDecision()"
+            autofocus
+          />
+          <textarea
+            v-model="newDecisionForm.decision_text"
+            class="input decision-text-input"
+            placeholder="决策内容 / 决定 *"
+            rows="3"
+          ></textarea>
+          <textarea
+            v-model="newDecisionForm.description"
+            class="input decision-text-input"
+            placeholder="描述（可选）"
+            rows="2"
+          ></textarea>
+          <textarea
+            v-model="newDecisionForm.rationale"
+            class="input decision-text-input"
+            placeholder="理由（可选）"
+            rows="2"
+          ></textarea>
+          <textarea
+            v-model="newDecisionForm.alternatives_considered"
+            class="input decision-text-input"
+            placeholder="考虑的替代方案（每行一个，可选）"
+            rows="2"
+          ></textarea>
+          <div class="decision-form-row">
+            <input
+              v-model="newDecisionForm.agreed_by"
+              class="input"
+              placeholder="同意者（逗号分隔，可选）"
+            />
+            <input
+              v-model="newDecisionForm.disagreed_by"
+              class="input"
+              placeholder="反对者（逗号分隔，可选）"
+            />
+          </div>
+          <input
+            v-model="newDecisionForm.decided_by"
+            class="input"
+            placeholder="决策人（可选）"
+          />
+          <div class="decision-form-actions">
+            <button class="btn-primary" @click="editingDecisionId ? handleUpdateDecision(editingDecisionId) : handleCreateDecision()">
+              {{ editingDecisionId ? '保存修改' : '创建决策' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditDecision()">取消</button>
+          </div>
+        </div>
+
+        <!-- Decisions List -->
+        <div v-if="planDecisions.length === 0 && !showAddDecision" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">⚖️</div>
+          <div class="empty-text">暂无决策</div>
+          <div class="empty-sub">点击上方「+ 创建决策」创建第一个决策记录</div>
+        </div>
+        <div class="decisions-list">
+          <div
+            v-for="decision in planDecisions"
+            :key="decision.decision_id"
+            class="decision-card"
+          >
+            <div class="decision-card-header">
+              <div class="decision-card-title">{{ decision.title }}</div>
+              <div class="decision-card-actions">
+                <button class="btn-edit" @click="startEditDecision(decision)">编辑</button>
+              </div>
+            </div>
+            <div class="decision-card-number">{{ decision.decision_number || '未编号' }}</div>
+            <div class="decision-card-text">{{ decision.decision_text }}</div>
+            <div v-if="decision.description" class="decision-card-desc">{{ decision.description }}</div>
+            <div v-if="decision.rationale" class="decision-card-rationale">
+              <span class="decision-label">理由：</span>{{ decision.rationale }}
+            </div>
+            <div v-if="decision.alternatives_considered?.length" class="decision-card-alts">
+              <span class="decision-label">考虑的替代方案：</span>
+              <div v-for="(alt, i) in decision.alternatives_considered" :key="i" class="alt-item">• {{ alt }}</div>
+            </div>
+            <div class="decision-card-footer">
+              <div v-if="decision.agreed_by?.length" class="decision-party agreed">
+                <span class="decision-label">✅ 同意：</span>{{ decision.agreed_by.join(', ') }}
+              </div>
+              <div v-if="decision.disagreed_by?.length" class="decision-party disagreed">
+                <span class="decision-label">❌ 反对：</span>{{ decision.disagreed_by.join(', ') }}
+              </div>
+              <div v-if="decision.decided_by" class="decision-party">
+                <span class="decision-label">决策人：</span>{{ decision.decided_by }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edicts Tab (L7 圣旨) -->
+      <div v-else-if="activePlanTab === 'edicts'" class="plan-content">
+        <div class="edicts-toolbar">
+          <div class="version-selector">
+            <span class="version-label">版本：</span>
+            <select
+              v-model="planDetailActiveVersion"
+              class="input version-select"
+              @change="switchPlanVersion(planDetailActiveVersion)"
+            >
+              <option v-for="v in planVersions" :key="v" :value="v">v{{ v }}</option>
+            </select>
+          </div>
+          <button class="btn-primary" @click="showAddEdict = !showAddEdict; editingEdictId = null; cancelEditEdict()">
+            {{ showAddEdict ? '取消' : '+ 创建圣旨' }}
+          </button>
+        </div>
+
+        <!-- Add/Edit Edict Form -->
+        <div v-if="showAddEdict" class="add-edict-panel">
+          <div class="edict-form-header">{{ editingEdictId ? '编辑圣旨' : '创建圣旨' }}</div>
+          <input
+            v-model="newEdictForm.title"
+            class="input"
+            placeholder="圣旨标题 *"
+            @keyup.enter="editingEdictId ? handleUpdateEdict(editingEdictId) : handleCreateEdict()"
+            autofocus
+          />
+          <textarea
+            v-model="newEdictForm.content"
+            class="input edict-text-input"
+            placeholder="圣旨内容 *"
+            rows="4"
+          ></textarea>
+          <div class="edict-form-row">
+            <input
+              v-model="newEdictForm.issued_by"
+              class="input"
+              placeholder="签发人（L7）"
+            />
+            <input
+              v-model="newEdictForm.recipients"
+              class="input"
+              placeholder="接收层级（如 L6,L5）"
+            />
+          </div>
+          <div class="edict-form-row">
+            <input
+              v-model="newEdictForm.effective_from"
+              class="input"
+              placeholder="生效时间（如 2026-04-04T00:00:00Z）"
+            />
+            <select v-model="newEdictForm.status" class="input">
+              <option value="draft">草稿</option>
+              <option value="published">已颁布</option>
+              <option value="revoked">已撤销</option>
+            </select>
+          </div>
+          <div class="edict-form-actions">
+            <button class="btn-primary" @click="editingEdictId ? handleUpdateEdict(editingEdictId) : handleCreateEdict()">
+              {{ editingEdictId ? '保存修改' : '创建圣旨' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditEdict()">取消</button>
+          </div>
+        </div>
+
+        <!-- Edicts List -->
+        <div v-if="planEdicts.length === 0 && !showAddEdict" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📜</div>
+          <div class="empty-text">暂无圣旨</div>
+          <div class="empty-sub">点击上方「+ 创建圣旨」创建第一条政令</div>
+        </div>
+        <div class="edicts-list">
+          <div
+            v-for="edict in planEdicts"
+            :key="edict.edict_id"
+            class="edict-card"
+          >
+            <div class="edict-card-header">
+              <div class="edict-card-title">{{ edict.title }}</div>
+              <div class="edict-card-actions">
+                <button class="btn-ack" @click="startAckEdict(edict.edict_id)">确认收到</button>
+                <button class="btn-edit" @click="startEditEdict(edict)">编辑</button>
+                <button class="btn-edit btn-delete" @click="handleDeleteEdict(edict.edict_id)">删除</button>
+              </div>
+            </div>
+            <div class="edict-card-number">圣旨第 {{ edict.edict_number || '?' }} 号</div>
+            <div class="edict-card-status" :class="'status-' + edict.status">
+              {{ edict.status === 'published' ? '✅ 已颁布' : edict.status === 'draft' ? '📝 草稿' : '❌ 已撤销' }}
+            </div>
+            <div class="edict-card-content">{{ edict.content }}</div>
+            <div v-if="edict.issued_by" class="edict-card-meta">
+              <span class="edict-label">签发人：</span>{{ edict.issued_by }}
+            </div>
+            <div v-if="edict.recipients?.length" class="edict-card-meta">
+              <span class="edict-label">接收方：</span>{{ Array.isArray(edict.recipients) ? edict.recipients.join(', ') : edict.recipients }}
+            </div>
+            <div v-if="edict.effective_from" class="edict-card-meta">
+              <span class="edict-label">生效时间：</span>{{ edict.effective_from }}
+            </div>
+            <!-- 签收记录 -->
+            <div v-if="edictAcknowledgments[edict.edict_id]?.length" class="edict-acks">
+              <div class="edict-acks-header">
+                <span class="edict-label">签收情况：</span>{{ edictAcknowledgments[edict.edict_id].length }} 人已确认
+              </div>
+              <div
+                v-for="ack in edictAcknowledgments[edict.edict_id]"
+                :key="ack.ack_id"
+                class="edict-ack-row"
+              >
+                <span class="ack-level">L{{ ack.level }}</span>
+                <span class="ack-name">{{ ack.acknowledged_by }}</span>
+                <span class="ack-time">{{ ack.acknowledged_at?.slice(0, 16) }}</span>
+                <button class="btn-del-ack" @click="handleDeleteAck(edict.edict_id, ack.ack_id)">×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Approvals Tab -->
+      <div v-else-if="activePlanTab === 'approvals'" class="plan-content">
+        <!-- Toolbar -->
+        <div class="activity-filter-bar">
+          <button class="btn-primary" @click="loadApprovalFlow">
+            {{ loadingApproval ? '加载中...' : '刷新审批状态' }}
+          </button>
+          <button v-if="!approvalFlow" class="btn-primary" @click="showStartApproval = !showStartApproval">
+            {{ showStartApproval ? '取消' : '+ 启动审批流' }}
+          </button>
+          <span v-if="approvalFlow" class="approval-status-badge" :class="'approval-status-' + (approvalFlow.status || 'unknown')">
+            {{ approvalFlow.status === 'in_progress' ? '审批中' : approvalFlow.status === 'approved' ? '已通过' : approvalFlow.status === 'rejected' ? '已驳回' : approvalFlow.status === 'pending' ? '待审批' : approvalFlow.status || '未知' }}
+          </span>
+        </div>
+
+        <!-- Start Approval Form -->
+        <div v-if="showStartApproval" class="start-approval-form">
+          <div class="form-title">启动审批流</div>
+          <div class="form-row">
+            <label>发起人ID</label>
+            <input v-model="startApprovalForm.initiator_id" class="input" placeholder="user-1" />
+          </div>
+          <div class="form-row">
+            <label>发起人名称</label>
+            <input v-model="startApprovalForm.initiator_name" class="input" placeholder="用户名" />
+          </div>
+          <div class="form-row">
+            <label>跳过的层级（可选，逗号分隔）</label>
+            <input v-model="skipLevelsInput" class="input" placeholder="如: 1,2,3" />
+          </div>
+          <button class="btn-primary" @click="handleStartApproval">确认启动</button>
+        </div>
+
+        <!-- Approval Levels Reference -->
+        <div v-if="approvalLevels.length > 0" class="approval-levels-ref">
+          <div class="section-title">审批层级说明</div>
+          <div class="approval-levels-grid">
+            <div v-for="lvl in approvalLevels" :key="lvl.level" class="approval-level-ref-card">
+              <div class="approval-level-ref-header">L{{ lvl.level }} — {{ lvl.level_label }}</div>
+              <div class="approval-level-ref-role">{{ lvl.reviewer_role }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Approval Flow Status -->
+        <div v-if="approvalFlow" class="approval-flow-status">
+          <div class="section-title">审批流状态</div>
+          <div class="info-row">
+            <span class="info-label">当前层级</span>
+            <span class="info-value">L{{ approvalFlow.current_level }} — {{ approvalFlow.current_level_label }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">状态</span>
+            <span class="info-value">{{ approvalFlow.status }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">发起人</span>
+            <span class="info-value">{{ approvalFlow.initiator_name || approvalFlow.initiator_id }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">发起时间</span>
+            <span class="info-value">{{ approvalFlow.started_at ? new Date(approvalFlow.started_at).toLocaleString() : '-' }}</span>
+          </div>
+
+          <!-- Approval Levels Status -->
+          <div class="section-title" style="margin-top: 20px">各层级审批状态</div>
+          <div class="approval-levels-list">
+            <div v-for="(lvlData, lvl) in approvalFlow.levels" :key="lvl" class="approval-level-row" :class="'approval-level-' + (lvlData.status || 'pending')">
+              <div class="approval-level-header">
+                <div class="approval-level-badge">L{{ lvl }}</div>
+                <div class="approval-level-info">
+                  <span class="approval-level-label">{{ lvlData.level_label || ('L' + lvl) }}</span>
+                  <span class="approval-level-reviewer">{{ lvlData.reviewer_role }}</span>
+                </div>
+                <div class="approval-level-status">
+                  <span class="approval-status-tag" :class="'status-' + (lvlData.status || 'pending')">
+                    {{ lvlData.status === 'approved' ? '✅ 通过' : lvlData.status === 'rejected' ? '❌ 驳回' : lvlData.status === 'skipped' ? '⏭️ 跳过' : lvlData.status === 'current' ? '⏳ 待审批' : '⏸️ 等待中' }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="lvlData.records && lvlData.records.length > 0" class="approval-level-records">
+                <div v-for="rec in lvlData.records" :key="rec.action + rec.timestamp" class="approval-record">
+                  <span class="record-action">{{ rec.action === 'APPROVE' ? '✅ 同意' : rec.action === 'REJECT' ? '❌ 驳回' : rec.action === 'RETURN' ? '↩️ 退回' : rec.action === 'ESCALATE' ? '🔺 升级' : rec.action }}</span>
+                  <span class="record-actor">{{ rec.actor_name || rec.actor_id }}</span>
+                  <span class="record-time">{{ new Date(rec.timestamp).toLocaleString() }}</span>
+                  <span v-if="rec.comment" class="record-comment">「{{ rec.comment }}」</span>
+                </div>
+              </div>
+              <!-- Action Buttons for Current Level -->
+              <div v-if="lvlData.status === 'current'" class="approval-level-actions">
+                <input
+                  v-model="approvalActionComment[lvl as number]"
+                  class="input approval-comment-input"
+                  placeholder="审批意见（可选）"
+                />
+                <button class="btn-approve" @click="handleApprovalAction(Number(lvl), 'APPROVE')">✅ 同意</button>
+                <button class="btn-reject" @click="handleApprovalAction(Number(lvl), 'REJECT')">❌ 驳回</button>
+                <button class="btn-return" @click="handleApprovalAction(Number(lvl), 'RETURN')">↩️ 退回</button>
+                <button class="btn-escalate" @click="handleApprovalAction(Number(lvl), 'ESCALATE')">🔺 升级</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- No Approval Flow -->
+        <div v-if="!approvalFlow && !showStartApproval" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">暂无审批流</div>
+          <div class="empty-sub">启动审批流后，各层级将按顺序审批</div>
+        </div>
+      </div>
+
+      <!-- Versions Tab -->
+      <div v-else-if="activePlanTab === 'versions'" class="plan-content">
+        <div class="versions-list">
+          <div v-for="v in planVersions" :key="v" class="version-row">
+            <div class="version-badge-lg">v{{ v }}</div>
+            <div class="version-info">
+              <span class="version-name">{{ v === planDetailActiveVersion ? '当前版本' : v }}</span>
+              <button
+                v-if="v !== planDetailActiveVersion"
+                class="btn-switch-version"
+                @click="switchPlanVersion(v)"
+              >切换</button>
+            </div>
+          </div>
+          <div v-if="planVersions.length === 0" class="empty-state" style="padding: 60px 0">
+            <div class="empty-icon">🗂️</div>
+            <div class="empty-text">暂无版本记录</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Risks Tab -->
+      <div v-else-if="activePlanTab === 'risks'" class="plan-content">
+        <div class="risks-toolbar">
+          <div class="version-selector">
+            <span class="version-label">版本：</span>
+            <select
+              v-model="planDetailActiveVersion"
+              class="input version-select"
+              @change="switchPlanVersion(planDetailActiveVersion)"
+            >
+              <option v-for="v in planVersions" :key="v" :value="v">v{{ v }}</option>
+            </select>
+          </div>
+          <button class="btn-primary" @click="showAddRisk = !showAddRisk; editingRiskId = null; cancelEditRisk()">
+            {{ showAddRisk ? '取消' : '+ 添加风险' }}
+          </button>
+        </div>
+        <div v-if="planRisks.length > 0" class="risk-summary">
+          <span class="risk-stat critical">🔴 严重 {{ planRisks.filter(r => r.severity === 'critical' || r.probability === 'high' && r.impact === 'high').length }}</span>
+          <span class="risk-stat high">🟠 高危 {{ planRisks.filter(r => r.severity === 'high' || (r.probability === 'high' && r.impact === 'medium') || (r.probability === 'medium' && r.impact === 'high')).length }}</span>
+          <span class="risk-stat medium">🟡 中等 {{ planRisks.filter(r => r.severity === 'medium' || (r.probability === 'medium' && r.impact === 'medium') || (r.probability === 'high' && r.impact === 'low') || (r.probability === 'low' && r.impact === 'high')).length }}</span>
+          <span class="risk-stat low">🟢 低危 {{ planRisks.filter(r => r.severity === 'low' || (r.probability === 'low' && r.impact === 'low') || (r.probability === 'medium' && r.impact === 'low') || (r.probability === 'low' && r.impact === 'medium')).length }}</span>
+        </div>
+
+        <!-- Add/Edit Risk Form -->
+        <div v-if="showAddRisk" class="add-risk-panel">
+          <div class="risk-form-header">{{ editingRiskId ? '编辑风险' : '创建风险' }}</div>
+          <input
+            v-model="newRiskForm.title"
+            class="input"
+            placeholder="风险标题 *"
+            @keyup.enter="editingRiskId ? handleUpdateRisk(editingRiskId) : handleCreateRisk()"
+            autofocus
+          />
+          <textarea
+            v-model="newRiskForm.description"
+            class="input risk-text-input"
+            placeholder="风险描述（可选）"
+            rows="2"
+          ></textarea>
+          <div class="risk-form-row">
+            <div class="form-group">
+              <label class="form-label">概率</label>
+              <select v-model="newRiskForm.probability" class="input">
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">影响</label>
+              <select v-model="newRiskForm.impact" class="input">
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">状态</label>
+              <select v-model="newRiskForm.status" class="input">
+                <option value="identified">已识别</option>
+                <option value="monitoring">监控中</option>
+                <option value="mitigating">处理中</option>
+                <option value="resolved">已解决</option>
+              </select>
+            </div>
+          </div>
+          <textarea
+            v-model="newRiskForm.mitigation"
+            class="input risk-text-input"
+            placeholder="缓解措施（可选）"
+            rows="2"
+          ></textarea>
+          <textarea
+            v-model="newRiskForm.contingency"
+            class="input risk-text-input"
+            placeholder="应急预案（可选）"
+            rows="2"
+          ></textarea>
+          <div class="risk-form-actions">
+            <button class="btn-primary" @click="editingRiskId ? handleUpdateRisk(editingRiskId) : handleCreateRisk()">
+              {{ editingRiskId ? '保存修改' : '创建风险' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditRisk()">取消</button>
+          </div>
+        </div>
+
+        <!-- Risks List -->
+        <div v-if="planRisks.length === 0 && !showAddRisk" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-text">暂无风险</div>
+          <div class="empty-sub">点击上方「+ 添加风险」创建第一条风险记录</div>
+        </div>
+        <div class="risks-list">
+          <div
+            v-for="risk in planRisks"
+            :key="risk.risk_id"
+            class="risk-card"
+          >
+            <div class="risk-card-header">
+              <div class="risk-card-title">{{ risk.title }}</div>
+              <div class="risk-card-actions">
+                <span class="severity-badge" :class="'sev-' + (risk.severity || 'medium')">
+                  {{ risk.severity === 'critical' ? '🔴 严重' : risk.severity === 'high' ? '🟠 高' : risk.severity === 'medium' ? '🟡 中' : '🟢 低' }}
+                </span>
+                <button class="btn-edit" @click="startEditRisk(risk)">编辑</button>
+                <button class="btn-edit btn-delete" @click="handleDeleteRisk(risk.risk_id)">删除</button>
+              </div>
+            </div>
+            <div v-if="risk.description" class="risk-card-desc">{{ risk.description }}</div>
+            <div class="risk-card-meta">
+              <span class="risk-meta-item">📊 概率: <span class="risk-val">{{ risk.probability === 'high' ? '高' : risk.probability === 'medium' ? '中' : '低' }}</span></span>
+              <span class="risk-meta-item">💥 影响: <span class="risk-val">{{ risk.impact === 'high' ? '高' : risk.impact === 'medium' ? '中' : '低' }}</span></span>
+              <span class="risk-meta-item status-risk" :class="'status-' + risk.status">
+                {{ risk.status === 'identified' ? '📋 已识别' : risk.status === 'monitoring' ? '👁️ 监控中' : risk.status === 'mitigating' ? '🔧 处理中' : '✅ 已解决' }}
+              </span>
+            </div>
+            <div v-if="risk.mitigation" class="risk-card-mitigation">
+              <span class="risk-label">缓解措施：</span>{{ risk.mitigation }}
+            </div>
+            <div v-if="risk.contingency" class="risk-card-contingency">
+              <span class="risk-label">应急预案：</span>{{ risk.contingency }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Constraints Tab -->
+      <div v-else-if="activePlanTab === 'constraints'" class="plan-content">
+        <div class="constraints-toolbar">
+          <button class="btn-primary" @click="showAddConstraint = !showAddConstraint; editingConstraintId = null; cancelEditConstraint()">
+            {{ showAddConstraint ? '取消' : '+ 添加约束' }}
+          </button>
+        </div>
+
+        <!-- Add/Edit Constraint Form -->
+        <div v-if="showAddConstraint" class="add-constraint-panel">
+          <div class="constraint-form-header">{{ editingConstraintId ? '编辑约束' : '创建约束' }}</div>
+          <div class="constraint-form-row">
+            <div class="form-group">
+              <label class="form-label">类型</label>
+              <select v-model="newConstraintForm.type" class="input">
+                <option value="budget">预算</option>
+                <option value="time">时间</option>
+                <option value="quality">质量</option>
+                <option value="scope">范围</option>
+                <option value="resource">资源</option>
+                <option value="regulatory">法规</option>
+                <option value="technical">技术</option>
+                <option value="other">其他</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">数值 *</label>
+              <input
+                v-model="newConstraintForm.value"
+                class="input"
+                placeholder="约束数值"
+                @keyup.enter="editingConstraintId ? handleUpdateConstraint(editingConstraintId) : handleCreateConstraint()"
+                autofocus
+              />
+            </div>
+            <div class="form-group">
+              <label class="form-label">单位</label>
+              <input
+                v-model="newConstraintForm.unit"
+                class="input"
+                placeholder="如: 万元/天/%"
+              />
+            </div>
+          </div>
+          <textarea
+            v-model="newConstraintForm.description"
+            class="input constraint-text-input"
+            placeholder="约束描述（可选）"
+            rows="2"
+          ></textarea>
+          <div class="constraint-form-actions">
+            <button class="btn-primary" @click="editingConstraintId ? handleUpdateConstraint(editingConstraintId) : handleCreateConstraint()">
+              {{ editingConstraintId ? '保存修改' : '创建约束' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditConstraint()">取消</button>
+          </div>
+        </div>
+
+        <!-- Constraints List -->
+        <div v-if="planConstraints.length === 0 && !showAddConstraint" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">🚧</div>
+          <div class="empty-text">暂无约束</div>
+          <div class="empty-sub">点击上方「+ 添加约束」创建第一条约束记录</div>
+        </div>
+        <div class="constraints-list">
+          <div
+            v-for="constraint in planConstraints"
+            :key="constraint.constraint_id"
+            class="constraint-card"
+          >
+            <div class="constraint-card-header">
+              <div class="constraint-card-title">
+                <span class="constraint-type-badge" :class="'type-' + constraint.type">
+                  {{ constraint.type === 'budget' ? '💰 预算' : constraint.type === 'time' ? '⏰ 时间' : constraint.type === 'quality' ? '✅ 质量' : constraint.type === 'scope' ? '📐 范围' : constraint.type === 'resource' ? '👥 资源' : constraint.type === 'regulatory' ? '📜 法规' : constraint.type === 'technical' ? '🔧 技术' : '📋 其他' }}
+                </span>
+                <span class="constraint-value">{{ constraint.value }}{{ constraint.unit ? ' ' + constraint.unit : '' }}</span>
+              </div>
+              <div class="constraint-card-actions">
+                <button class="btn-edit" @click="startEditConstraint(constraint)">编辑</button>
+                <button class="btn-edit btn-delete" @click="handleDeleteConstraint(constraint.constraint_id)">删除</button>
+              </div>
+            </div>
+            <div v-if="constraint.description" class="constraint-card-desc">{{ constraint.description }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stakeholders Tab -->
+      <div v-else-if="activePlanTab === 'stakeholders'" class="plan-content">
+        <div class="stakeholders-toolbar">
+          <button class="btn-primary" @click="showAddStakeholder = !showAddStakeholder; editingStakeholderId = null; cancelEditStakeholder()">
+            {{ showAddStakeholder ? '取消' : '+ 添加干系人' }}
+          </button>
+        </div>
+
+        <!-- Add/Edit Stakeholder Form -->
+        <div v-if="showAddStakeholder" class="add-stakeholder-panel">
+          <div class="stakeholder-form-header">{{ editingStakeholderId ? '编辑干系人' : '创建干系人' }}</div>
+          <input
+            v-model="newStakeholderForm.name"
+            class="input"
+            placeholder="干系人名称 *"
+            @keyup.enter="editingStakeholderId ? handleUpdateStakeholder(editingStakeholderId) : handleCreateStakeholder()"
+            autofocus
+          />
+          <div class="stakeholder-form-row">
+            <div class="form-group">
+              <label class="form-label">层级</label>
+              <select v-model="newStakeholderForm.level" class="input">
+                <option :value="7">L7 战略层</option>
+                <option :value="6">L6 事业部层</option>
+                <option :value="5">L5 部门层</option>
+                <option :value="4">L4 团队层</option>
+                <option :value="3">L3 班组层</option>
+                <option :value="2">L2 岗位层</option>
+                <option :value="1">L1 任务层</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">关注程度</label>
+              <select v-model="newStakeholderForm.interest" class="input">
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">影响力</label>
+              <select v-model="newStakeholderForm.influence" class="input">
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
+              </select>
+            </div>
+          </div>
+          <textarea
+            v-model="newStakeholderForm.description"
+            class="input stakeholder-text-input"
+            placeholder="干系人描述（可选）"
+            rows="2"
+          ></textarea>
+          <div class="stakeholder-form-actions">
+            <button class="btn-primary" @click="editingStakeholderId ? handleUpdateStakeholder(editingStakeholderId) : handleCreateStakeholder()">
+              {{ editingStakeholderId ? '保存修改' : '创建干系人' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditStakeholder()">取消</button>
+          </div>
+        </div>
+
+        <!-- Stakeholders List -->
+        <div v-if="planStakeholders.length === 0 && !showAddStakeholder" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">👥</div>
+          <div class="empty-text">暂无干系人</div>
+          <div class="empty-sub">点击上方「+ 添加干系人」创建第一条干系人记录</div>
+        </div>
+        <div class="stakeholders-list">
+          <div
+            v-for="stakeholder in planStakeholders"
+            :key="stakeholder.stakeholder_id"
+            class="stakeholder-card"
+          >
+            <div class="stakeholder-card-header">
+              <div class="stakeholder-card-title">{{ stakeholder.name }}</div>
+              <div class="stakeholder-card-actions">
+                <span class="level-badge" :class="'level-' + stakeholder.level">
+                  L{{ stakeholder.level || 5 }}
+                </span>
+                <button class="btn-edit" @click="startEditStakeholder(stakeholder)">编辑</button>
+                <button class="btn-edit btn-delete" @click="handleDeleteStakeholder(stakeholder.stakeholder_id)">删除</button>
+              </div>
+            </div>
+            <div class="stakeholder-card-meta">
+              <span class="stakeholder-meta-item">
+                {{ stakeholder.interest === 'high' ? '🔥' : stakeholder.interest === 'medium' ? '⚡' : '💤' }} 关注: {{ stakeholder.interest === 'high' ? '高' : stakeholder.interest === 'medium' ? '中' : '低' }}
+              </span>
+              <span class="stakeholder-meta-item">
+                {{ stakeholder.influence === 'high' ? '💪' : stakeholder.influence === 'medium' ? '🤝' : '➖' }} 影响: {{ stakeholder.influence === 'high' ? '高' : stakeholder.influence === 'medium' ? '中' : '低' }}
+              </span>
+            </div>
+            <div v-if="stakeholder.description" class="stakeholder-card-desc">{{ stakeholder.description }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Requirements Tab -->
+      <div v-else-if="activePlanTab === 'requirements'" class="plan-content">
+        <div class="requirements-toolbar">
+          <button class="btn-primary" @click="showAddRequirement = !showAddRequirement; editingRequirementId = null; cancelEditRequirement()">
+            {{ showAddRequirement ? '取消' : '+ 添加需求' }}
+          </button>
+        </div>
+
+        <!-- Add/Edit Requirement Form -->
+        <div v-if="showAddRequirement" class="add-requirement-panel">
+          <div class="requirement-form-header">{{ editingRequirementId ? '编辑需求' : '创建需求' }}</div>
+          <textarea
+            v-model="newRequirementForm.description"
+            class="input requirement-text-input"
+            placeholder="需求描述 *"
+            rows="3"
+          ></textarea>
+          <div class="requirement-form-row">
+            <div class="form-group">
+              <label class="form-label">优先级</label>
+              <select v-model="newRequirementForm.priority" class="input">
+                <option value="high">高 (HIGH)</option>
+                <option value="medium">中 (MEDIUM)</option>
+                <option value="low">低 (LOW)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">类别</label>
+              <select v-model="newRequirementForm.category" class="input">
+                <option value="budget">💰 预算</option>
+                <option value="timeline">⏰ 时间</option>
+                <option value="technical">🔧 技术</option>
+                <option value="quality">✅ 质量</option>
+                <option value="resource">👥 资源</option>
+                <option value="risk">⚠️ 风险</option>
+                <option value="compliance">📜 法规</option>
+                <option value="other">📋 其他</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">状态</label>
+              <select v-model="newRequirementForm.status" class="input">
+                <option value="pending">待处理</option>
+                <option value="in_progress">进行中</option>
+                <option value="met">已满足</option>
+                <option value="partially_met">部分满足</option>
+                <option value="not_met">未满足</option>
+                <option value="deprecated">已废弃</option>
+              </select>
+            </div>
+          </div>
+          <textarea
+            v-model="newRequirementForm.notes"
+            class="input requirement-notes-input"
+            placeholder="备注（可选）"
+            rows="2"
+          ></textarea>
+          <div class="requirement-form-actions">
+            <button class="btn-primary" @click="editingRequirementId ? handleUpdateRequirement(editingRequirementId) : handleCreateRequirement()">
+              {{ editingRequirementId ? '保存修改' : '创建需求' }}
+            </button>
+            <button class="btn-cancel" @click="cancelEditRequirement()">取消</button>
+          </div>
+        </div>
+
+        <!-- Requirements Summary -->
+        <div v-if="planRequirements.length > 0" class="requirement-summary">
+          <span class="req-stat pending">⏳ 待处理 {{ planRequirements.filter(r => r.status === 'pending').length }}</span>
+          <span class="req-stat in-progress">🔄 进行中 {{ planRequirements.filter(r => r.status === 'in_progress').length }}</span>
+          <span class="req-stat met">✅ 已满足 {{ planRequirements.filter(r => r.status === 'met').length }}</span>
+          <span class="req-stat partially-met">🔸 部分满足 {{ planRequirements.filter(r => r.status === 'partially_met').length }}</span>
+          <span class="req-stat not-met">❌ 未满足 {{ planRequirements.filter(r => r.status === 'not_met').length }}</span>
+          <span class="req-stat deprecated">🚫 已废弃 {{ planRequirements.filter(r => r.status === 'deprecated').length }}</span>
+        </div>
+
+        <!-- Requirements List -->
+        <div v-if="planRequirements.length === 0 && !showAddRequirement" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">暂无需求</div>
+          <div class="empty-sub">点击上方「+ 添加需求」创建第一条需求记录</div>
+        </div>
+        <div class="requirements-list">
+          <div
+            v-for="req in planRequirements"
+            :key="req.id"
+            class="requirement-card"
+          >
+            <div class="requirement-card-header">
+              <div class="requirement-card-title">{{ req.description }}</div>
+              <div class="requirement-card-actions">
+                <span class="priority-badge" :class="'priority-' + req.priority">
+                  {{ req.priority === 'high' ? '🔴 高' : req.priority === 'medium' ? '🟡 中' : '🟢 低' }}
+                </span>
+                <span class="category-badge" :class="'category-' + req.category">
+                  {{ req.category === 'budget' ? '💰' : req.category === 'timeline' ? '⏰' : req.category === 'technical' ? '🔧' : req.category === 'quality' ? '✅' : req.category === 'resource' ? '👥' : req.category === 'risk' ? '⚠️' : req.category === 'compliance' ? '📜' : '📋' }}
+                  {{ req.category }}
+                </span>
+                <span class="status-badge" :class="'status-' + req.status">
+                  {{ req.status === 'pending' ? '⏳ 待处理' : req.status === 'in_progress' ? '🔄 进行中' : req.status === 'met' ? '✅ 已满足' : req.status === 'partially_met' ? '🔸 部分' : req.status === 'not_met' ? '❌ 未满足' : '🚫 废弃' }}
+                </span>
+                <button class="btn-edit" @click="startEditRequirement(req)">编辑</button>
+                <button class="btn-edit btn-delete" @click="handleDeleteRequirement(req.id)">删除</button>
+              </div>
+            </div>
+            <div v-if="req.notes" class="requirement-card-notes">{{ req.notes }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activities Tab -->
+      <div v-else-if="activePlanTab === 'activities'" class="plan-content">
+        <!-- Activity Stats Summary -->
+        <div v-if="activityStats" class="activity-stats">
+          <div class="activity-stat-card">
+            <div class="activity-stat-num">{{ activityStats.total || 0 }}</div>
+            <div class="activity-stat-label">总活动数</div>
+          </div>
+          <div v-for="(count, type) in activityStats.by_type" :key="type" class="activity-stat-card">
+            <div class="activity-stat-num">{{ count }}</div>
+            <div class="activity-stat-label">{{ String(type).split('.')[1] || type }}</div>
+          </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="activity-filter-bar">
+          <select v-model="activityFilterType" class="input activity-filter-select">
+            <option value="">全部类型</option>
+            <option value="plan">计划</option>
+            <option value="room">房间</option>
+            <option value="task">任务</option>
+            <option value="decision">决策</option>
+            <option value="edict">圣旨</option>
+            <option value="problem">问题</option>
+            <option value="approval">审批</option>
+            <option value="escalation">升级</option>
+            <option value="risk">风险</option>
+            <option value="constraint">约束</option>
+            <option value="stakeholder">干系人</option>
+            <option value="participant">参与者</option>
+            <option value="subtask">子任务</option>
+          </select>
+          <button class="btn-primary" @click="loadPlanActivities">刷新</button>
+        </div>
+
+        <!-- Activity Detail -->
+        <div v-if="selectedActivity" class="activity-detail-panel">
+          <div class="activity-detail-header">
+            <div class="activity-detail-title">活动详情</div>
+            <button class="btn-edit" @click="selectedActivity = null">关闭</button>
+          </div>
+          <div class="info-row">
+            <span class="info-label">活动ID</span>
+            <span class="info-value">{{ selectedActivity.activity_id }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">类型</span>
+            <span class="info-value">{{ selectedActivity.action_type }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">时间</span>
+            <span class="info-value">{{ new Date(selectedActivity.timestamp).toLocaleString() }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">执行人</span>
+            <span class="info-value">{{ selectedActivity.performed_by || '-' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">层级</span>
+            <span class="info-value">{{ selectedActivity.level || '-' }}</span>
+          </div>
+          <div class="activity-detail-content">{{ selectedActivity.description || selectedActivity.content || '无描述' }}</div>
+        </div>
+
+        <!-- Activities List -->
+        <div v-if="planActivities.length === 0" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">暂无活动记录</div>
+          <div class="empty-sub">计划内的操作将自动记录为活动历史</div>
+        </div>
+        <div class="activities-list">
+          <div
+            v-for="act in filteredActivities"
+            :key="act.activity_id"
+            class="activity-card"
+            @click="selectedActivity = act"
+          >
+            <div class="activity-card-header">
+              <span class="activity-type-badge" :class="'activity-type-' + (act.action_type?.split('.')[0] || 'other')">
+                {{ act.action_type || 'unknown' }}
+              </span>
+              <span class="activity-time">{{ new Date(act.timestamp).toLocaleString() }}</span>
+            </div>
+            <div class="activity-card-content">{{ act.description || act.content || '无描述' }}</div>
+            <div class="activity-card-footer">
+              <span v-if="act.performed_by" class="activity-performer">👤 {{ act.performed_by }}</span>
+              <span v-if="act.level" class="activity-level">L{{ act.level }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snapshots Tab -->
+      <div v-else-if="activePlanTab === 'snapshots'" class="plan-content">
+        <div class="tab-header-row">
+          <div class="tab-title">上下文快照</div>
+          <button class="btn-primary" @click="loadPlanSnapshots">刷新</button>
+        </div>
+
+        <!-- Snapshot Detail -->
+        <div v-if="selectedSnapshot" class="snapshot-detail-panel">
+          <div class="snapshot-detail-header">
+            <div class="snapshot-detail-title">快照详情</div>
+            <button class="btn-edit" @click="selectedSnapshot = null">关闭</button>
+          </div>
+          <div class="info-row">
+            <span class="info-label">快照ID</span>
+            <span class="info-value">{{ selectedSnapshot.snapshot_id }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">关联房间</span>
+            <span class="info-value">{{ selectedSnapshot.room_id || '-' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">阶段</span>
+            <span class="info-value phase-badge" :style="{ background: phaseColors[selectedSnapshot.phase] || '#6b7280' }">
+              {{ selectedSnapshot.phase || '-' }}
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">创建时间</span>
+            <span class="info-value">{{ new Date(selectedSnapshot.created_at).toLocaleString() }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">上下文摘要</span>
+          </div>
+          <div class="snapshot-context">{{ selectedSnapshot.context_summary || '无摘要' }}</div>
+        </div>
+
+        <!-- Snapshots List -->
+        <div v-if="planSnapshots.length === 0" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📸</div>
+          <div class="empty-text">暂无快照记录</div>
+          <div class="empty-sub">讨论室推进时会自动创建上下文快照</div>
+        </div>
+        <div v-else class="snapshots-list">
+          <div
+            v-for="snap in planSnapshots"
+            :key="snap.snapshot_id"
+            class="snapshot-card"
+            @click="viewSnapshot(snap)"
+          >
+            <div class="snapshot-card-header">
+              <span class="phase-badge" :style="{ background: phaseColors[snap.phase] || '#6b7280' }">
+                {{ snap.phase || 'unknown' }}
+              </span>
+              <span class="snapshot-time">{{ new Date(snap.created_at).toLocaleString() }}</span>
+            </div>
+            <div class="snapshot-card-summary">{{ snap.context_summary || '无摘要' }}</div>
+            <div class="snapshot-card-id">ID: {{ snap.snapshot_id?.slice(0, 8) }}...</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════ -->
+    <!-- ROOM VIEW                                             -->
+    <!-- ══════════════════════════════════════════════════════ -->
+    <div v-else class="room">
+      <!-- Room Header -->
+      <header class="room-header">
+        <button class="btn-back" @click="leaveRoom">
+          ← 返回计划
+        </button>
+        <div class="room-title">
+          <span class="room-name">{{ currentRoom?.topic || '讨论室' }}</span>
+          <span
+            class="phase-pill"
+            :style="{ background: phaseColors[currentPhase?.current_phase] || '#6b7280' }"
+          >
+            {{ phaseLabel[currentPhase?.current_phase] || currentPhase?.current_phase || '-' }}
+          </span>
+        </div>
+        <div class="room-meta-header">
+          👥 {{ participants.length }}
+        </div>
+        <!-- Notification Bell -->
+        <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
+          🔔
+          <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+        </button>
+        <!-- Escalation Button -->
+        <button class="escalate-btn" @click="showEscalationModal = true" title="升级讨论">
+          🔺 升级
+        </button>
+      </header>
+
+      <!-- Room Body -->
+      <div class="room-body">
+        <!-- Main: Messages + Input -->
+        <div class="room-main">
+          <!-- Phase Controls -->
+          <div v-if="currentPhase?.allowed_next?.length" class="phase-bar">
+            <span class="phase-bar-label">推进阶段：</span>
+            <button
+              v-for="next in currentPhase.allowed_next"
+              :key="next"
+              class="phase-btn"
+              @click="advancePhase(next)"
+            >
+              → {{ phaseLabel[next] || next }}
+            </button>
+          </div>
+
+          <!-- Messages -->
+          <div class="messages-area">
+            <div v-if="messages.length === 0" class="messages-empty">
+              暂无发言记录
+            </div>
+            <div
+              v-for="msg in messages"
+              :key="msg.message_id"
+              class="message-row"
+            >
+              <div class="message-bubble">
+                <div class="message-meta">
+                  <span class="message-agent">{{ msg.agent_id }}</span>
+                  <span class="message-time">{{ new Date(msg.timestamp).toLocaleTimeString() }}</span>
+                </div>
+                <div class="message-content">{{ msg.content }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Input -->
+          <div class="input-bar">
+            <input
+              v-model="newMessage.content"
+              class="input message-input"
+              placeholder="输入发言，按 Enter 发送..."
+              @keyup.enter="sendMessage"
+            />
+            <button class="btn-send" @click="sendMessage">发送</button>
+          </div>
+        </div>
+
+        <!-- Sidebar: Participants + Tasks + Info -->
+        <aside class="room-sidebar">
+          <div class="sidebar-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">参与者 ({{ participants.length }})</div>
+              <button class="btn-add-participant" @click="showAddParticipant = !showAddParticipant">
+                {{ showAddParticipant ? '取消' : '+ 添加' }}
+              </button>
+            </div>
+
+            <!-- Add Participant Form -->
+            <div v-if="showAddParticipant" class="add-participant-form">
+              <input
+                v-model="newParticipant.name"
+                class="input sidebar-input"
+                placeholder="姓名"
+                @keyup.enter="addNewParticipant"
+              />
+              <select v-model="newParticipant.role" class="input sidebar-input">
+                <option>Member</option>
+                <option>Coordinator</option>
+                <option>Leader</option>
+                <option>Analyst</option>
+              </select>
+              <div class="level-row">
+                <span class="level-label">L</span>
+                <input
+                  v-model.number="newParticipant.level"
+                  type="number"
+                  min="1"
+                  max="7"
+                  class="input sidebar-input level-input"
+                />
+              </div>
+              <button class="btn-primary sidebar-btn" @click="addNewParticipant">添加</button>
+            </div>
+
+            <!-- Participant List -->
+            <div v-if="participants.length === 0 && !showAddParticipant" class="sidebar-empty">暂无参与者</div>
+            <div
+              v-for="p in participants"
+              :key="p.participant_id"
+              class="participant-row"
+            >
+              <span class="participant-avatar">{{ (p.name || p.agent_id || '?')[0].toUpperCase() }}</span>
+              <div class="participant-info">
+                <span class="participant-name">{{ p.name || p.agent_id }}</span>
+                <span class="participant-role">L{{ p.level }} · {{ p.role }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tasks Section -->
+          <div class="sidebar-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">任务 ({{ tasks.length }})</div>
+              <button class="btn-add-participant" @click="showAddTask = !showAddTask">
+                {{ showAddTask ? '取消' : '+ 添加' }}
+              </button>
+            </div>
+
+            <!-- Task Metrics Summary -->
+            <div v-if="taskMetrics" class="task-metrics">
+              <span class="metric-item">✅ {{ taskMetrics.completed || 0 }}</span>
+              <span class="metric-divider">/</span>
+              <span class="metric-item">📋 {{ taskMetrics.total || 0 }}</span>
+              <span class="metric-progress">{{ taskMetrics.completion_rate || 0 }}%</span>
+            </div>
+
+            <!-- Add Task Form -->
+            <div v-if="showAddTask" class="add-task-form">
+              <input
+                v-model="newTask.title"
+                class="input sidebar-input"
+                placeholder="任务标题"
+                @keyup.enter="handleCreateTask"
+              />
+              <textarea
+                v-model="newTask.description"
+                class="input sidebar-input task-desc-input"
+                placeholder="任务描述（可选）"
+                rows="2"
+              ></textarea>
+              <select v-model="newTask.priority" class="input sidebar-input">
+                <option value="low">低优先级</option>
+                <option value="medium">中优先级</option>
+                <option value="high">高优先级</option>
+                <option value="critical">紧急</option>
+              </select>
+              <input
+                v-model="newTask.assigned_to"
+                class="input sidebar-input"
+                placeholder="负责人（可选）"
+              />
+              <button class="btn-primary sidebar-btn" @click="handleCreateTask">创建任务</button>
+            </div>
+
+            <!-- Task List -->
+            <div v-if="tasks.length === 0 && !showAddTask" class="sidebar-empty">暂无任务</div>
+            <div
+              v-for="task in tasks"
+              :key="task.task_id"
+              class="task-row"
+            >
+              <div class="task-info">
+                <div class="task-title">{{ task.title }}</div>
+                <div class="task-meta">
+                  <span class="task-priority" :class="'priority-' + task.priority">{{ task.priority === 'critical' ? '🔴' : task.priority === 'high' ? '🟠' : task.priority === 'medium' ? '🟡' : '🟢' }}</span>
+                  <span class="task-status" :class="'status-' + task.status">{{ task.status === 'completed' ? '✅' : task.status === 'in_progress' ? '🔄' : '⏳' }}</span>
+                </div>
+              </div>
+              <div class="task-progress-bar">
+                <div
+                  class="task-progress-fill"
+                  :style="{ width: (task.progress || 0) + '%' }"
+                  :class="'progress-' + task.status"
+                ></div>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                :value="task.progress || 0"
+                class="task-slider"
+                @change="(e) => handleUpdateTaskProgress(task.task_id, Number((e.target as HTMLInputElement).value))"
+              />
+            </div>
+          </div>
+
+          <!-- Debate Section (DEBATE phase only) -->
+          <div v-if="currentPhase?.current_phase === 'DEBATE'" class="sidebar-section debate-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">💬 辩论 ({{ debateState?.all_points?.length || 0 }})</div>
+              <button class="btn-add-participant" @click="showAddDebatePoint = !showAddDebatePoint">
+                {{ showAddDebatePoint ? '取消' : '+ 议题' }}
+              </button>
+            </div>
+
+            <!-- Consensus Score -->
+            <div v-if="debateState" class="consensus-bar">
+              <div class="consensus-label">
+                共识度
+                <span class="consensus-level" :class="'level-' + (debateState.consensus_level === '高共识' ? 'high' : debateState.consensus_level === '中共识' ? 'mid' : debateState.consensus_level === '低共识' ? 'low' : 'dispute')">
+                  {{ debateState.consensus_level || '未知' }}
+                </span>
+              </div>
+              <div class="consensus-track">
+                <div
+                  class="consensus-fill"
+                  :style="{ width: ((debateState.consensus_score || 0) * 100) + '%' }"
+                  :class="'fill-' + (debateState.consensus_score >= 0.7 ? 'high' : debateState.consensus_score >= 0.5 ? 'mid' : 'low')"
+                ></div>
+              </div>
+              <div class="consensus-score">{{ ((debateState.consensus_score || 0) * 100).toFixed(0) }}%</div>
+            </div>
+
+            <!-- Add Debate Point Form -->
+            <div v-if="showAddDebatePoint" class="add-debate-form">
+              <input
+                v-model="newDebatePoint.content"
+                class="input sidebar-input"
+                placeholder="输入议题内容..."
+                @keyup.enter="handleCreateDebatePoint"
+              />
+              <select v-model="newDebatePoint.point_type" class="input sidebar-input">
+                <option value="proposal">提议</option>
+                <option value="concern">顾虑</option>
+                <option value="question">问题</option>
+                <option value="alternative">替代方案</option>
+              </select>
+              <button class="btn-primary sidebar-btn" @click="handleCreateDebatePoint">发起辩论</button>
+            </div>
+
+            <!-- Debate Points List (all_points) -->
+            <div v-if="debateState?.all_points?.length" class="debate-points">
+              <div class="points-label">📋 所有议题 ({{ debateState.all_points.length }})</div>
+              <div
+                v-for="pt in debateState.all_points"
+                :key="pt.point_id"
+                class="debate-point-row"
+                :class="{
+                  converged: (debateState.converged_points || []).some(cp => cp.point === pt.content),
+                  disputed: (debateState.disputed_points || []).some(dp => dp.point === pt.content),
+                }"
+              >
+                <div class="point-header-row">
+                  <span class="point-type-badge">{{ pt.point_type || '提议' }}</span>
+                  <span class="point-status-badge" :class="{
+                    'status-converged': (debateState.converged_points || []).some(cp => cp.point === pt.content),
+                    'status-disputed': (debateState.disputed_points || []).some(dp => dp.point === pt.content),
+                  }">
+                    {{ (debateState.converged_points || []).some(cp => cp.point === pt.content) ? '✅共识' :
+                       (debateState.disputed_points || []).some(dp => dp.point === pt.content) ? '⚔️分歧' : '⏳待议' }}
+                  </span>
+                </div>
+                <div class="point-content">{{ pt.content }}</div>
+                <div class="point-agents">发起人: {{ pt.created_by || '未知' }}</div>
+                <div v-if="(debateState.disputed_points || []).some(dp => dp.point === pt.content)" class="debate-actions">
+                  <button
+                    class="stance-btn support"
+                    :class="{ active: debatePositions[pt.point_id] === 'support' }"
+                    @click="handleSubmitDebatePosition(pt.point_id, 'support')"
+                  >👍 支持</button>
+                  <button
+                    class="stance-btn oppose"
+                    :class="{ active: debatePositions[pt.point_id] === 'oppose' }"
+                    @click="handleSubmitDebatePosition(pt.point_id, 'oppose')"
+                  >👎 反对</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Recent Exchanges -->
+            <div v-if="debateState?.recent_exchanges?.length" class="recent-exchanges">
+              <div class="points-label">🔄 最近交锋</div>
+              <div
+                v-for="(ex, idx) in (debateState.recent_exchanges || []).slice(-3)"
+                :key="'ex-' + idx"
+                class="exchange-row"
+              >
+                <span class="exchange-agent">{{ ex.agent_id }}</span>
+                <span class="exchange-position" :class="ex.position">{{ ex.position === 'support' ? '👍' : '👎' }}</span>
+                <span class="exchange-point">{{ ex.point }}</span>
+              </div>
+            </div>
+
+            <div v-if="!debateState?.all_points?.length && !showAddDebatePoint" class="sidebar-empty">
+              暂无议题，发起第一个辩论议题
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="sidebar-title">房间信息</div>
+            <div class="info-row">
+              <span class="info-label">房间号</span>
+              <span class="info-value">{{ currentRoom?.room_number }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">当前阶段</span>
+              <span class="info-value">{{ phaseLabel[currentPhase?.current_phase] || '-' }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">模式</span>
+              <span class="info-value">{{ currentRoom?.mode || 'hierarchical' }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">版本</span>
+              <span class="info-value">{{ currentRoom?.version || currentRoom?.current_version || '-' }}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- 签收圣旨 Modal -->
+    <div v-if="showAckForm" class="modal-overlay" @click.self="showAckForm = false">
+      <div class="modal-content ack-modal">
+        <div class="modal-header">
+          <h3>确认收到圣旨</h3>
+          <button class="modal-close" @click="showAckForm = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>签收人 *</label>
+            <input v-model="ackForm.acknowledged_by" placeholder="请输入姓名" @keyup.enter="handleAcknowledgeEdict" />
+          </div>
+          <div class="form-group">
+            <label>层级 (L1-L7) *</label>
+            <input type="number" v-model.number="ackForm.level" min="1" max="7" />
+          </div>
+          <div class="form-group">
+            <label>备注</label>
+            <textarea v-model="ackForm.comment" placeholder="可选" rows="2"></textarea>
+          </div>
+          <div class="modal-actions">
+            <button class="btn-primary" @click="handleAcknowledgeEdict">确认签收</button>
+            <button class="btn-secondary" @click="showAckForm = false">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div v-if="showTaskDetail" class="modal-overlay" @click.self="showTaskDetail = false">
+      <div class="modal-content task-detail-modal">
+        <div class="modal-header">
+          <h3>{{ selectedTaskForDetail?.title || '任务详情' }}</h3>
+          <button class="modal-close" @click="showTaskDetail = false">×</button>
+        </div>
+        <div class="task-detail-body">
+          <!-- Task Meta -->
+          <div class="task-detail-meta">
+            <div class="task-meta-item">
+              <span class="meta-label">状态</span>
+              <span class="status-chip" :class="'s-' + selectedTaskForDetail?.status">
+                {{ selectedTaskForDetail?.status === 'completed' ? '✅ 完成' : selectedTaskForDetail?.status === 'in_progress' ? '🔄 进行中' : selectedTaskForDetail?.status === 'blocked' ? '🚫 阻塞' : '⏳ 待处理' }}
+              </span>
+            </div>
+            <div class="task-meta-item">
+              <span class="meta-label">优先级</span>
+              <span>{{ selectedTaskForDetail?.priority === 'critical' ? '🔴 紧急' : selectedTaskForDetail?.priority === 'high' ? '🟠 高' : selectedTaskForDetail?.priority === 'medium' ? '🟡 中' : '🟢 低' }}</span>
+            </div>
+            <div class="task-meta-item">
+              <span class="meta-label">进度</span>
+              <span>{{ selectedTaskForDetail?.progress || 0 }}%</span>
+            </div>
+            <div class="task-meta-item" v-if="selectedTaskForDetail?.assigned_to">
+              <span class="meta-label">负责人</span>
+              <span>{{ selectedTaskForDetail?.assigned_to }}</span>
+            </div>
+            <div class="task-meta-item" v-if="selectedTaskForDetail?.deadline">
+              <span class="meta-label">截止日期</span>
+              <span>{{ new Date(selectedTaskForDetail.deadline).toLocaleDateString() }}</span>
+            </div>
+            <div class="task-meta-item" v-if="selectedTaskForDetail?.owner_name">
+              <span class="meta-label">创建人</span>
+              <span>{{ selectedTaskForDetail?.owner_name }}</span>
+            </div>
+          </div>
+          <div v-if="selectedTaskForDetail?.description" class="task-detail-desc">
+            <div class="detail-section-title">描述</div>
+            <p>{{ selectedTaskForDetail?.description }}</p>
+          </div>
+
+          <!-- Tabs: Comments / Checkpoints -->
+          <div class="task-detail-tabs">
+            <button
+              :class="{ active: taskDetailActiveTab === 'comments' }"
+              @click="taskDetailActiveTab = 'comments'"
+            >
+              💬 评论 ({{ taskDetailComments.length }})
+            </button>
+            <button
+              :class="{ active: taskDetailActiveTab === 'checkpoints' }"
+              @click="taskDetailActiveTab = 'checkpoints'"
+            >
+              🏁 检查点 ({{ taskDetailCheckpoints.length }})
+            </button>
+          </div>
+
+          <!-- Comments Tab -->
+          <div v-if="taskDetailActiveTab === 'comments'" class="task-detail-tab-content">
+            <div v-if="taskDetailLoading" class="loading-state">加载中...</div>
+            <div v-else-if="taskDetailComments.length === 0" class="empty-mini">暂无评论</div>
+            <div v-else class="comment-list">
+              <div v-for="comment in taskDetailComments" :key="comment.comment_id" class="comment-item">
+                <div class="comment-header">
+                  <span class="comment-author">{{ comment.author_name || '匿名' }}</span>
+                  <span class="comment-time">{{ new Date(comment.created_at || comment.timestamp || Date.now()).toLocaleString() }}</span>
+                </div>
+                <div class="comment-content">{{ comment.content }}</div>
+              </div>
+            </div>
+            <!-- Add Comment Form -->
+            <div class="add-comment-form">
+              <input
+                v-model="newCommentForm.author_name"
+                class="input"
+                placeholder="你的名字（可选）"
+              />
+              <textarea
+                v-model="newCommentForm.content"
+                class="input"
+                placeholder="添加评论..."
+                rows="2"
+                @keyup.enter.exact.prevent="handleCreateComment"
+              ></textarea>
+              <button class="btn-primary" @click="handleCreateComment" :disabled="!newCommentForm.content.trim()">
+                发表
+              </button>
+            </div>
+          </div>
+
+          <!-- Checkpoints Tab -->
+          <div v-if="taskDetailActiveTab === 'checkpoints'" class="task-detail-tab-content">
+            <div v-if="taskDetailLoading" class="loading-state">加载中...</div>
+            <div v-else-if="taskDetailCheckpoints.length === 0" class="empty-mini">暂无检查点</div>
+            <div v-else class="checkpoint-list">
+              <div v-for="cp in taskDetailCheckpoints" :key="cp.checkpoint_id" class="checkpoint-item">
+                <span class="checkpoint-status-icon">
+                  {{ cp.status === 'completed' ? '✅' : cp.status === 'in_progress' ? '🔄' : '⏳' }}
+                </span>
+                <span class="checkpoint-name">{{ cp.name }}</span>
+                <span class="checkpoint-status-label">{{ cp.status === 'completed' ? '已完成' : cp.status === 'in_progress' ? '进行中' : '待处理' }}</span>
+              </div>
+            </div>
+            <!-- Add Checkpoint Form -->
+            <div class="add-checkpoint-form">
+              <input
+                v-model="newCheckpointForm.name"
+                class="input"
+                placeholder="检查点名称"
+                @keyup.enter.exact.prevent="handleCreateCheckpoint"
+              />
+              <select v-model="newCheckpointForm.status" class="input">
+                <option value="pending">待处理</option>
+                <option value="in_progress">进行中</option>
+                <option value="completed">已完成</option>
+              </select>
+              <button class="btn-primary" @click="handleCreateCheckpoint" :disabled="!newCheckpointForm.name.trim()">
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style>
+/* ─── Reset & Base ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+
+body {
+  background: #0a0a0f;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── App Shell ─── */
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Header ─── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  height: 60px;
+  background: #111118;
+  border-bottom: 1px solid #1e1e2e;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logo-icon { font-size: 1.5rem; }
+.logo-text { font-size: 1.2rem; font-weight: 700; color: #fff; }
+.logo-version {
+  font-size: 0.7rem;
+  background: #2d2d3d;
+  color: #8b8ba0;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ─── Buttons ─── */
+.btn-primary {
+  background: #5b5bd6;
+  border: none;
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: #6e6edb; }
+.btn-secondary {
+  background: transparent;
+  border: 1px solid #3f3f5a;
+  color: #a0a0c0;
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-secondary:hover { border-color: #5b5bd6; color: #a0a0ff; }
+
+.btn-back {
+  background: transparent;
+  border: 1px solid #2d2d3d;
+  color: #8b8ba0;
+  padding: 6px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-back:hover { border-color: #5b5bd6; color: #8b8ba0; }
+
+.btn-send {
+  background: #5b5bd6;
+  border: none;
+  color: #fff;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.btn-send:hover { background: #6e6edb; }
+
+/* ─── Home/Dashboard ─── */
+.home {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+  width: 100%;
+}
+
+/* ─── Create Panel ─── */
+.create-panel {
+  padding: 20px 0 8px;
+  animation: slideDown 0.2s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.create-inner {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── Search Bar ─── */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0 16px;
+}
+.search-input {
+  flex: 1;
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 10px;
+  padding: 10px 16px;
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+.search-input:focus { border-color: #5b5bd6; outline: none; }
+.search-input::placeholder { color: #4a4a6a; }
+.plan-count { color: #4a4a6a; font-size: 0.85rem; white-space: nowrap; }
+
+.sort-controls {
+  display: flex;
+  gap: 4px;
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 8px;
+  padding: 2px;
+}
+.sort-btn {
+  background: transparent;
+  border: none;
+  color: #4a4a6a;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sort-btn.active {
+  background: #2d2d4a;
+  color: #a0a0c0;
+}
+
+/* ─── Input ─── */
+.input {
+  background: #1a1a28;
+  border: 1px solid #2d2d4a;
+  border-radius: 8px;
+  color: #e2e8f0;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+.input:focus { outline: none; border-color: #5b5bd6; }
+.input::placeholder { color: #4a4a6a; }
+
+/* ─── Plan Grid ─── */
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.plan-card {
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plan-card:hover {
+  border-color: #5b5bd6;
+  background: #16162a;
+  transform: translateY(-2px);
+}
+
+.plan-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.plan-card-title {
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-card-topic {
+  color: #6a6a8a;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-number { color: #4a4a6a; font-size: 0.75rem; }
+.version-badge {
+  background: #2d2d4a;
+  color: #8b8ba0;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.plan-card-metrics {
+  display: flex;
+  gap: 8px;
+}
+.metric-chip {
+  background: #1e1e2e;
+  color: #6a6a8a;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.plan-card-footer {
+  display: flex;
+  justify-content: space-between;
+  color: #4a4a6a;
+  font-size: 0.8rem;
+}
+
+/* ─── Phase Pill ─── */
+.phase-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  color: #fff;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.phase-pill.small {
+  font-size: 0.65rem;
+  padding: 2px 7px;
+}
+
+/* ─── Empty State ─── */
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 80px 20px;
+  color: #4a4a6a;
+}
+.empty-icon { font-size: 3rem; margin-bottom: 12px; }
+.empty-text { font-size: 1.1rem; color: #6a6a8a; margin-bottom: 8px; }
+.empty-sub { font-size: 0.85rem; }
+
+/* ─── Plan Detail ─── */
+.plan-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.plan-header-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+.plan-header-title {
+  color: #fff;
+  font-weight: 600;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Plan Tabs ─── */
+.plan-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 24px;
+  background: #0e0e18;
+  border-bottom: 1px solid #1e1e2e;
+}
+.plan-tab {
+  background: transparent;
+  border: none;
+  color: #6a6a8a;
+  padding: 12px 24px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.plan-tab:hover { color: #a0a0c0; }
+.plan-tab.active {
+  color: #fff;
+  border-bottom-color: #5b5bd6;
+}
+
+/* ─── Plan Content ─── */
+.plan-content {
+  flex: 1;
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ─── Overview Grid ─── */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 16px;
+}
+
+.overview-card {
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 12px;
+  padding: 20px;
+}
+.overview-card-title {
+  color: #4a4a6a;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+.overview-card.rooms-summary,
+.overview-card.tasks-summary {
+  grid-column: 1 / -1;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1e1e2e;
+}
+.info-row:last-child { border-bottom: none; }
+.info-label { color: #4a4a6a; font-size: 0.85rem; }
+.info-value { color: #a0a0c0; font-size: 0.85rem; }
+
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.metric-box {
+  background: #1a1a28;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.metric-val {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+}
+.metric-val.completed { color: #22c55e; }
+.metric-val.rate { color: #3b82f6; }
+.metric-key {
+  font-size: 0.72rem;
+  color: #6a6a8a;
+  margin-top: 4px;
+}
+
+/* ─── Room Mini Rows ─── */
+.room-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #1e1e2e;
+  cursor: pointer;
+}
+.room-mini-row:last-child { border-bottom: none; }
+.room-mini-row:hover .room-mini-topic { color: #a0a0ff; }
+.room-mini-topic {
+  flex: 1;
+  color: #d0d0e8;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+.room-mini-num { color: #4a4a6a; font-size: 0.75rem; }
+
+.see-more {
+  color: #6e6edb;
+  font-size: 0.8rem;
+  padding-top: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+/* ─── Task Mini Rows ─── */
+.task-mini-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1e1e2e;
+}
+.task-mini-row:last-child { border-bottom: none; }
+.task-mini-title {
+  color: #d0d0e8;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.task-mini-progress { color: #6a6a8a; font-size: 0.8rem; }
+
+/* ─── Plan Room Cards ─── */
+.rooms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.plan-room-card {
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plan-room-card:hover {
+  border-color: #5b5bd6;
+  transform: translateY(-2px);
+}
+.plan-room-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.plan-room-topic {
+  color: #fff;
+  font-weight: 500;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-room-meta {
+  display: flex;
+  gap: 12px;
+  color: #4a4a6a;
+  font-size: 0.8rem;
+}
+
+/* ─── Room Hierarchy UI ─── */
+.room-hierarchy-indicators {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.hierarchy-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  cursor: default;
+}
+.hierarchy-badge.parent { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
+.hierarchy-badge.child { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+.hierarchy-badge.related { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+.hierarchy-btn {
+  background: none;
+  border: 1px solid #3f3f5a;
+  color: #6b7280;
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: auto;
+}
+.hierarchy-btn:hover { background: rgba(91, 91, 214, 0.3); border-color: #5b5bd6; color: #a5a5f0; }
+
+/* ─── Room Hierarchy Modal ─── */
+.room-hierarchy-modal { max-width: 560px; width: 95vw; }
+.hierarchy-room-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+}
+.hierarchy-room-topic { color: #e0e0f0; font-weight: 500; font-size: 0.95rem; flex: 1; }
+.hierarchy-room-num { color: #6b7280; font-size: 0.8rem; }
+.hierarchy-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #2a2a3a;
+  padding-bottom: 4px;
+}
+.hierarchy-tabs button {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  transition: all 0.15s;
+}
+.hierarchy-tabs button:hover { color: #a0a0c0; background: rgba(255, 255, 255, 0.05); }
+.hierarchy-tabs button.active { color: #7c7cf0; background: rgba(91, 91, 214, 0.15); }
+.hierarchy-view-tab { display: flex; flex-direction: column; gap: 12px; }
+.hierarchy-section { }
+.hierarchy-section-title { color: #8080a0; font-size: 0.78rem; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+.hierarchy-items-list { display: flex; flex-direction: column; gap: 4px; }
+.hierarchy-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 0.85rem;
+}
+.hierarchy-item:hover { background: rgba(255, 255, 255, 0.06); }
+.hierarchy-icon { color: #6b7280; font-size: 0.9rem; }
+.hierarchy-item.parent-item .hierarchy-icon { color: #c084fc; }
+.hierarchy-item.child-item .hierarchy-icon { color: #60a5fa; }
+.hierarchy-item.related-item .hierarchy-icon { color: #4ade80; }
+.hierarchy-item-topic { flex: 1; color: #d0d0e8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hierarchy-item-phase { font-size: 0.7rem; color: #6b7280; padding: 1px 6px; background: rgba(255,255,255,0.05); border-radius: 4px; }
+.hierarchy-empty { color: #4a4a6a; font-size: 0.82rem; padding: 6px 0; }
+.loading-state { color: #6b7280; text-align: center; padding: 20px; }
+.checkbox-group { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 8px; }
+.checkbox-item { display: flex; align-items: center; gap: 8px; color: #a0a0c0; font-size: 0.85rem; cursor: pointer; padding: 4px 6px; border-radius: 4px; }
+.checkbox-item:hover { background: rgba(255,255,255,0.05); }
+.checkbox-item input[type="checkbox"] { accent-color: #5b5bd6; }
+.hierarchy-conclude-tab .btn-danger {
+  background: rgba(220, 38, 38, 0.2);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  color: #f87171;
+  padding: 8px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.15s;
+}
+.hierarchy-conclude-tab .btn-danger:hover { background: rgba(220, 38, 38, 0.35); }
+.hierarchy-conclude-tab .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ─── Tasks Toolbar ─── */
+.tasks-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+.version-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.version-label { color: #6a6a8a; font-size: 0.85rem; }
+.version-select { width: auto; padding: 6px 12px; font-size: 0.85rem; }
+
+.add-task-panel {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.task-desc-input { resize: vertical; min-height: 50px; }
+.task-form-row { display: flex; gap: 10px; }
+.task-form-row .input { flex: 1; }
+.priority-select { width: 120px; }
+
+.tasks-metrics {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #6a6a8a;
+  font-size: 0.85rem;
+  margin-bottom: 16px;
+}
+.metric-rate { color: #10b981; font-weight: 600; }
+
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-card {
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 16px;
+}
+.task-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.task-card-title {
+  color: #d0d0e8;
+  font-size: 0.9rem;
+  font-weight: 500;
+  flex: 1;
+}
+.task-card-badges {
+  display: flex;
+  gap: 6px;
+}
+.task-card-desc {
+  color: #6a6a8a;
+  font-size: 0.8rem;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.task-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: #2d2d4a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.task-progress-fill {
+  height: 100%;
+  transition: width 0.3s;
+}
+.fill-completed { background: #22c55e; }
+.fill-in_progress { background: #3b82f6; }
+.fill-pending { background: #6b7280; }
+.task-progress-val { color: #6a6a8a; font-size: 0.75rem; width: 36px; text-align: right; }
+.task-slider { width: 100%; height: 18px; cursor: pointer; accent-color: #5b5bd6; }
+
+/* ─── Decisions ─── */
+.decisions-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+.add-decision-panel {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.decision-form-header {
+  color: #a0a0ff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.decision-text-input { resize: vertical; min-height: 50px; }
+.decision-form-row { display: flex; gap: 10px; }
+.decision-form-row .input { flex: 1; }
+.decision-form-actions { display: flex; gap: 10px; }
+.btn-cancel {
+  background: #1e1e2e;
+  border: 1px solid #2d2d4a;
+  color: #8b8ba0;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-cancel:hover { border-color: #5b5bd6; color: #a0a0ff; }
+.decisions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.decision-card {
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.decision-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.decision-card-title {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex: 1;
+}
+.decision-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-edit {
+  background: #1e1e2e;
+  border: 1px solid #2d2d4a;
+  color: #8b8ba0;
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-edit:hover { border-color: #5b5bd6; color: #a0a0ff; }
+.decision-card-number {
+  color: #4a4a6a;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.decision-card-text {
+  color: #d0d0e8;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.decision-card-desc {
+  color: #6a6a8a;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-card-rationale {
+  color: #8a8aaa;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.decision-card-alts {
+  color: #6a6a8a;
+  font-size: 0.8rem;
+}
+.alt-item { padding-left: 12px; margin-top: 2px; }
+.decision-label { color: #4a4a6a; font-size: 0.75rem; }
+.decision-card-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.decision-party { color: #8a8aaa; font-size: 0.8rem; }
+.decision-party.agreed { color: #22c55e; }
+.decision-party.disagreed { color: #ef4444; }
+
+/* ─── Edicts (L7 圣旨) ─── */
+.edicts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+.add-edict-panel {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.edict-form-header {
+  color: #f0c040;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.edict-text-input { resize: vertical; min-height: 80px; }
+.edict-form-row { display: flex; gap: 10px; }
+.edict-form-row .input { flex: 1; }
+.edict-form-actions { display: flex; gap: 10px; }
+.edicts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.edict-card {
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.edict-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.edict-card-title {
+  color: #f0c040;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex: 1;
+}
+.edict-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.edict-card-number {
+  color: #f0c040;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.edict-card-status {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  width: fit-content;
+}
+.edict-card-status.status-published { background: #14532d; color: #4ade80; }
+.edict-card-status.status-draft { background: #1e1e2e; color: #a0a0ff; }
+.edict-card-status.status-revoked { background: #2d1f1f; color: #f87171; }
+.edict-card-content { color: #ccc; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
+.edict-card-meta { color: #8a8aaa; font-size: 0.75rem; }
+.edict-label { color: #4a4a6a; font-size: 0.75rem; }
+.btn-delete { color: #f87171 !important; }
+.btn-delete:hover { border-color: #f87171 !important; }
+
+/* ─── Versions ─── */
+.versions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 14px 20px;
+}
+.version-badge-lg {
+  background: #2d2d4a;
+  color: #a0a0c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+}
+.version-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.version-name { color: #d0d0e8; font-size: 0.9rem; }
+.btn-switch-version {
+  background: #1e1e2e;
+  border: 1px solid #2d2d4a;
+  color: #8b8ba0;
+  padding: 4px 14px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-switch-version:hover { border-color: #5b5bd6; color: #a0a0ff; }
+
+/* ─── Risks Tab ─── */
+.risks-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+
+.risk-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+}
+.risk-stat { font-size: 0.85rem; }
+.risk-stat.critical { color: #f87171; }
+.risk-stat.high { color: #fb923c; }
+.risk-stat.medium { color: #fbbf24; }
+.risk-stat.low { color: #4ade80; }
+
+.add-risk-panel {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.risk-form-header {
+  color: #fb923c;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.risk-text-input { resize: vertical; min-height: 50px; }
+.risk-form-row { display: flex; gap: 10px; }
+.risk-form-row .form-group { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.form-label { color: #6a6a8a; font-size: 0.78rem; }
+.risk-form-actions { display: flex; gap: 10px; }
+
+.risks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.risk-card {
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.risk-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.risk-card-title {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex: 1;
+}
+.risk-card-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.severity-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.sev-critical { background: #2d1f1f; color: #f87171; }
+.sev-high { background: #2d251f; color: #fb923c; }
+.sev-medium { background: #2d2b1f; color: #fbbf24; }
+.sev-low { background: #1f2d1f; color: #4ade80; }
+
+.risk-card-desc { color: #8a8aaa; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.risk-card-meta { display: flex; gap: 16px; flex-wrap: wrap; }
+.risk-meta-item { color: #6a6a8a; font-size: 0.78rem; }
+.risk-val { color: #a0a0c0; }
+.status-risk { padding: 1px 6px; border-radius: 3px; font-size: 0.72rem; }
+.status-identified { background: #1e1e2e; color: #a0a0ff; }
+.status-monitoring { background: #1e2a2e; color: #38bdf8; }
+.status-mitigating { background: #2a2a1e; color: #fbbf24; }
+.status-resolved { background: #1e2d1f; color: #4ade80; }
+
+.risk-card-mitigation,
+.risk-card-contingency {
+  color: #6a6a8a;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.risk-label { color: #4a4a6a; font-size: 0.75rem; }
+
+/* ─── Requirements Tab ─── */
+.requirements-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+.requirement-summary {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+.req-stat { font-size: 0.85rem; }
+.req-stat.pending { color: #fb923c; }
+.req-stat.in-progress { color: #38bdf8; }
+.req-stat.met { color: #4ade80; }
+.req-stat.partially-met { color: #fbbf24; }
+.req-stat.not-met { color: #f87171; }
+.req-stat.deprecated { color: #6b7280; }
+
+.add-requirement-panel {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.requirement-form-header {
+  color: #a78bfa;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.requirement-text-input { resize: vertical; min-height: 60px; }
+.requirement-notes-input { resize: vertical; min-height: 40px; }
+.requirement-form-row { display: flex; gap: 10px; }
+.requirement-form-row .form-group { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.requirement-form-actions { display: flex; gap: 10px; }
+
+.requirements-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.requirement-card {
+  background: #13121c;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.requirement-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.requirement-card-title {
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  flex: 1;
+  line-height: 1.5;
+}
+.requirement-card-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; flex-wrap: wrap; }
+.requirement-card-notes { color: #8a8aaa; font-size: 0.82rem; line-height: 1.4; }
+.priority-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.priority-high { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.priority-medium { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.priority-low { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.category-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+}
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.status-pending { background: rgba(251, 146, 60, 0.15); color: #fb923c; }
+.status-in_progress { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+.status-met { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.status-partially_met { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.status-not_met { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.status-deprecated { background: rgba(107, 114, 128, 0.15); color: #6b7280; }
+
+/* ─── Mode Select ─── */
+.mode-select-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mode-label { color: #6a6a8a; font-size: 0.9rem; white-space: nowrap; }
+.mode-select { width: auto; flex: 1; }
+
+/* ─── Activity Tab ─── */
+.activity-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.activity-stat-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 10px;
+  padding: 12px 20px;
+  text-align: center;
+  min-width: 80px;
+}
+.activity-stat-num {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #60a5fa;
+}
+.activity-stat-label {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+  margin-top: 2px;
+  text-transform: capitalize;
+}
+.activity-filter-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+.activity-filter-select {
+  width: auto;
+  flex: 0 0 auto;
+}
+.activity-detail-panel {
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.activity-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.activity-detail-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.activity-detail-content {
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-top: 8px;
+  white-space: pre-wrap;
+}
+.activities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.activity-card {
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.activity-card:hover {
+  border-color: #3a3a5e;
+}
+.activity-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.activity-type-badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+  font-family: monospace;
+}
+.activity-type-badge.activity-type-plan { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+.activity-type-badge.activity-type-room { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
+.activity-type-badge.activity-type-task { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.activity-type-badge.activity-type-decision { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.activity-type-badge.activity-type-edict { background: rgba(251, 146, 60, 0.15); color: #fb923c; }
+.activity-type-badge.activity-type-problem { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.activity-type-badge.activity-type-approval { background: rgba(192, 132, 252, 0.15); color: #c084fc; }
+.activity-type-badge.activity-type-risk { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.activity-type-badge.activity-type-constraint { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+.activity-type-badge.activity-type-stakeholder { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.activity-type-badge.activity-type-participant { background: rgba(167, 139, 250, 0.15); color: #a78bfa; }
+.activity-type-badge.activity-type-subtask { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.activity-type-badge.activity-type-escalation { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.activity-time {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+}
+.activity-card-content {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-card-footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.activity-performer {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+}
+.activity-level {
+  font-size: 0.75rem;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+/* ─── Debate Section ─── */
+.debate-section {
+  background: #13131f;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #2a2a3e;
+}
+.consensus-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.consensus-label {
+  font-size: 0.8rem;
+  color: #8b8ba0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.consensus-level {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.consensus-level.level-high { background: rgba(34,197,94,0.2); color: #4ade80; }
+.consensus-level.level-mid { background: rgba(251,191,36,0.2); color: #fbbf24; }
+.consensus-level.level-low { background: rgba(249,115,22,0.2); color: #f97316; }
+.consensus-level.level-dispute { background: rgba(239,68,68,0.2); color: #f87171; }
+.consensus-track {
+  flex: 1;
+  height: 6px;
+  background: #1e1e2e;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.consensus-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.consensus-fill.fill-high { background: #4ade80; }
+.consensus-fill.fill-mid { background: #fbbf24; }
+.consensus-fill.fill-low { background: #f97316; }
+.consensus-score {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  min-width: 36px;
+  text-align: right;
+}
+.add-debate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.debate-points {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.points-label {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.debate-point-row {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 8px 10px;
+  border: 1px solid #2a2a3e;
+}
+.debate-point-row.converged {
+  border-left: 3px solid #4ade80;
+}
+.debate-point-row.disputed {
+  border-left: 3px solid #f97316;
+}
+.point-content {
+  font-size: 0.85rem;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+.point-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.point-type-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(167,139,250,0.15);
+  color: #a78bfa;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.point-status-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.point-status-badge.status-converged { background: rgba(34,197,94,0.15); color: #4ade80; }
+.point-status-badge.status-disputed { background: rgba(249,115,22,0.15); color: #f97316; }
+.point-agents {
+  font-size: 0.7rem;
+  color: #6a6a8a;
+  margin-bottom: 2px;
+}
+.agreed-by {
+  font-size: 0.7rem;
+  color: #4ade80;
+}
+.point-stances {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.supporters { font-size: 0.75rem; color: #4ade80; }
+.opposers { font-size: 0.75rem; color: #f87171; }
+.debate-actions {
+  display: flex;
+  gap: 6px;
+}
+.stance-btn {
+  font-size: 0.7rem;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid #3a3a5e;
+  background: transparent;
+  color: #8b8ba0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.stance-btn.support:hover, .stance-btn.support.active {
+  background: rgba(34,197,94,0.15);
+  border-color: #4ade80;
+  color: #4ade80;
+}
+.stance-btn.oppose:hover, .stance-btn.oppose.active {
+  background: rgba(239,68,68,0.15);
+  border-color: #f87171;
+  color: #f87171;
+}
+.recent-exchanges {
+  margin-top: 8px;
+}
+.exchange-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #1e1e2e;
+  font-size: 0.75rem;
+}
+.exchange-agent { color: #a78bfa; font-weight: 500; }
+.exchange-position { font-size: 0.9rem; }
+.exchange-point { color: #8b8ba0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── Task Dependencies Modal ─── */
+.task-dependencies-modal { max-width: 600px; width: 95vw; max-height: 85vh; overflow-y: auto; }
+.dep-summary-bar {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  background: #1e1e2e;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.dep-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dep-stat-num { font-size: 1.5rem; font-weight: 700; color: #818cf8; }
+.dep-stat.blocked .dep-stat-num { color: #f87171; }
+.dep-stat.edges .dep-stat-num { color: #34d399; }
+.dep-stat-label { font-size: 0.7rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+.dep-section { margin-bottom: 16px; }
+.dep-section-title { font-size: 0.8rem; font-weight: 600; color: #9ca3af; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+.dep-empty { color: #6b7280; text-align: center; padding: 20px 0; font-size: 0.85rem; }
+.dep-blocked-task {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.dep-task-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dep-task-num { font-size: 0.7rem; color: #6b7280; font-weight: 600; }
+.dep-task-title { font-size: 0.85rem; color: #e5e7eb; font-weight: 500; flex: 1; }
+.dep-blocked-by { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dep-blocked-label { font-size: 0.72rem; color: #9ca3af; }
+.dep-blocker-chip {
+  background: rgba(239,68,68,0.15);
+  color: #fca5a5;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+}
+.dep-graph-list { display: flex; flex-direction: column; gap: 6px; }
+.dep-node {
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.dep-node-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.dep-blocked-badge { font-size: 0.8rem; }
+.dep-node-num { font-size: 0.7rem; color: #6b7280; font-weight: 600; min-width: 60px; }
+.dep-node-title { font-size: 0.85rem; color: #e5e7eb; flex: 1; }
+.dep-node-status { font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; }
+.dep-node-status.s-completed { background: rgba(52,211,153,0.15); color: #34d399; }
+.dep-node-status.s-in_progress { background: rgba(129,140,248,0.15); color: #818cf8; }
+.dep-node-status.s-pending { background: rgba(107,114,128,0.15); color: #9ca3af; }
+.dep-node-status.s-blocked { background: rgba(239,68,68,0.15); color: #f87171; }
+.dep-node-deps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-left: 68px; }
+.dep-deps-label { font-size: 0.7rem; color: #6b7280; }
+.dep-dep-chip {
+  background: rgba(129,140,248,0.12);
+  color: #a5b4fc;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+}
+.dep-dep-chip.dep-missing { background: rgba(107,114,128,0.15); color: #6b7280; text-decoration: line-through; }
+.loading-state { text-align: center; padding: 40px; color: #6b7280; }
+
+/* ─── Escalation Modal ─── */
+.escalation-modal { max-width: 520px; width: 95vw; }
+.escalation-form { padding: 8px 4px; }
+.escalation-form .form-group { margin-bottom: 16px; }
+.escalation-form label { display: block; font-size: 0.8rem; font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
+.escalation-form .required { color: #f87171; }
+.escalation-form textarea.input { resize: vertical; min-height: 60px; }
+.escalation-path-preview {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.escalation-path-preview .path-label { font-size: 0.8rem; color: #9ca3af; }
+.escalation-path-preview .path-steps { font-size: 0.85rem; color: #a5b4fc; font-weight: 600; }
+.escalation-form .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+
+/* ─── Escalate Button ─── */
+.escalate-btn {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.escalate-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+/* ─── Room View ─── */
+.room {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.room-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px;
+  height: 60px;
+  background: #111118;
+  border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0;
+}
+.room-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+.room-name {
+  color: #fff;
+  font-weight: 600;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-meta-header { color: #6a6a8a; font-size: 0.85rem; }
+
+.room-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ─── Room Main ─── */
+.room-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.phase-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: #13131f;
+  border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.phase-bar-label { color: #4a4a6a; font-size: 0.8rem; white-space: nowrap; }
+.phase-btn {
+  background: #1e1e2e;
+  border: 1px solid #2d2d4a;
+  color: #a0a0c0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.phase-btn:hover { background: #2d2d4a; color: #fff; }
+
+.messages-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.messages-empty {
+  text-align: center;
+  color: #4a4a6a;
+  padding: 60px;
+  font-size: 0.9rem;
+}
+
+.message-row { display: flex; flex-direction: column; }
+.message-bubble {
+  background: #13131f;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 12px 16px;
+  max-width: 80%;
+}
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.message-agent { color: #7c7cff; font-weight: 600; font-size: 0.85rem; }
+.message-time { color: #4a4a6a; font-size: 0.75rem; }
+.message-content { color: #d0d0e8; font-size: 0.95rem; word-break: break-word; }
+
+.input-bar {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  background: #111118;
+  border-top: 1px solid #1e1e2e;
+  flex-shrink: 0;
+}
+.message-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* ─── Sidebar ─── */
+.room-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: #0e0e18;
+  border-left: 1px solid #1e1e2e;
+  overflow-y: auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.sidebar-section { display: flex; flex-direction: column; gap: 10px; }
+.sidebar-title-row { display: flex; align-items: center; justify-content: space-between; }
+.sidebar-title { color: #4a4a6a; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.sidebar-empty { color: #3a3a5a; font-size: 0.85rem; padding: 8px 0; }
+.sidebar-input {
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  width: 100%;
+}
+.sidebar-input:focus { outline: none; border-color: #5b5bd6; }
+.sidebar-btn { padding: 5px 12px; font-size: 0.8rem; }
+.add-participant-form { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #13131f; border-radius: 8px; }
+.btn-add-participant { background: transparent; border: 1px solid #2d2d4a; color: #6a6a8a; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; cursor: pointer; transition: all 0.15s; }
+.btn-add-participant:hover { border-color: #5b5bd6; color: #8b8bb0; }
+.level-row { display: flex; align-items: center; gap: 6px; }
+.level-label { color: #4a4a6a; font-size: 0.8rem; }
+.level-input { width: 60px !important; }
+
+.participant-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.participant-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2d2d4a;
+  color: #a0a0c0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.participant-info { display: flex; flex-direction: column; gap: 1px; overflow: hidden; }
+.participant-name { color: #d0d0e8; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.participant-role { color: #4a4a6a; font-size: 0.72rem; }
+
+.info-row { display: flex; justify-content: space-between; align-items: center; }
+.info-label { color: #4a4a6a; font-size: 0.8rem; }
+.info-value { color: #8b8ba0; font-size: 0.8rem; }
+
+/* ─── Task Styles ─── */
+.task-metrics { display: flex; align-items: center; gap: 4px; font-size: 0.75rem; color: #6a6a8a; padding: 4px 0; }
+.metric-item { }
+.metric-divider { color: #3a3a5a; }
+.metric-progress { margin-left: 8px; color: #10b981; font-weight: 600; }
+
+.add-task-form { display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #13131f; border-radius: 8px; }
+.task-desc-input { resize: vertical; min-height: 40px; }
+
+.task-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid #1e1e2e; }
+.task-row:last-child { border-bottom: none; }
+.task-info { display: flex; justify-content: space-between; align-items: flex-start; }
+.task-title { color: #d0d0e8; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-meta { display: flex; gap: 4px; font-size: 0.75rem; }
+.task-priority, .task-status { }
+.task-progress-bar { height: 3px; background: #2d2d4a; border-radius: 2px; overflow: hidden; }
+.task-progress-fill { height: 100%; transition: width 0.3s; }
+.progress-completed { background: #22c55e; }
+.progress-in_progress { background: #3b82f6; }
+.progress-pending { background: #6b7280; }
+.task-slider { width: 100%; height: 16px; cursor: pointer; accent-color: #5b5bd6; }
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2d2d4a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3d3d5a; }
+
+/* ─── Edict Acknowledgment ─── */
+.btn-ack {
+  background: #14532d;
+  color: #4ade80;
+  border: 1px solid #166534;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-ack:hover { background: #166534; }
+.edict-acks { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1e1e2e; }
+.edict-acks-header { color: #4ade80; font-size: 0.75rem; margin-bottom: 4px; }
+.edict-ack-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 0.75rem;
+  color: #8a8aaa;
+}
+.ack-level { color: #a0a0ff; font-weight: 600; }
+.ack-name { color: #ccc; flex: 1; }
+.ack-time { color: #6a6a8a; }
+.btn-del-ack {
+  background: none;
+  border: none;
+  color: #6a6a8a;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 2px;
+}
+.btn-del-ack:hover { color: #f87171; }
+
+/* ─── Modal ─── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-content {
+  background: #13121c;
+  border: 1px solid #2d2d4a;
+  border-radius: 14px;
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.modal-header h3 { color: #d0d0e8; margin: 0; font-size: 1rem; }
+.modal-close {
+  background: none;
+  border: none;
+  color: #6a6a8a;
+  font-size: 1.4rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-close:hover { color: #f87171; }
+.modal-body .form-group { margin-bottom: 14px; }
+.modal-body label {
+  display: block;
+  color: #8a8aaa;
+  font-size: 0.78rem;
+  margin-bottom: 4px;
+}
+.modal-body input,
+.modal-body textarea {
+  width: 100%;
+  background: #0e0d14;
+  border: 1px solid #2d2d4a;
+  border-radius: 6px;
+  color: #d0d0e8;
+  padding: 7px 10px;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+.modal-body textarea { resize: vertical; }
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ─── Notification Bell ─────────────────────────────────── */
+.notification-bell {
+  position: relative;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: background 0.2s;
+  margin-left: 8px;
+}
+.notification-bell:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+  color: white;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+/* ─── Notification Panel ────────────────────────────────── */
+.notification-panel {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  width: 360px;
+  max-height: 520px;
+  background: #1a1930;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+.notification-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #2d2d4a;
+}
+.notification-panel-title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #e0e0f0;
+}
+.notification-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notification-action-btn {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.notification-action-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+.notification-close-btn {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.notification-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.notification-list {
+  overflow-y: auto;
+  flex: 1;
+}
+.notification-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+  color: #6b7280;
+}
+.notification-empty-icon { font-size: 2rem; margin-bottom: 8px; }
+.notification-empty-text { font-size: 0.9rem; }
+.notification-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(45, 45, 74, 0.6);
+  transition: background 0.15s;
+}
+.notification-item:last-child { border-bottom: none; }
+.notification-item.unread {
+  background: rgba(59, 130, 246, 0.06);
+}
+.notification-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.notification-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.notification-type-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: white;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.notification-delete-btn {
+  background: none;
+  border: none;
+  color: #4b5563;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.notification-item:hover .notification-delete-btn {
+  opacity: 1;
+}
+.notification-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+.notification-item-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #d0d0e8;
+  line-height: 1.4;
+}
+.notification-item-message {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+.notification-item-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.notification-time {
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+.notification-mark-read-btn {
+  background: rgba(59, 130, 246, 0.15);
+  border: none;
+  color: #3b82f6;
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.notification-mark-read-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+/* ─── Snapshots Tab ──────────────────────────────────────── */
+.tab-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.tab-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #e0e0f0;
+}
+.snapshot-detail-panel {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+.snapshot-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.snapshot-detail-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e0e0f0;
+}
+.snapshot-context {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  color: #9ca3af;
+  line-height: 1.6;
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+.snapshots-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.snapshot-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.snapshot-card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.snapshot-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.snapshot-time {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+.snapshot-card-summary {
+  font-size: 0.88rem;
+  color: #c0c0d8;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.snapshot-card-id {
+  font-size: 0.72rem;
+  color: #4b5563;
+}
+
+/* ─── Task Detail Modal ─── */
+.task-detail-modal {
+  max-width: 640px;
+  width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+.task-detail-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+.task-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #1f2937;
+}
+.task-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+.meta-label {
+  color: #6b7280;
+  font-size: 0.82rem;
+}
+.task-detail-desc {
+  margin-bottom: 16px;
+}
+.detail-section-title {
+  font-size: 0.82rem;
+  color: #6b7280;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.task-detail-desc p {
+  color: #d1d5db;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.task-detail-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #1f2937;
+  padding-bottom: 0;
+}
+.task-detail-tabs button {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 0.88rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.2s;
+}
+.task-detail-tabs button.active {
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+}
+.task-detail-tabs button:hover {
+  color: #d1d5db;
+}
+.task-detail-tab-content {
+  min-height: 120px;
+}
+.loading-state {
+  text-align: center;
+  padding: 24px;
+  color: #6b7280;
+  font-size: 0.88rem;
+}
+.empty-mini {
+  text-align: center;
+  padding: 20px;
+  color: #4b5563;
+  font-size: 0.85rem;
+}
+.comment-list, .checkpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.comment-item {
+  background: #111827;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.comment-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.comment-author {
+  font-size: 0.85rem;
+  color: #60a5fa;
+  font-weight: 500;
+}
+.comment-time {
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+.comment-content {
+  font-size: 0.88rem;
+  color: #d1d5db;
+  line-height: 1.5;
+}
+.add-comment-form, .add-checkpoint-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #1f2937;
+}
+.add-comment-form .btn-primary {
+  align-self: flex-end;
+}
+.checkpoint-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #111827;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.checkpoint-status-icon {
+  font-size: 1rem;
+}
+.checkpoint-name {
+  flex: 1;
+  font-size: 0.88rem;
+  color: #d1d5db;
+}
+.checkpoint-status-label {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+.add-checkpoint-form {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.add-checkpoint-form .input {
+  flex: 1;
+}
+
+/* Approvals Tab */
+.start-approval-form {
+  background: #1a1f2e;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.start-approval-form .form-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+.start-approval-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.start-approval-form label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.approval-status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.approval-status-in_progress { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+.approval-status-approved { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+.approval-status-rejected { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+.approval-status-pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+
+.approval-levels-ref {
+  margin: 16px 0;
+}
+.approval-levels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.approval-level-ref-card {
+  background: #1a1f2e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid #3b82f6;
+}
+.approval-level-ref-header {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.approval-level-ref-role {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.approval-flow-status {
+  margin-top: 16px;
+}
+.approval-levels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.approval-level-row {
+  background: #1a1f2e;
+  border-radius: 10px;
+  padding: 14px;
+  border-left: 4px solid #374151;
+}
+.approval-level-approved { border-left-color: #10b981; }
+.approval-level-rejected { border-left-color: #ef4444; }
+.approval-level-skipped { border-left-color: #6b7280; }
+.approval-level-current { border-left-color: #f59e0b; }
+
+.approval-level-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.approval-level-badge {
+  background: #374151;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  min-width: 42px;
+  text-align: center;
+}
+.approval-level-info {
+  flex: 1;
+}
+.approval-level-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-right: 6px;
+}
+.approval-level-reviewer {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.approval-status-tag {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-approved { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.status-rejected { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+.status-skipped { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+.status-current { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.status-pending { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+
+.approval-level-records {
+  margin-top: 8px;
+  padding-left: 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.approval-record {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.record-action { font-weight: 600; color: #d1d5db; }
+.record-actor { color: #9ca3af; }
+.record-time { color: #6b7280; }
+.record-comment { color: #9ca3af; font-style: italic; }
+
+.approval-level-actions {
+  margin-top: 10px;
+  padding-left: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.approval-comment-input {
+  flex: 1;
+  min-width: 150px;
+  max-width: 300px;
+  font-size: 0.82rem;
+}
+.btn-approve {
+  padding: 6px 14px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-approve:hover { background: rgba(16, 185, 129, 0.25); }
+.btn-reject {
+  padding: 6px 14px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-reject:hover { background: rgba(239, 68, 68, 0.25); }
+.btn-return {
+  padding: 6px 14px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-return:hover { background: rgba(251, 191, 36, 0.25); }
+.btn-escalate {
+  padding: 6px 14px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #fb923c;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-escalate:hover { background: rgba(239, 68, 68, 0.25); }
+</style>
