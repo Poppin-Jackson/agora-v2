@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.27 | 日期：2026-04-05（Step 74 - Fix Tasks Tab Metrics Bug）
+> 版本：v2.28 | 日期：2026-04-05（Step 75 - Action Items UI）
 > 版本：v2.26 | 日期：2026-04-05（Step 73 - Participant Activity Dashboard）
 > 版本：v2.25 | 日期：2026-04-05（Step 72 - Dashboard Stats UI）
 > 版本：v2.23 | 日期：2026-04-05（Step 70 - Dashboard Statistics API）
@@ -1539,4 +1539,65 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 74
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 75 (2026-04-05)
+**版本**: v2.28 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Action Items UI（行动项管理界面）
+
+### Do
+问题：后端 Action Items CRUD API 已完整实现（创建/列表/获取/更新/完成/删除），但前端无 UI，用户无法在 Plan Detail 中管理行动项。
+
+修复：
+1. **前端 API 客户端**（frontend/src/api/index.ts）：
+   - `createActionItem(roomId, data)` — 创建行动项
+   - `listRoomActionItems(roomId, status?)` — 列出讨论室行动项
+   - `listPlanActionItems(planId, status?)` — 列出计划行动项
+   - `getActionItem(actionItemId)` — 获取单个行动项
+   - `updateActionItem(actionItemId, data)` — 更新行动项
+   - `completeActionItem(actionItemId)` — 完成行动项
+   - `deleteActionItem(actionItemId)` — 删除行动项
+
+2. **App.vue 状态变量**：
+   - `planActionItems` / `roomActionItems` — 行动项列表
+   - `actionItemFilter` — 状态筛选（open/in_progress/completed）
+   - `showAddActionItem` / `editingActionItemId` — 创建/编辑控制
+   - `newActionItemForm` — 行动项表单（title/description/assignee/assignee_level/priority/due_date/created_by）
+
+3. **App.vue 函数**：
+   - `loadPlanActionItems(status?)` — 加载计划行动项
+   - `loadRoomActionItems(roomId, status?)` — 加载讨论室行动项
+   - `handleCreateActionItem(roomId)` — 创建行动项
+   - `handleUpdateActionItem(itemId, roomId)` — 更新行动项
+   - `handleCompleteActionItem(itemId, roomId)` — 完成行动项
+   - `handleDeleteActionItem(itemId, roomId)` — 删除行动项
+   - `startEditActionItem(item)` — 开始编辑行动项
+   - `resetActionItemForm()` — 重置表单
+
+4. **Plan Detail 新增第 17 个 Tab「行动」**：
+   - Tab 列表新增 `'action_items'` 项
+   - `activePlanTab` 类型支持 `'action_items'`
+   - watch 监听：`activePlanTab === 'action_items'` 时自动调用 `loadPlanActionItems()`
+   - 筛选栏：全部/待处理/进行中/已完成
+   - 行动项卡片：状态徽章（⏳待处理/🔄进行中/✅已完成）+ 优先级标签（🔴紧急/🟠高/🟡中/🟢低）
+   - 卡片内容：标题 + 描述（可选）+ 负责人（L层级）+ 截止日期 + 创建人
+   - 操作按钮：完成/编辑/删除
+   - 摘要栏：总数/待处理/进行中/已完成 统计
+
+5. **CSS 样式**：
+   - `.action-items-list` / `.action-item-card` / `.action-item-header`
+   - `.status-badge` / `.badge-open` / `.badge-in_progress` / `.badge-completed`
+   - `.action-item-priority` / `.priority-critical/high/medium/low`
+   - `.action-item-title/desc/meta/footer` / `.action-item-actions`
+   - `.btn-complete` / `.btn-delete`
+
+### Check
+- ✅ docker-compose build web 成功
+- ✅ npm run build 成功（78 modules, 306.86 kB）
+- ✅ pytest 171 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 75
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

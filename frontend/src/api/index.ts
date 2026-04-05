@@ -640,3 +640,39 @@ export const deleteTimeEntry = (entryId: string) =>
 // Step 71: Plan Version Comparison API
 export const comparePlanVersions = (planId: string, fromVersion: string, toVersion: string) =>
   api.get(`/plans/${planId}/versions/compare`, { params: { from_version: fromVersion, to_version: toVersion } })
+
+// Step 75: Action Items API
+export const createActionItem = (roomId: string, data: {
+  title: string;
+  description?: string;
+  assignee?: string;
+  assignee_level?: number;
+  priority?: string;
+  due_date?: string;
+  created_by?: string;
+}) => api.post(`/rooms/${roomId}/action-items`, data)
+
+export const listRoomActionItems = (roomId: string, status?: string) =>
+  api.get(`/rooms/${roomId}/action-items`, { params: status ? { status } : {} })
+
+export const listPlanActionItems = (planId: string, status?: string) =>
+  api.get(`/plans/${planId}/action-items`, { params: status ? { status } : {} })
+
+export const getActionItem = (actionItemId: string) =>
+  api.get(`/action-items/${actionItemId}`)
+
+export const updateActionItem = (actionItemId: string, data: {
+  title?: string;
+  description?: string;
+  assignee?: string;
+  assignee_level?: number;
+  status?: string;
+  priority?: string;
+  due_date?: string;
+}) => api.patch(`/action-items/${actionItemId}`, data)
+
+export const completeActionItem = (actionItemId: string) =>
+  api.post(`/action-items/${actionItemId}/complete`)
+
+export const deleteActionItem = (actionItemId: string) =>
+  api.delete(`/action-items/${actionItemId}`)

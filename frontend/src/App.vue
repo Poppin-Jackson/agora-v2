@@ -117,6 +117,13 @@ import api, {
   updateRoomTags,
   addRoomTags,
   removeRoomTags,
+  createActionItem,
+  listRoomActionItems,
+  listPlanActionItems,
+  getActionItem,
+  updateActionItem,
+  completeActionItem,
+  deleteActionItem,
 } from './api'
 
 // ─── View State ──────────────────────────────────────────
@@ -146,7 +153,7 @@ const compareLoading = ref(false)
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
-const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'participants' | 'activities' | 'analytics' | 'snapshots' | 'escalations'>('overview')
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'participants' | 'activities' | 'analytics' | 'snapshots' | 'escalations' | 'action_items'>('overview')
 const planDetailActiveVersion = ref<string>('')
 const exportLoading = ref(false)
 
@@ -320,6 +327,24 @@ const escalationActionForm = reactive({
   comment: ''
 })
 const showEscalationAction = ref(false)
+
+// ─── Action Items State ─────────────────────────────────
+const planActionItems = ref<any[]>([])
+const roomActionItems = ref<any[]>([])
+const actionItemFilter = ref<string>('')
+const showAddActionItem = ref(false)
+const editingActionItemId = ref<string | null>(null)
+const actionItemLoading = ref(false)
+const selectedActionItem = ref<any>(null)
+const newActionItemForm = reactive({
+  title: '',
+  description: '',
+  assignee: '',
+  assignee_level: undefined as number | undefined,
+  priority: 'medium',
+  due_date: '',
+  created_by: '',
+})
 
 // ─── Room State ─────────────────────────────────────────
 const currentRoom = ref<any>(null)
@@ -1080,6 +1105,126 @@ async function loadPlanEscalations() {
   }
 }
 
+async function loadPlanActionItems(status?: string) {
+  if (!currentPlan.value) return
+  actionItemLoading.value = true
+  try {
+    const res = await listPlanActionItems(currentPlan.value.plan_id, status || undefined)
+    planActionItems.value = res.data?.items || res.data || []
+  } catch (e) {
+    console.error('loadPlanActionItems failed', e)
+  } finally {
+    actionItemLoading.value = false
+  }
+}
+
+async function loadRoomActionItems(roomId: string, status?: string) {
+  try {
+    const res = await listRoomActionItems(roomId, status || undefined)
+    roomActionItems.value = res.data?.items || res.data || []
+  } catch (e) {
+    console.error('loadRoomActionItems failed', e)
+  }
+}
+
+async function handleCreateActionItem(roomId: string) {
+  if (!newActionItemForm.title) return
+  actionItemLoading.value = true
+  try {
+    await createActionItem(roomId, {
+      title: newActionItemForm.title,
+      description: newActionItemForm.description,
+      assignee: newActionItemForm.assignee || undefined,
+      assignee_level: newActionItemForm.assignee_level || undefined,
+      priority: newActionItemForm.priority,
+      due_date: newActionItemForm.due_date || undefined,
+      created_by: newActionItemForm.created_by || currentUser.name,
+    })
+    newActionItemForm.title = ''
+    newActionItemForm.description = ''
+    newActionItemForm.assignee = ''
+    newActionItemForm.assignee_level = undefined
+    newActionItemForm.priority = 'medium'
+    newActionItemForm.due_date = ''
+    showAddActionItem.value = false
+    await loadRoomActionItems(roomId)
+  } catch (e) {
+    console.error('handleCreateActionItem failed', e)
+  } finally {
+    actionItemLoading.value = false
+  }
+}
+
+async function handleUpdateActionItem(itemId: string, roomId: string) {
+  actionItemLoading.value = true
+  try {
+    await updateActionItem(itemId, {
+      title: editingActionItemId.value ? newActionItemForm.title : undefined,
+      description: editingActionItemId.value ? newActionItemForm.description : undefined,
+      assignee: editingActionItemId.value ? newActionItemForm.assignee : undefined,
+      assignee_level: editingActionItemId.value ? newActionItemForm.assignee_level : undefined,
+      priority: editingActionItemId.value ? newActionItemForm.priority : undefined,
+      due_date: editingActionItemId.value ? newActionItemForm.due_date : undefined,
+    })
+    editingActionItemId.value = null
+    showAddActionItem.value = false
+    await loadRoomActionItems(roomId)
+    if (currentPlan.value) await loadPlanActionItems()
+  } catch (e) {
+    console.error('handleUpdateActionItem failed', e)
+  } finally {
+    actionItemLoading.value = false
+  }
+}
+
+async function handleCompleteActionItem(itemId: string, roomId: string) {
+  actionItemLoading.value = true
+  try {
+    await completeActionItem(itemId)
+    await loadRoomActionItems(roomId)
+    if (currentPlan.value) await loadPlanActionItems()
+  } catch (e) {
+    console.error('handleCompleteActionItem failed', e)
+  } finally {
+    actionItemLoading.value = false
+  }
+}
+
+async function handleDeleteActionItem(itemId: string, roomId: string) {
+  actionItemLoading.value = true
+  try {
+    await deleteActionItem(itemId)
+    await loadRoomActionItems(roomId)
+    if (currentPlan.value) await loadPlanActionItems()
+  } catch (e) {
+    console.error('handleDeleteActionItem failed', e)
+  } finally {
+    actionItemLoading.value = false
+  }
+}
+
+function startEditActionItem(item: any) {
+  editingActionItemId.value = item.action_item_id
+  newActionItemForm.title = item.title
+  newActionItemForm.description = item.description || ''
+  newActionItemForm.assignee = item.assignee || ''
+  newActionItemForm.assignee_level = item.assignee_level || undefined
+  newActionItemForm.priority = item.priority || 'medium'
+  newActionItemForm.due_date = item.due_date ? item.due_date.split('T')[0] : ''
+  showAddActionItem.value = true
+}
+
+function resetActionItemForm() {
+  editingActionItemId.value = null
+  newActionItemForm.title = ''
+  newActionItemForm.description = ''
+  newActionItemForm.assignee = ''
+  newActionItemForm.assignee_level = undefined
+  newActionItemForm.priority = 'medium'
+  newActionItemForm.due_date = ''
+  showAddActionItem.value = false
+}
+
 async function openEscalationAction(esc: any) {
   selectedEscalation.value = esc
   escalationActionForm.action = ''
@@ -1181,6 +1326,9 @@ watch(activePlanTab, (newTab) => {
     activityScopeVersion.value = planDetailActiveVersion.value || ''
     activityScopeRoomId.value = ''
     loadPlanActivities()
+  }
+  if (newTab === 'action_items') {
+    loadPlanActionItems()
   }
 })
 
@@ -3357,13 +3505,13 @@ onUnmounted(() => {
       <!-- Plan Tabs -->
       <div class="plan-tabs">
         <button
-          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'participants', 'activities', 'analytics', 'snapshots', 'escalations']"
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'participants', 'activities', 'analytics', 'snapshots', 'escalations', 'action_items']"
           :key="tab"
           class="plan-tab"
           :class="{ active: activePlanTab === tab }"
           @click="activePlanTab = tab as any"
         >
-          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'participants' ? '参与者' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : '升级' }}
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'participants' ? '参与者' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : tab === 'escalations' ? '升级' : '行动' }}
         </button>
       </div>
 
@@ -5489,6 +5637,69 @@ onUnmounted(() => {
             <div class="escalation-card-footer">
               <span class="escalation-time">{{ new Date(esc.created_at || Date.now()).toLocaleString() }}</span>
               <button class="btn-edit btn-small" @click="openEscalationAction(esc)">处理</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Items Tab -->
+      <div v-else-if="activePlanTab === 'action_items'" class="plan-content">
+        <div class="tab-header-row">
+          <div class="tab-title">📋 行动项</div>
+          <div class="tab-header-actions">
+            <select v-model="actionItemFilter" class="input filter-select" @change="loadPlanActionItems(actionItemFilter || undefined)">
+              <option value="">全部</option>
+              <option value="open">待处理</option>
+              <option value="in_progress">进行中</option>
+              <option value="completed">已完成</option>
+            </select>
+            <button class="btn-secondary" @click="loadPlanActionItems(actionItemFilter || undefined)">刷新</button>
+          </div>
+        </div>
+
+        <!-- Action Items Summary -->
+        <div v-if="planActionItems.length > 0" class="summary-bar">
+          <span class="summary-item">总数：<strong>{{ planActionItems.length }}</strong></span>
+          <span class="summary-item">待处理：<strong>{{ planActionItems.filter(i => i.status === 'open').length }}</strong></span>
+          <span class="summary-item">进行中：<strong>{{ planActionItems.filter(i => i.status === 'in_progress').length }}</strong></span>
+          <span class="summary-item">已完成：<strong>{{ planActionItems.filter(i => i.status === 'completed').length }}</strong></span>
+        </div>
+
+        <!-- Empty State -->
+        <div v-if="planActionItems.length === 0 && !actionItemLoading" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">暂无行动项</div>
+          <div class="empty-sub">在讨论室中创建的行动项将显示在这里</div>
+        </div>
+
+        <!-- Action Items List -->
+        <div v-if="planActionItems.length > 0" class="action-items-list">
+          <div
+            v-for="item in planActionItems"
+            :key="item.action_item_id"
+            class="action-item-card"
+            :class="{ 'action-item-completed': item.status === 'completed' }"
+          >
+            <div class="action-item-header">
+              <div class="action-item-status">
+                <span class="status-badge" :class="'badge-' + item.status">{{ item.status === 'open' ? '⏳ 待处理' : item.status === 'in_progress' ? '🔄 进行中' : '✅ 已完成' }}</span>
+              </div>
+              <div class="action-item-priority" :class="'priority-' + item.priority">{{ item.priority === 'critical' ? '🔴 紧急' : item.priority === 'high' ? '🟠 高' : item.priority === 'medium' ? '🟡 中' : '🟢 低' }}</div>
+            </div>
+            <div class="action-item-title">{{ item.title }}</div>
+            <div v-if="item.description" class="action-item-desc">{{ item.description }}</div>
+            <div class="action-item-meta">
+              <span v-if="item.assignee">👤 {{ item.assignee }}<span v-if="item.assignee_level"> (L{{ item.assignee_level }})</span></span>
+              <span v-if="item.due_date">📅 {{ item.due_date.split('T')[0] }}</span>
+              <span v-if="item.created_by">📝 {{ item.created_by }}</span>
+            </div>
+            <div class="action-item-footer">
+              <span class="action-item-time">{{ new Date(item.created_at || Date.now()).toLocaleString() }}</span>
+              <div class="action-item-actions">
+                <button v-if="item.status !== 'completed'" class="btn-complete btn-small" @click="handleCompleteActionItem(item.action_item_id, item.room_id)">完成</button>
+                <button class="btn-edit btn-small" @click="startEditActionItem(item)">编辑</button>
+                <button class="btn-delete btn-small" @click="handleDeleteActionItem(item.action_item_id, item.room_id)">删除</button>
+              </div>
             </div>
           </div>
         </div>
@@ -10799,4 +11010,126 @@ body {
 .participant-bar .dot-speech { background: #818cf8; }
 .participant-bar .dot-challenge { background: #f87171; }
 .participant-bar .dot-response { background: #34d399; }
+
+/* Action Items Tab */
+.filter-select {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  min-width: 100px;
+}
+.tab-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.action-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 4px;
+}
+.action-item-card {
+  background: #12121e;
+  border: 1px solid #1e1e32;
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: border-color 0.2s;
+}
+.action-item-card:hover {
+  border-color: #3b3b5c;
+}
+.action-item-card.action-item-completed {
+  opacity: 0.7;
+}
+.action-item-card.action-item-completed .action-item-title {
+  text-decoration: line-through;
+  color: #6b7280;
+}
+.action-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.action-item-status .status-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.badge-open { background: #1e1e32; color: #fcd34d; }
+.badge-in_progress { background: #1e1e32; color: #60a5fa; }
+.badge-completed { background: #1e1e32; color: #34d399; }
+.action-item-priority {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.priority-critical { color: #ef4444; }
+.priority-high { color: #f97316; }
+.priority-medium { color: #eab308; }
+.priority-low { color: #22c55e; }
+.action-item-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #d0d0e8;
+  margin-bottom: 4px;
+}
+.action-item-desc {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.action-item-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: #4a4a6a;
+  margin-bottom: 10px;
+}
+.action-item-meta span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.action-item-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid #1e1e32;
+}
+.action-item-time {
+  font-size: 0.68rem;
+  color: #4a4a6a;
+}
+.action-item-actions {
+  display: flex;
+  gap: 6px;
+}
+.btn-complete {
+  background: #065f46;
+  color: #6ee7b7;
+  border: 1px solid #065f46;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.btn-complete:hover {
+  background: #047857;
+}
+.btn-delete {
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.btn-delete:hover {
+  background: #7f1d1d;
+}
 </style>
