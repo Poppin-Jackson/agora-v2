@@ -1183,13 +1183,14 @@ async def _load_number_counters():
         current_year = datetime.now().year
 
         # 获取当前年份最大的 plan_number
+        # 注意：使用 numeric 排序而非 lexicographic，因为 "9999" > "10000" (字符比较)
         async with crud.get_connection() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT plan_number FROM plans
                 WHERE plan_number IS NOT NULL
                   AND substring(plan_number from 6 for 4) = $1
-                ORDER BY plan_number DESC LIMIT 1
+                ORDER BY CAST(substring(plan_number from 10) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1204,13 +1205,14 @@ async def _load_number_counters():
                 _max_plan_number_year = current_year
 
         # 获取当前年份最大的 room_number
+        # 注意：使用 numeric 排序而非 lexicographic，因为 "9999" > "10000" (字符比较)
         async with crud.get_connection() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT room_number FROM rooms
                 WHERE room_number IS NOT NULL
                   AND substring(room_number from 6 for 4) = $1
-                ORDER BY room_number DESC LIMIT 1
+                ORDER BY CAST(substring(room_number from 10) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1225,13 +1227,14 @@ async def _load_number_counters():
                 _max_room_number_year = current_year
 
         # 获取当前年份最大的 issue_number
+        # 注意：使用 numeric 排序而非 lexicographic，因为 "9999" > "10000" (字符比较)
         async with crud.get_connection() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT issue_number FROM problems
                 WHERE issue_number IS NOT NULL
                   AND substring(issue_number from 7 for 4) = $1
-                ORDER BY issue_number DESC LIMIT 1
+                ORDER BY CAST(substring(issue_number from 12) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1254,6 +1257,62 @@ async def _load_number_counters():
         _max_plan_number_year = datetime.now().year
         _max_room_number_year = datetime.now().year
         _max_issue_number_year = datetime.now().year
+
+
+async def _sync_plan_counter_from_db() -> None:
+    """从数据库重新同步 plan 计数器（序号冲突时调用）"""
+    global _plan_counter, _max_plan_number_year
+    if not _db_active:
+        return
+    try:
+        from repositories import crud
+        current_year = datetime.now().year
+        async with crud.get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT plan_number FROM plans
+                WHERE plan_number IS NOT NULL
+                  AND substring(plan_number from 6 for 4) = $1
+                ORDER BY CAST(substring(plan_number from 10) AS INTEGER) DESC LIMIT 1
+                """,
+                str(current_year)
+            )
+            if row and row["plan_number"]:
+                parts = row["plan_number"].split("-")
+                if len(parts) >= 3:
+                    _plan_counter = int(parts[2])
+                    _max_plan_number_year = current_year
+                    logger.info(f"[Counter] plan counter synced from DB: {_plan_counter}")
+    except Exception as e:
+        logger.warning(f"[Counter] plan counter sync failed: {e}")
+
+
+async def _sync_room_counter_from_db() -> None:
+    """从数据库重新同步 room 计数器（序号冲突时调用）"""
+    global _room_counter, _max_room_number_year
+    if not _db_active:
+        return
+    try:
+        from repositories import crud
+        current_year = datetime.now().year
+        async with crud.get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT room_number FROM rooms
+                WHERE room_number IS NOT NULL
+                  AND substring(room_number from 6 for 4) = $1
+                ORDER BY CAST(substring(room_number from 10) AS INTEGER) DESC LIMIT 1
+                """,
+                str(current_year)
+            )
+            if row and row["room_number"]:
+                parts = row["room_number"].split("-")
+                if len(parts) >= 3:
+                    _room_counter = int(parts[2])
+                    _max_room_number_year = current_year
+                    logger.info(f"[Counter] room counter synced from DB: {_room_counter}")
+    except Exception as e:
+        logger.warning(f"[Counter] room counter sync failed: {e}")
 
 
 def _generate_plan_number() -> str:
@@ -1930,17 +1989,20 @@ async def create_plan(data: PlanCreate):
                 break
             except Exception as e:
                 if _is_duplicate_key_error(e, "plans_plan_number_key"):
-                    # 序号冲突，递增后重试
+                    # 序号冲突：从 DB 重新同步计数器，再生成新序号重试
+                    await _sync_plan_counter_from_db()
                     plan_number = _generate_plan_number()
                     plan["plan_number"] = plan_number
                     room_number = _generate_room_number()
                     room["room_number"] = room_number
-                    logger.warning(f"[DB] plan_number 冲突 ({plan_number})，重试 ({attempt + 1})")
+                    logger.warning(f"[DB] plan_number 冲突，同步后重试 ({plan_number})，attempt {attempt + 1}")
                     continue
                 elif _is_duplicate_key_error(e, "rooms_room_number_key"):
+                    # room 序号冲突：从 DB 重新同步计数器
+                    await _sync_room_counter_from_db()
                     room_number = _generate_room_number()
                     room["room_number"] = room_number
-                    logger.warning(f"[DB] room_number 冲突 ({room_number})，重试 ({attempt + 1})")
+                    logger.warning(f"[DB] room_number 冲突，同步后重试 ({room_number})，attempt {attempt + 1}")
                     continue
                 else:
                     # 非序号冲突的其他错误，降级内存
@@ -1955,17 +2017,18 @@ async def create_plan(data: PlanCreate):
     _participants[room_id] = []
     _messages[room_id] = []
 
-    # Step 31: Activity Log
-    await log_activity(
-        plan_id=plan_id,
-        action_type=ActivityType.PLAN_CREATED,
-        actor_id=None,
-        actor_name="system",
-        target_type="plan",
-        target_id=plan_id,
-        target_label=plan_number,
-        details={"title": data.title, "topic": data.topic, "room_id": room_id},
-    )
+    # Step 31: Activity Log — 仅在 DB 写入成功时记录（避免 FK 约束冲突）
+    if db_success:
+        await log_activity(
+            plan_id=plan_id,
+            action_type=ActivityType.PLAN_CREATED,
+            actor_id=None,
+            actor_name="system",
+            target_type="plan",
+            target_id=plan_id,
+            target_label=plan_number,
+            details={"title": data.title, "topic": data.topic, "room_id": room_id},
+        )
 
     # 向 OpenCLAW Gateway 注册房间（外部 Agent 可发现并加入）
     # 非致命：Gateway不可用时不影响核心流程
@@ -5394,9 +5457,15 @@ async def get_version_json(plan_id: str, version: str):
     version_metrics = await _get_version_metrics(plan_id, version)
 
     # 该版本的任务列表（08-Data-Models-Details.md §3.1 Version.content.tasks）
+    # 与 list_tasks 端点保持一致：DB 优先，内存兜底
     try:
         task_rows = await crud.list_tasks(plan_id, version)
-        version_tasks = [dict(r) for r in task_rows] if task_rows else []
+        if task_rows:
+            version_tasks = [dict(r) for r in task_rows]
+        else:
+            # DB 为空，尝试内存兜底（create_task 可能因 DB FK 失败而仅写入内存）
+            key = (plan_id, version)
+            version_tasks = list(_tasks.get(key, {}).values())
     except Exception as e:
         logger.warning(f"[DB] get_version_json list_tasks failed: {e}")
         key = (plan_id, version)
