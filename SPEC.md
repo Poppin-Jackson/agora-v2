@@ -1,6 +1,8 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.18 | 日期：2026-04-05（Step 65 - Task Time Tracking System）
+> 版本：v2.22 | 日期：2026-04-05（Step 69 - Room Tags System）
+> 版本：v2.21 | 日期：2026-04-05（Step 68 - Plan Template System）
+> 版本：v2.20 | 日期：2026-04-05（Step 67 - Room Search API）
 > 版本：v2.16 | 日期：2026-04-05（Step 62 - 甘特图视图）
 > 版本：v2.15 | 日期：2026-04-05（Step 61 - 迭代验证）
 > 版本：v2.14 | 日期：2026-04-05（Step 60）
@@ -1255,3 +1257,137 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - [ ] 用户输入方向，AI自动完成全流程讨论
 - [ ] 讨论结果可导出为结构化任务列表
 - [ ] 无单一决策者，共识通过质疑收敛
+
+---
+
+## Step 66 (2026-04-05)
+**版本**: v2.19 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Plan Search API（计划搜索功能）
+
+### Do
+- 添加 `search_plans` CRUD 函数（backend/repositories/crud.py）
+- 添加 `/plans/search` API 端点（backend/main.py）
+  - 支持按 title/topic 模糊搜索
+  - 支持 status 过滤
+  - 支持分页（limit/offset）
+  - PostgreSQL 优先，内存回退
+- 添加 `searchPlans` 前端 API 函数（frontend/src/api/index.ts）
+- 添加 `test_search_plans` E2E 测试
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 140 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 66
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 67 (2026-04-05)
+**版本**: v2.20 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Room Search API（房间搜索功能）
+
+### Do
+- 添加 `search_rooms` CRUD 函数（backend/repositories/crud.py）
+- 添加 `/rooms/search` API 端点（backend/main.py）
+  - 支持按 topic 模糊搜索
+  - 支持 plan_id 过滤
+  - 支持 phase 过滤
+  - 支持分页（limit/offset）
+  - PostgreSQL 优先，内存回退
+- 添加 `searchRooms` 前端 API 函数（frontend/src/api/index.ts）
+- 添加 `test_search_rooms` E2E 测试
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 141 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 67
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 68 (2026-04-05)
+**版本**: v2.21 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Plan Template System（计划模板系统）
+
+### Do
+- 添加 `plan_templates` 表迁移（backend/db.py）
+  - template_id / name / description / plan_content(JSONB) / tags(TEXT[]) / created_by / is_shared / created_at / updated_at
+- 添加 Plan Template CRUD 函数（backend/repositories/crud.py）
+  - create_plan_template / list_plan_templates / get_plan_template / update_plan_template / delete_plan_template
+- 添加 Pydantic 模型 PlanTemplateCreate / PlanTemplateUpdate（backend/main.py）
+- 添加 API 端点（backend/main.py）
+  - POST /plan-templates — 创建计划模板
+  - GET /plan-templates — 列出计划模板（支持 tag/is_shared/search 过滤）
+  - GET /plan-templates/{template_id} — 获取单个模板
+  - PATCH /plan-templates/{template_id} — 更新模板
+  - DELETE /plan-templates/{template_id} — 删除模板
+  - POST /plan-templates/{template_id}/create-plan — 从模板创建计划
+- 添加前端 API 函数（frontend/src/api/index.ts）
+  - createPlanTemplate / listPlanTemplates / getPlanTemplate / updatePlanTemplate / deletePlanTemplate / createPlanFromTemplate
+- 添加 Plan Templates 状态和函数（frontend/src/App.vue）
+  - planTemplates / showPlanTemplates / showCreatePlanTemplate / newPlanTemplateForm / editingPlanTemplate
+  - loadPlanTemplates / openPlanTemplates / handleSavePlanTemplate / startEditPlanTemplate / handleDeletePlanTemplate / handleCreatePlanFromTemplate
+- 添加 Plan Templates Modal UI（Home 视图）
+  - 模板列表（卡片式：名称/描述/标签/是否共享）
+  - 创建模板表单（名称/描述/标签/共享）
+  - 从模板创建计划按钮
+  - 编辑/删除模板功能
+- 添加 8 个 E2E 测试（TestPlanTemplates）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 149 tests passed（+8 新测试）
+
+### Act
+- 更新 SPEC.md 完成 Step 68
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 69 (2026-04-05)
+**版本**: v2.22 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Room Tags System（讨论室标签系统）
+
+### Do
+- 添加 `tags` 列迁移到 `rooms` 表（backend/db.py）
+  - tags TEXT[] DEFAULT '{}'
+  - CREATE INDEX idx_rooms_tags ON rooms USING GIN(tags)
+- 添加 Pydantic 模型 RoomTagUpdate / RoomTagAddRequest / RoomTagRemoveRequest（backend/main.py）
+- 添加 Room Tags API 端点（backend/main.py）
+  - GET /rooms/{room_id}/tags — 获取讨论室标签
+  - PATCH /rooms/{room_id}/tags — 替换讨论室标签（全量替换）
+  - POST /rooms/{room_id}/tags/add — 添加标签到讨论室（增量添加，自动去重）
+  - POST /rooms/{room_id}/tags/remove — 从讨论室移除标签
+- 更新 search_rooms 支持 tags 参数过滤（backend/main.py + crud.py）
+- 添加前端 API 函数（frontend/src/api/index.ts）
+  - getRoomTags / updateRoomTags / addRoomTags / removeRoomTags
+- 添加 Room Tags 状态和函数（frontend/src/App.vue）
+  - showRoomTagsModal / roomTagsForm / roomTagsLoading
+  - toggleRoomTags / handleAddRoomTag / handleRemoveRoomTag / handleUpdateRoomTags
+- 添加 Room Tags Modal UI（Room 视图）
+  - 当前标签列表（可移除）
+  - 添加标签表单
+- 添加 Tags 显示到 Room Card（plan-rooms 列表）
+- 添加 Tags 显示到 Room Header（讨论室内）
+- 添加 7 个 E2E 测试（TestRoomTags）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 156 tests passed（+7 新测试）
+
+### Act
+- 更新 SPEC.md 完成 Step 69
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

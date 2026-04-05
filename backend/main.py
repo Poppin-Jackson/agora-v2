@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -279,6 +279,21 @@ class RoomConclusionRequest(BaseModel):
     conclusion: Optional[str] = None
 
 
+class RoomTagUpdate(BaseModel):
+    """更新讨论室标签"""
+    tags: List[str] = Field(..., description="标签列表（替换模式）")
+
+
+class RoomTagAddRequest(BaseModel):
+    """添加讨论室标签"""
+    tags: List[str] = Field(..., description="要添加的标签列表")
+
+
+class RoomTagRemoveRequest(BaseModel):
+    """移除讨论室标签"""
+    tags: List[str] = Field(..., description="要移除的标签列表")
+
+
 class SpeechAdd(BaseModel):
     agent_id: str
     content: str
@@ -307,6 +322,25 @@ class RoomTemplateUpdate(BaseModel):
     mode: Optional[str] = None
     default_phase: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
+    is_shared: Optional[bool] = None
+
+
+# Step 68: Plan Template Models
+class PlanTemplateCreate(BaseModel):
+    """创建计划模板"""
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = ""
+    plan_content: Optional[Dict[str, Any]] = {}
+    tags: Optional[List[str]] = []
+    is_shared: bool = False
+
+
+class PlanTemplateUpdate(BaseModel):
+    """更新计划模板"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    plan_content: Optional[Dict[str, Any]] = None
+    tags: Optional[List[str]] = None
     is_shared: Optional[bool] = None
 
 
@@ -2164,6 +2198,125 @@ async def copy_plan(plan_id: str, data: dict = None):
     return {"plan": plan, "room": room}
 
 
+@app.get("/plans/search")
+async def search_plans(
+    q: str = Query(..., min_length=1, description="Search query (matches title or topic)"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    limit: int = Query(50, ge=1, le=100, description="Max results to return"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+):
+    """
+    搜索 Plans by title or topic
+    来源: Step 66 - Plan Search API
+    """
+    if _db_active:
+        try:
+            rows = await crud.search_plans(q, status, limit, offset)
+            plans = [_row_to_plan(r) for r in rows]
+            # 同步到内存
+            for p in plans:
+                if p:
+                    _plans[p["plan_id"]] = p
+            return {
+                "query": q,
+                "status": status,
+                "count": len(plans),
+                "limit": limit,
+                "offset": offset,
+                "plans": plans,
+            }
+        except Exception as e:
+            logger.warning(f"[DB] search_plans: {e}")
+
+    # 内存回退（模糊匹配）
+    query_lower = q.lower()
+    filtered = []
+    for p in _plans.values():
+        title = p.get("title", "").lower()
+        topic = p.get("topic", "").lower()
+        if query_lower in title or query_lower in topic:
+            if status is None or p.get("status") == status:
+                filtered.append(p)
+    
+    # 分页
+    paginated = filtered[offset:offset + limit]
+    return {
+        "query": q,
+        "status": status,
+        "count": len(paginated),
+        "total": len(filtered),
+        "limit": limit,
+        "offset": offset,
+        "plans": paginated,
+    }
+
+
+@app.get("/rooms/search")
+async def search_rooms(
+    q: str = Query(..., min_length=1, description="Search query (matches topic)"),
+    plan_id: Optional[str] = Query(None, description="Filter by plan_id"),
+    phase: Optional[str] = Query(None, description="Filter by phase"),
+    tags: Optional[str] = Query(None, description="Filter by tags (comma-separated)"),
+    limit: int = Query(50, ge=1, le=100, description="Max results to return"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+):
+    """
+    搜索 Rooms by topic, optionally filtered by plan_id, phase, and tags.
+    来源: Step 67 - Room Search API, Step 69 - Room Tags
+    """
+    # 解析 tags 参数
+    tag_list = [t.strip() for t in tags.split(",")] if tags else []
+
+    if _db_active:
+        try:
+            rows = await crud.search_rooms(q, plan_id, phase, tag_list, limit, offset)
+            rooms = [_row_to_room(r) for r in rows]
+            # 同步到内存
+            for room in rooms:
+                if room:
+                    _rooms[room["room_id"]] = room
+            return {
+                "query": q,
+                "plan_id": plan_id,
+                "phase": phase,
+                "tags": tag_list,
+                "count": len(rooms),
+                "limit": limit,
+                "offset": offset,
+                "rooms": rooms,
+            }
+        except Exception as e:
+            logger.warning(f"[DB] search_rooms: {e}")
+
+    # 内存回退（模糊匹配）
+    query_lower = q.lower()
+    filtered = []
+    for room in _rooms.values():
+        topic = room.get("topic", "").lower()
+        if query_lower in topic:
+            if plan_id is None or room.get("plan_id") == plan_id:
+                if phase is None or room.get("phase") == phase:
+                    # Tags 过滤
+                    if tag_list:
+                        room_tags = set(room.get("tags", []))
+                        if not all(t in room_tags for t in tag_list):
+                            continue
+                    filtered.append(room)
+
+    paginated = filtered[offset:offset + limit]
+    return {
+        "query": q,
+        "plan_id": plan_id,
+        "phase": phase,
+        "tags": tag_list,
+        "count": len(paginated),
+        "total": len(filtered),
+        "limit": limit,
+        "offset": offset,
+        "rooms": paginated,
+    }
+
+
 @app.get("/plans/{plan_id}")
 async def get_plan(plan_id: str):
     """
@@ -2689,6 +2842,150 @@ async def create_room_from_template(plan_id: str, template_id: str, data: dict =
     return {"room_id": room_id, "room": room, "template_applied": template.get("name")}
 
 
+# Step 68: Plan Template API
+@app.post("/plan-templates", status_code=201)
+async def create_plan_template(data: PlanTemplateCreate):
+    """创建计划模板"""
+    try:
+        template_id = str(uuid.uuid4())
+        template = await crud.create_plan_template(
+            template_id=template_id,
+            name=data.name,
+            description=data.description,
+            plan_content=data.plan_content,
+            tags=data.tags,
+            created_by=None,
+            is_shared=data.is_shared,
+        )
+        return template
+    except Exception as e:
+        logger.warning(f"[DB] create_plan_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/plan-templates")
+async def list_plan_templates(
+    tag: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+    created_by: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    """列出计划模板"""
+    try:
+        templates = await crud.list_plan_templates(
+            tag=tag,
+            is_shared=is_shared,
+            created_by=created_by,
+            search=search,
+        )
+        return templates
+    except Exception as e:
+        logger.warning(f"[DB] list_plan_templates failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/plan-templates/{template_id}")
+async def get_plan_template(template_id: str):
+    """获取单个计划模板"""
+    try:
+        template = await crud.get_plan_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] get_plan_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/plan-templates/{template_id}")
+async def update_plan_template(template_id: str, data: PlanTemplateUpdate):
+    """更新计划模板"""
+    try:
+        template = await crud.update_plan_template(
+            template_id=template_id,
+            name=data.name,
+            description=data.description,
+            plan_content=data.plan_content,
+            tags=data.tags,
+            is_shared=data.is_shared,
+        )
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] update_plan_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/plan-templates/{template_id}", status_code=204)
+async def delete_plan_template(template_id: str):
+    """删除计划模板"""
+    try:
+        deleted = await crud.delete_plan_template(template_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] delete_plan_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/plan-templates/{template_id}/create-plan", status_code=201)
+async def create_plan_from_template(template_id: str, data: dict = None):
+    """从计划模板创建新计划"""
+    try:
+        template = await crud.get_plan_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        plan_content = template.get("plan_content", {}) or {}
+        title = (data.get("title") if data else None) or f"{template.get('name', '计划')} - 副本"
+        topic = (data.get("topic") if data else None) or template.get("description", "")
+
+        plan_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        plan_number = _generate_plan_number()
+
+        plan = {
+            "plan_id": plan_id,
+            "plan_number": plan_number,
+            "title": title,
+            "topic": topic,
+            "status": "active",
+            "version": "v1.0",
+            "created_at": now,
+            "template_id": template_id,
+        }
+
+        if _db_active:
+            try:
+                await crud.create_plan(
+                    plan_id=plan_id,
+                    plan_number=plan_number,
+                    title=title,
+                    topic=topic,
+                    status="active",
+                    created_by=None,
+                )
+                logger.info(f"[DB] create_plan_from_template: {plan_id}({plan_number}) from template {template_id}")
+            except Exception as e:
+                logger.warning(f"[DB] create_plan_from_template failed: {e}")
+
+        _plans[plan_id] = plan
+        return {"plan_id": plan_id, "plan": plan, "template_applied": template.get("name")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] create_plan_from_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/rooms/{room_id}")
 async def get_room(room_id: str):
     """
@@ -2714,6 +3011,111 @@ async def get_room(room_id: str):
     room = _rooms[room_id].copy()
     room["participants"] = _participants.get(room_id, [])
     return room
+
+
+@app.get("/rooms/{room_id}/tags")
+async def get_room_tags(room_id: str):
+    """
+    获取讨论室标签
+    """
+    # PostgreSQL 优先读取
+    if _db_active:
+        try:
+            row = await crud.get_room(room_id)
+            if row:
+                return {"room_id": room_id, "tags": row.get("tags", [])}
+        except Exception as e:
+            logger.warning(f"[DB] get_room_tags {room_id}: {e}")
+
+    # 内存回退
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return {"room_id": room_id, "tags": _rooms[room_id].get("tags", [])}
+
+
+@app.patch("/rooms/{room_id}/tags")
+async def update_room_tags(room_id: str, data: RoomTagUpdate):
+    """
+    替换讨论室标签（PATCH - 全量替换）
+    """
+    # 确保 room 存在
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_room(room_id, tags=data.tags)
+            if row:
+                _rooms[room_id] = _row_to_room(row)
+                return {"room_id": room_id, "tags": data.tags}
+        except Exception as e:
+            logger.warning(f"[DB] update_room_tags {room_id}: {e}")
+
+    # 内存回退
+    _rooms[room_id]["tags"] = data.tags
+    return {"room_id": room_id, "tags": data.tags}
+
+
+@app.post("/rooms/{room_id}/tags/add")
+async def add_room_tags(room_id: str, data: RoomTagAddRequest):
+    """
+    添加标签到讨论室（增量添加）
+    """
+    # 确保 room 存在
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    current_tags = _rooms[room_id].get("tags", [])
+    new_tags = list(set(current_tags + data.tags))  # 去重
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_room(room_id, tags=new_tags)
+            if row:
+                _rooms[room_id] = _row_to_room(row)
+                return {"room_id": room_id, "tags": new_tags}
+        except Exception as e:
+            logger.warning(f"[DB] add_room_tags {room_id}: {e}")
+
+    # 内存回退
+    _rooms[room_id]["tags"] = new_tags
+    return {"room_id": room_id, "tags": new_tags}
+
+
+@app.post("/rooms/{room_id}/tags/remove")
+async def remove_room_tags(room_id: str, data: RoomTagRemoveRequest):
+    """
+    从讨论室移除标签
+    """
+    # 确保 room 存在
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    current_tags = set(_rooms[room_id].get("tags", []))
+    tags_to_remove = set(data.tags)
+    remaining_tags = list(current_tags - tags_to_remove)  # 差集
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_room(room_id, tags=remaining_tags)
+            if row:
+                _rooms[room_id] = _row_to_room(row)
+                return {"room_id": room_id, "tags": remaining_tags}
+        except Exception as e:
+            logger.warning(f"[DB] remove_room_tags {room_id}: {e}")
+
+    # 内存回退
+    _rooms[room_id]["tags"] = remaining_tags
+    return {"room_id": room_id, "tags": remaining_tags}
 
 
 @app.post("/rooms/{room_id}/participants")

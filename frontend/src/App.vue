@@ -100,6 +100,15 @@ import api, {
   updateRoomTemplate,
   deleteRoomTemplate,
   createRoomFromTemplate,
+  listPlanTemplates,
+  createPlanTemplate,
+  updatePlanTemplate,
+  deletePlanTemplate,
+  createPlanFromTemplate,
+  getRoomTags,
+  updateRoomTags,
+  addRoomTags,
+  removeRoomTags,
 } from './api'
 
 // ─── View State ──────────────────────────────────────────
@@ -145,6 +154,20 @@ const newTemplateForm = reactive({
   is_shared: false,
 })
 const editingTemplate = ref<any>(null)
+
+// ─── Plan Templates State ────────────────────────────────
+const planTemplates = ref<any[]>([])
+const showPlanTemplates = ref(false)
+const showCreatePlanTemplate = ref(false)
+const newPlanTemplateForm = reactive({
+  name: '',
+  description: '',
+  plan_content: {} as Record<string, any>,
+  tags: [] as string[],
+  is_shared: false,
+  _tagsInput: '',
+})
+const editingPlanTemplate = ref<any>(null)
 
 // ─── Decisions State ─────────────────────────────────────
 const planDecisions = ref<any[]>([])
@@ -429,6 +452,13 @@ const hierarchyActionLoading = ref(false)
 // ─── Notifications State ─────────────────────────────────
 const notifications = ref<Notification[]>([])
 const unreadCount = ref(0)
+
+// ─── Room Tags State ──────────────────────────────────────
+const showRoomTagsModal = ref(false)
+const roomTagsForm = reactive({
+  newTag: '',
+})
+const roomTagsLoading = ref(false)
 const showNotifications = ref(false)
 const currentUser = reactive({ user_id: 'user-1', name: '访客', level: 5 })
 
@@ -1781,6 +1811,92 @@ async function handleDeleteTemplate(templateId: string) {
   }
 }
 
+// ─── Plan Template Functions ────────────────────────────────
+async function loadPlanTemplates() {
+  try {
+    const res = await listPlanTemplates()
+    planTemplates.value = Array.isArray(res.data) ? res.data : (res.data?.templates || [])
+  } catch (e) {
+    console.error('loadPlanTemplates failed', e)
+  }
+}
+
+async function openPlanTemplates() {
+  showPlanTemplates.value = true
+  showCreatePlanTemplate.value = false
+  editingPlanTemplate.value = null
+  await loadPlanTemplates()
+}
+
+async function handleSavePlanTemplate() {
+  if (!newPlanTemplateForm.name.trim()) return
+  try {
+    if (editingPlanTemplate.value) {
+      await updatePlanTemplate(editingPlanTemplate.value.template_id, {
+        name: newPlanTemplateForm.name,
+        description: newPlanTemplateForm.description,
+        plan_content: newPlanTemplateForm.plan_content,
+        tags: newPlanTemplateForm.tags,
+        is_shared: newPlanTemplateForm.is_shared,
+      })
+    } else {
+      await createPlanTemplate({
+        name: newPlanTemplateForm.name,
+        description: newPlanTemplateForm.description,
+        plan_content: newPlanTemplateForm.plan_content,
+        tags: newPlanTemplateForm.tags,
+        is_shared: newPlanTemplateForm.is_shared,
+      })
+    }
+    showCreatePlanTemplate.value = false
+    editingPlanTemplate.value = null
+    await loadPlanTemplates()
+  } catch (e) {
+    console.error('handleSavePlanTemplate failed', e)
+  }
+}
+
+function startEditPlanTemplate(tmpl: any) {
+  editingPlanTemplate.value = tmpl
+  Object.assign(newPlanTemplateForm, {
+    name: tmpl.name,
+    description: tmpl.description || '',
+    plan_content: typeof tmpl.plan_content === 'object' ? tmpl.plan_content : {},
+    tags: Array.isArray(tmpl.tags) ? tmpl.tags : [],
+    is_shared: tmpl.is_shared || false,
+  })
+  showCreatePlanTemplate.value = true
+}
+
+async function handleDeletePlanTemplate(templateId: string) {
+  if (!confirm('确定删除此计划模板？')) return
+  try {
+    await deletePlanTemplate(templateId)
+    await loadPlanTemplates()
+  } catch (e) {
+    console.error('handleDeletePlanTemplate failed', e)
+  }
+}
+
+async function handleCreatePlanFromTemplate(tmpl: any) {
+  try {
+    const res = await createPlanFromTemplate(tmpl.template_id, {
+      title: `${tmpl.name} - 副本`,
+      topic: tmpl.description || '',
+    })
+    showPlanTemplates.value = false
+    // Refresh plans list and navigate to new plan
+    const plansRes = await listPlans()
+    plans.value = plansRes.data?.plans || []
+    // Navigate to the new plan if we're on home view
+    if (res.data?.plan_id) {
+      await openPlanDetail(res.data.plan_id)
+    }
+  } catch (e) {
+    console.error('handleCreatePlanFromTemplate failed', e)
+  }
+}
+
 async function handleCreateRoomFromTemplate(tmpl: any) {
   if (!currentPlan.value) return
   try {
@@ -1903,6 +2019,70 @@ async function handleConcludeRoom() {
     alert('结束房间失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
   } finally {
     hierarchyActionLoading.value = false
+  }
+}
+
+// Room Tags Management
+function toggleRoomTags() {
+  showRoomTagsModal.value = !showRoomTagsModal.value
+  roomTagsForm.newTag = ''
+}
+
+async function handleAddRoomTag() {
+  if (!currentRoom.value || !roomTagsForm.newTag.trim()) return
+  roomTagsLoading.value = true
+  try {
+    const res = await addRoomTags(currentRoom.value.room_id, [roomTagsForm.newTag.trim()])
+    currentRoom.value.tags = res.data.tags
+    roomTagsForm.newTag = ''
+    // Refresh rooms list
+    if (currentPlan.value) {
+      const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+      planRooms.value = roomsRes.data?.rooms || []
+    }
+  } catch (e) {
+    console.error('add room tag failed', e)
+    alert('添加标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    roomTagsLoading.value = false
+  }
+}
+
+async function handleRemoveRoomTag(tag: string) {
+  if (!currentRoom.value) return
+  roomTagsLoading.value = true
+  try {
+    const res = await removeRoomTags(currentRoom.value.room_id, [tag])
+    currentRoom.value.tags = res.data.tags
+    // Refresh rooms list
+    if (currentPlan.value) {
+      const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+      planRooms.value = roomsRes.data?.rooms || []
+    }
+  } catch (e) {
+    console.error('remove room tag failed', e)
+    alert('移除标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    roomTagsLoading.value = false
+  }
+}
+
+async function handleUpdateRoomTags(tags: string[]) {
+  if (!currentRoom.value) return
+  roomTagsLoading.value = true
+  try {
+    const res = await updateRoomTags(currentRoom.value.room_id, tags)
+    currentRoom.value.tags = res.data.tags
+    // Refresh rooms list
+    if (currentPlan.value) {
+      const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+      planRooms.value = roomsRes.data?.rooms || []
+    }
+  } catch (e) {
+    console.error('update room tags failed', e)
+    alert('更新标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    roomTagsLoading.value = false
   }
 }
 
@@ -2751,6 +2931,9 @@ onUnmounted(() => {
           <button class="btn-primary" @click="showCreatePlan = !showCreatePlan">
             {{ showCreatePlan ? '取消' : '+ 新计划' }}
           </button>
+          <button class="btn-secondary" @click="openPlanTemplates" title="从计划模板创建">
+            📋 计划模板
+          </button>
           <!-- Notification Bell -->
           <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
             🔔
@@ -3065,6 +3248,11 @@ onUnmounted(() => {
               <span>👥 {{ room.participant_count || 0 }}</span>
               <span>{{ new Date(room.created_at).toLocaleDateString('zh-CN') }}</span>
             </div>
+            <!-- Room Tags -->
+            <div v-if="room.tags?.length" class="room-tags-row">
+              <span v-for="tag in room.tags.slice(0, 3)" :key="tag" class="room-tag">{{ tag }}</span>
+              <span v-if="room.tags.length > 3" class="room-tag more">+{{ room.tags.length - 3 }}</span>
+            </div>
             <!-- Hierarchy indicators -->
             <div class="room-hierarchy-indicators" @click.stop>
               <span
@@ -3208,6 +3396,53 @@ onUnmounted(() => {
               <div class="modal-actions">
                 <button class="btn-danger" :disabled="hierarchyActionLoading" @click="handleConcludeRoom">
                   {{ hierarchyActionLoading ? '结束中...' : '确认结束房间' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Room Tags Modal -->
+      <div v-if="showRoomTagsModal" class="modal-overlay" @click.self="showRoomTagsModal = false">
+        <div class="modal-content room-tags-modal">
+          <div class="modal-header">
+            <h3>🏷️ 讨论室标签</h3>
+            <button class="modal-close" @click="showRoomTagsModal = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="room-tags-room-info">
+              <span class="phase-pill small" :style="{ background: phaseColors[currentRoom?.phase] || '#6b7280' }">
+                {{ phaseLabel[currentRoom?.phase] || currentRoom?.phase || '' }}
+              </span>
+              <span class="room-tags-topic">{{ currentRoom?.topic || currentRoom?.title || '' }}</span>
+              <span class="room-tags-num">{{ currentRoom?.room_number || '' }}</span>
+            </div>
+
+            <!-- Current Tags -->
+            <div class="room-tags-section">
+              <div class="room-tags-section-title">当前标签</div>
+              <div v-if="currentRoom?.tags?.length" class="room-tags-list">
+                <span v-for="tag in currentRoom.tags" :key="tag" class="room-tag-item">
+                  {{ tag }}
+                  <button class="tag-remove-btn" @click="handleRemoveRoomTag(tag)" :disabled="roomTagsLoading">×</button>
+                </span>
+              </div>
+              <div v-else class="room-tags-empty">暂无标签</div>
+            </div>
+
+            <!-- Add Tag -->
+            <div class="room-tags-section">
+              <div class="room-tags-section-title">添加标签</div>
+              <div class="room-tags-add-form">
+                <input
+                  v-model="roomTagsForm.newTag"
+                  class="input"
+                  placeholder="输入标签名称"
+                  @keyup.enter="handleAddRoomTag"
+                />
+                <button class="btn-primary" @click="handleAddRoomTag" :disabled="roomTagsLoading || !roomTagsForm.newTag.trim()">
+                  添加
                 </button>
               </div>
             </div>
@@ -5046,6 +5281,80 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Plan Templates Modal -->
+      <div v-if="showPlanTemplates" class="modal-overlay" @click.self="showPlanTemplates = false">
+        <div class="modal-content modal-medium">
+          <div class="modal-header">
+            <h3>📋 计划模板</h3>
+            <div class="modal-header-actions">
+              <button class="btn-primary btn-small" @click="showCreatePlanTemplate = true; editingPlanTemplate = null; Object.assign(newPlanTemplateForm, { name: '', description: '', plan_content: {}, tags: [], is_shared: false })">
+                + 新建模板
+              </button>
+              <button class="modal-close" @click="showPlanTemplates = false">✕</button>
+            </div>
+          </div>
+          <div class="modal-body">
+            <!-- Create Plan Template Form -->
+            <div v-if="showCreatePlanTemplate" class="template-create-form">
+              <div class="form-row">
+                <label>模板名称 *</label>
+                <input v-model="newPlanTemplateForm.name" class="input" placeholder="例如：战略规划模板" />
+              </div>
+              <div class="form-row">
+                <label>描述</label>
+                <textarea v-model="newPlanTemplateForm.description" class="input" placeholder="模板用途说明..." rows="2"></textarea>
+              </div>
+              <div class="form-row">
+                <label>标签（逗号分隔）</label>
+                <input v-model="newPlanTemplateForm._tagsInput" class="input" placeholder="例如：战略,规划,年度" @blur="newPlanTemplateForm.tags = newPlanTemplateForm._tagsInput.split(',').map(t => t.trim()).filter(Boolean)" @keyup.enter="newPlanTemplateForm.tags = newPlanTemplateForm._tagsInput.split(',').map(t => t.trim()).filter(Boolean)" />
+              </div>
+              <div class="form-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" v-model="newPlanTemplateForm.is_shared" />
+                  共享模板（所有用户可见）
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="btn-primary" @click="handleSavePlanTemplate">保存模板</button>
+                <button class="btn-secondary" @click="showCreatePlanTemplate = false">取消</button>
+              </div>
+            </div>
+
+            <!-- Plan Templates List -->
+            <div v-if="!showCreatePlanTemplate" class="templates-list">
+              <div v-if="planTemplates.length === 0" class="empty-state" style="padding: 40px 0">
+                <div class="empty-icon">📋</div>
+                <div class="empty-text">暂无计划模板</div>
+                <div class="empty-sub">点击「新建模板」创建第一个计划模板</div>
+              </div>
+              <div
+                v-for="tmpl in planTemplates"
+                :key="tmpl.template_id"
+                class="template-card"
+              >
+                <div class="template-card-header">
+                  <div class="template-card-title">{{ tmpl.name }}</div>
+                  <div class="template-card-actions">
+                    <button class="btn-edit" @click="startEditPlanTemplate(tmpl)" title="编辑">✎</button>
+                    <button class="btn-edit" @click="handleDeletePlanTemplate(tmpl.template_id)" title="删除">🗑</button>
+                  </div>
+                </div>
+                <div class="template-card-desc">{{ tmpl.description || '无描述' }}</div>
+                <div class="template-card-meta">
+                  <span v-if="tmpl.tags && tmpl.tags.length > 0" class="template-badge" v-for="tag in tmpl.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
+                </div>
+                <div class="template-card-footer">
+                  <span v-if="tmpl.is_shared" class="shared-badge">共享</span>
+                  <button class="btn-primary btn-small" @click="handleCreatePlanFromTemplate(tmpl)">
+                    使用此模板创建计划 →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ══════════════════════════════════════════════════════ -->
@@ -5083,7 +5392,15 @@ onUnmounted(() => {
         <button class="escalate-btn" @click="showEscalationModal = true" title="升级讨论">
           🔺 升级
         </button>
+        <!-- Room Tags Button -->
+        <button class="room-tags-btn" @click.stop="toggleRoomTags" title="标签管理">
+          🏷️ 标签
+        </button>
       </header>
+      <!-- Room Tags Display -->
+      <div v-if="currentRoom?.tags?.length" class="room-header-tags">
+        <span v-for="tag in currentRoom.tags" :key="tag" class="header-tag">{{ tag }}</span>
+      </div>
 
       <!-- Room Body -->
       <div class="room-body">
@@ -7971,6 +8288,60 @@ body {
 }
 .dep-dep-chip.dep-missing { background: rgba(107,114,128,0.15); color: #6b7280; text-decoration: line-through; }
 .loading-state { text-align: center; padding: 40px; color: #6b7280; }
+
+/* ─── Room Tags ─── */
+.room-tags-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.room-tag {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+.room-tag.more { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+.room-header-tags { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px 16px; background: rgba(30, 30, 46, 0.5); }
+.header-tag {
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+.room-tags-btn {
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.room-tags-btn:hover { background: rgba(99, 102, 241, 0.2); }
+
+/* ─── Room Tags Modal ─── */
+.room-tags-modal { max-width: 440px; width: 95vw; }
+.room-tags-room-info { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 16px; }
+.room-tags-topic { color: #e0e0f0; font-weight: 500; flex: 1; }
+.room-tags-num { color: #6b7280; font-size: 0.85rem; }
+.room-tags-section { margin-bottom: 16px; }
+.room-tags-section-title { font-size: 0.8rem; font-weight: 600; color: #9ca3af; margin-bottom: 8px; }
+.room-tags-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.room-tag-item {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tag-remove-btn { background: none; border: none; color: #f87171; cursor: pointer; font-size: 1rem; padding: 0 2px; }
+.tag-remove-btn:hover { color: #fca5a5; }
+.tag-remove-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.room-tags-empty { color: #6b7280; font-size: 0.85rem; font-style: italic; }
+.room-tags-add-form { display: flex; gap: 8px; }
+.room-tags-add-form .input { flex: 1; }
 
 /* ─── Escalation Modal ─── */
 .escalation-modal { max-width: 520px; width: 95vw; }

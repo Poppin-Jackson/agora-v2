@@ -545,6 +545,8 @@ async def _create_tables(pool: Pool):
                 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ;
                 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS summary TEXT;
                 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS conclusion TEXT;
+                ALTER TABLE rooms ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+                CREATE INDEX IF NOT EXISTS idx_rooms_tags ON rooms USING GIN(tags);
                 ALTER TABLE participants ADD COLUMN IF NOT EXISTS thinking_complete BOOLEAN DEFAULT FALSE;
                 ALTER TABLE participants ADD COLUMN IF NOT EXISTS sharing_complete BOOLEAN DEFAULT FALSE;
                 ALTER TABLE participants ADD COLUMN IF NOT EXISTS last_activity TIMESTAMPTZ;
@@ -687,6 +689,30 @@ async def _create_tables(pool: Pool):
                 logger.info("[DB] Step 65 表迁移完成: task_time_entries table")
         except Exception as e:
             logger.warning(f"[DB] Step 65 表迁移跳过（可能已存在）: {e}")
+
+        # ── Step 68: plan_templates 表 ─────────────────────────────────────────
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS plan_templates (
+                        template_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        name          TEXT NOT NULL,
+                        description   TEXT,
+                        plan_content  JSONB DEFAULT '{}',
+                        tags          TEXT[] DEFAULT '{}',
+                        created_by    TEXT,
+                        is_shared     BOOLEAN DEFAULT FALSE,
+                        created_at    TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at    TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_plan_templates_name ON plan_templates(name);
+                    CREATE INDEX IF NOT EXISTS idx_plan_templates_tags ON plan_templates USING GIN(tags);
+                """)
+                logger.info("[DB] Step 68 表迁移完成: plan_templates table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 68 表迁移跳过（可能已存在）: {e}")
 
     except Exception as e:
         logger.warning(f"[DB] 列迁移跳过（可能已存在）: {e}")

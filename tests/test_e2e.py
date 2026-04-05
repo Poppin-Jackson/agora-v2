@@ -178,6 +178,59 @@ class TestPlanCreation:
         assert isinstance(plans, list)
         assert len(plans) >= 1
 
+    def test_search_plans(self, room_info):
+        # Create a plan with known title
+        plan_id = room_info["plan_id"]
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        plan = resp.json()
+        title = plan["title"]
+        
+        # Search by title
+        resp = httpx.get(f"{API_BASE}/plans/search", params={"q": title[:4]}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "plans" in data
+        assert "count" in data
+        assert isinstance(data["plans"], list)
+        
+        # Search with status filter
+        resp = httpx.get(f"{API_BASE}/plans/search", params={"q": title[:4], "status": "draft"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"] == title[:4]
+        assert data["status"] == "draft"
+
+    def test_search_rooms(self, room_info):
+        # Search by topic (uses the room created by the plan)
+        resp = httpx.get(f"{API_BASE}/rooms/search", params={"q": "测试议题"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "rooms" in data
+        assert "count" in data
+        assert isinstance(data["rooms"], list)
+        assert data["query"] == "测试议题"
+
+        # Search with phase filter
+        resp = httpx.get(f"{API_BASE}/rooms/search", params={"q": "测试议题", "phase": "selecting"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["phase"] == "selecting"
+
+        # Search with plan_id filter
+        plan_id = room_info["plan_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/search", params={"q": "测试议题", "plan_id": plan_id}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+
+        # Pagination
+        resp = httpx.get(f"{API_BASE}/rooms/search", params={"q": "测试", "limit": 5, "offset": 0}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 5
+        assert data["offset"] == 0
+
     def test_plan_initial_phase(self, room_info):
         room_id = room_info["room_id"]
         resp = httpx.get(f"{API_BASE}/rooms/{room_id}", timeout=TIMEOUT)
@@ -3967,6 +4020,244 @@ class TestRoomTemplates:
         room = resp.json()
         assert room["topic"] == "从模板创建的讨论室"
         assert room["plan_id"] == plan_id
+
+
+class TestPlanTemplates:
+    """Plan Templates API 测试"""
+
+    def test_create_plan_template(self):
+        """创建计划模板"""
+        template_data = {
+            "name": "测试计划模板",
+            "description": "用于自动化测试的计划模板",
+            "plan_content": {"title": "模板内容", "rooms": []},
+            "tags": ["test", "automation"],
+            "is_shared": False,
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "template_id" in result
+        assert result["name"] == "测试计划模板"
+        assert result["description"] == "用于自动化测试的计划模板"
+        assert result["is_shared"] is False
+
+    def test_list_plan_templates(self):
+        """列出计划模板"""
+        # 先创建一个模板
+        template_data = {
+            "name": "列表测试模板",
+            "tags": ["list-test"],
+        }
+        httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/plan-templates", timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_get_plan_template(self):
+        """获取单个计划模板"""
+        template_data = {
+            "name": "获取单个模板测试",
+            "description": "用于测试获取单个模板",
+            "tags": ["get-test"],
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        resp = httpx.get(f"{API_BASE}/plan-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "获取单个模板测试"
+        assert tmpl["description"] == "用于测试获取单个模板"
+
+    def test_update_plan_template(self):
+        """更新计划模板"""
+        template_data = {
+            "name": "待更新计划模板",
+            "tags": ["update-test"],
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        resp = httpx.patch(f"{API_BASE}/plan-templates/{template_id}", json={
+            "name": "已更新计划模板",
+            "description": "更新后的描述",
+        }, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "已更新计划模板"
+        assert tmpl["description"] == "更新后的描述"
+
+    def test_delete_plan_template(self):
+        """删除计划模板"""
+        template_data = {
+            "name": "待删除计划模板",
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        resp = httpx.delete(f"{API_BASE}/plan-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        resp = httpx.get(f"{API_BASE}/plan-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_plan_template_not_found(self):
+        """计划模板不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plan-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_plan_from_template(self):
+        """从计划模板创建新计划"""
+        # 创建一个计划模板
+        template_data = {
+            "name": "计划创建模板",
+            "description": "用于从模板创建计划的模板",
+            "plan_content": {"test": "content"},
+            "tags": ["plan-test"],
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 从模板创建计划
+        resp = httpx.post(
+            f"{API_BASE}/plan-templates/{template_id}/create-plan",
+            json={"title": "从模板创建的计划", "topic": "从模板创建的主题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "plan_id" in result
+        assert result.get("template_applied") == "计划创建模板"
+        plan_id = result["plan_id"]
+
+        # 验证计划已创建
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        plan = resp.json()
+        assert plan["title"] == "从模板创建的计划"
+
+    def test_list_plan_templates_with_search(self):
+        """搜索计划模板"""
+        template_data = {
+            "name": "搜索测试计划模板",
+            "description": "用于测试搜索功能",
+            "tags": ["search-test"],
+        }
+        httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/plan-templates", params={"search": "搜索测试"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+
+class TestRoomTags:
+    """Step 69: Room Tags API Tests"""
+
+    @pytest.fixture
+    def test_room(self):
+        """创建一个测试房间"""
+        plan_data = {
+            "title": "Room Tags Test Plan",
+            "topic": "用于测试房间标签的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        plan = data["plan"]
+        room = data["room"]
+        return room
+
+    def test_get_room_tags_empty(self, test_room):
+        """获取房间标签（空标签）"""
+        room_id = test_room["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/tags", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert "tags" in data
+
+    def test_update_room_tags(self, test_room):
+        """更新房间标签（替换模式）"""
+        room_id = test_room["room_id"]
+        new_tags = ["重要", "紧急", "技术评审"]
+
+        resp = httpx.patch(f"{API_BASE}/rooms/{room_id}/tags", json={"tags": new_tags}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["tags"] == new_tags
+
+    def test_add_room_tags(self, test_room):
+        """添加房间标签"""
+        room_id = test_room["room_id"]
+
+        # 先设置初始标签
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags", json={"tags": ["重要"]}, timeout=TIMEOUT).raise_for_status()
+
+        # 添加新标签
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/tags/add", json={"tags": ["紧急"]}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "重要" in data["tags"]
+        assert "紧急" in data["tags"]
+
+    def test_add_room_tags_deduplication(self, test_room):
+        """添加房间标签（去重）"""
+        room_id = test_room["room_id"]
+
+        # 先设置初始标签
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags", json={"tags": ["重要"]}, timeout=TIMEOUT).raise_for_status()
+
+        # 添加已存在的标签（应该去重）
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/tags/add", json={"tags": ["重要", "新标签"]}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        # "重要" 只应该出现一次
+        assert data["tags"].count("重要") == 1
+        assert "重要" in data["tags"]
+        assert "新标签" in data["tags"]
+
+    def test_remove_room_tags(self, test_room):
+        """移除房间标签"""
+        room_id = test_room["room_id"]
+
+        # 先设置初始标签
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags", json={"tags": ["重要", "紧急", "技术评审"]}, timeout=TIMEOUT).raise_for_status()
+
+        # 移除一个标签
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/tags/remove", json={"tags": ["紧急"]}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "重要" in data["tags"]
+        assert "技术评审" in data["tags"]
+        assert "紧急" not in data["tags"]
+
+    def test_search_rooms_by_tags(self, test_room):
+        """搜索房间（按标签过滤）"""
+        room_id = test_room["room_id"]
+
+        # 设置标签
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags", json={"tags": ["重要", "技术评审"]}, timeout=TIMEOUT).raise_for_status()
+
+        # 按标签搜索
+        resp = httpx.get(f"{API_BASE}/rooms/search", params={"q": "测试", "tags": "重要"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tags"] == ["重要"]
+        # 验证返回的房间包含标签
+        if data["count"] > 0:
+            assert "重要" in data["rooms"][0].get("tags", [])
+
+    def test_room_tags_room_not_found(self):
+        """房间标签（房间不存在）"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/tags", timeout=TIMEOUT)
+        assert resp.status_code == 404
 
 
 if __name__ == "__main__":

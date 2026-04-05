@@ -22,8 +22,27 @@ export const getPlan = (planId: string) =>
 export const listPlans = () =>
   api.get('/plans')
 
+export const searchPlans = (query: string, params?: { status?: string; limit?: number; offset?: number }) =>
+  api.get('/plans/search', { params: { q: query, ...params } })
+
+export const searchRooms = (query: string, params?: { plan_id?: string; phase?: string; tags?: string; limit?: number; offset?: number }) =>
+  api.get('/rooms/search', { params: { q: query, ...params } })
+
 export const getRoomsByPlan = (planId: string) =>
   api.get(`/plans/${planId}/rooms`)
+
+// Room Tags
+export const getRoomTags = (roomId: string) =>
+  api.get(`/rooms/${roomId}/tags`)
+
+export const updateRoomTags = (roomId: string, tags: string[]) =>
+  api.patch(`/rooms/${roomId}/tags`, { tags })
+
+export const addRoomTags = (roomId: string, tags: string[]) =>
+  api.post(`/rooms/${roomId}/tags/add`, { tags })
+
+export const removeRoomTags = (roomId: string, tags: string[]) =>
+  api.post(`/rooms/${roomId}/tags/remove`, { tags })
 
 // Rooms
 export const getRoom = (roomId: string) =>
@@ -518,6 +537,35 @@ export const deleteRoomTemplate = (templateId: string) =>
 
 export const createRoomFromTemplate = (planId: string, templateId: string, data?: { topic?: string; version?: string }) =>
   api.post(`/plans/${planId}/rooms/from-template/${templateId}`, data)
+
+// Step 68: Plan Template API
+export const createPlanTemplate = (data: {
+  name: string;
+  description?: string;
+  plan_content?: Record<string, any>;
+  tags?: string[];
+  is_shared?: boolean;
+}) => api.post('/plan-templates', data)
+
+export const listPlanTemplates = (params?: { tag?: string; is_shared?: boolean; created_by?: string; search?: string }) =>
+  api.get('/plan-templates', { params })
+
+export const getPlanTemplate = (templateId: string) =>
+  api.get(`/plan-templates/${templateId}`)
+
+export const updatePlanTemplate = (templateId: string, data: Partial<{
+  name: string;
+  description: string;
+  plan_content: Record<string, any>;
+  tags: string[];
+  is_shared: boolean;
+}>) => api.patch(`/plan-templates/${templateId}`, data)
+
+export const deletePlanTemplate = (templateId: string) =>
+  api.delete(`/plan-templates/${templateId}`)
+
+export const createPlanFromTemplate = (templateId: string, data?: { title?: string; topic?: string }) =>
+  api.post(`/plan-templates/${templateId}/create-plan`, data)
 
 // Step 65: Task Time Tracking API
 export const createTimeEntry = (planId: string, version: string, taskId: string, data: {

@@ -67,6 +67,69 @@ async def list_plans() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+async def search_plans(query: str, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    """
+    搜索 Plans by title or topic
+    """
+    async with get_connection() as conn:
+        # Build the query with optional status filter
+        sql = """
+            SELECT * FROM plans 
+            WHERE (title ILIKE $1 OR topic ILIKE $1)
+        """
+        params = [f"%{query}%"]
+        
+        if status:
+            sql += f" AND status = ${len(params) + 1}"
+            params.append(status)
+        
+        sql += f" ORDER BY created_at DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        params.extend([limit, offset])
+        
+        rows = await conn.fetch(sql, *params)
+        return [dict(r) for r in rows]
+
+
+async def search_rooms(
+    query: str,
+    plan_id: Optional[str] = None,
+    phase: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """
+    搜索 Rooms by topic, optionally filtered by plan_id, phase, and tags.
+    """
+    async with get_connection() as conn:
+        sql = """
+            SELECT r.*, COUNT(p.participant_id) as participant_count
+            FROM rooms r
+            LEFT JOIN participants p ON r.room_id = p.room_id AND p.is_active = TRUE
+            WHERE r.topic ILIKE $1
+        """
+        params = [f"%{query}%"]
+
+        if plan_id:
+            sql += f" AND r.plan_id = ${len(params) + 1}"
+            params.append(plan_id)
+
+        if phase:
+            sql += f" AND r.phase = ${len(params) + 1}"
+            params.append(phase)
+
+        # Tags 过滤 - 使用数组重叠操作符 &&
+        if tags:
+            sql += f" AND r.tags && ${len(params) + 1}"
+            params.append(tags)
+
+        sql += f" GROUP BY r.room_id ORDER BY r.created_at DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        params.extend([limit, offset])
+
+        rows = await conn.fetch(sql, *params)
+        return [dict(r) for r in rows]
+
+
 async def copy_plan(
     original_plan_id: str,
     new_plan_id: str,
@@ -2177,6 +2240,137 @@ async def delete_room_template(template_id: str) -> bool:
     async with get_connection() as conn:
         result = await conn.execute(
             "DELETE FROM room_templates WHERE template_id = $1",
+            template_id,
+        )
+        return result == "DELETE 1"
+
+
+# Step 68: Plan Template CRUD
+async def create_plan_template(
+    template_id: str,
+    name: str,
+    description: Optional[str] = None,
+    plan_content: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    created_by: Optional[str] = None,
+    is_shared: bool = False,
+) -> Dict[str, Any]:
+    """创建计划模板"""
+    content_json = json.dumps(plan_content or {})
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO plan_templates (template_id, name, description, plan_content, tags, created_by, is_shared, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+            RETURNING *
+            """,
+            template_id, name, description, content_json, tags or [], created_by, is_shared,
+        )
+        return dict(row) if row else {}
+
+
+async def list_plan_templates(
+    tag: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+    created_by: Optional[str] = None,
+    search: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """列出计划模板"""
+    conditions = []
+    params = []
+    idx = 1
+
+    if tag:
+        conditions.append(f"$1 = ANY(tags)")
+        params.append(tag)
+        idx += 1
+    if is_shared is not None:
+        conditions.append(f"is_shared = ${idx}")
+        params.append(is_shared)
+        idx += 1
+    if created_by:
+        conditions.append(f"created_by = ${idx}")
+        params.append(created_by)
+        idx += 1
+    if search:
+        conditions.append(f"(name ILIKE ${idx} OR description ILIKE ${idx})")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order = "ORDER BY created_at DESC"
+
+    async with get_connection() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM plan_templates {where} {order}",
+            *params
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_plan_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """获取单个计划模板"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM plan_templates WHERE template_id = $1",
+            template_id,
+        )
+        return dict(row) if row else None
+
+
+async def update_plan_template(
+    template_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    plan_content: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    is_shared: Optional[bool] = None,
+) -> Optional[Dict[str, Any]]:
+    """更新计划模板"""
+    fields = []
+    params = []
+    idx = 1
+
+    if name is not None:
+        fields.append(f"name = ${idx}")
+        params.append(name)
+        idx += 1
+    if description is not None:
+        fields.append(f"description = ${idx}")
+        params.append(description)
+        idx += 1
+    if plan_content is not None:
+        fields.append(f"plan_content = ${idx}")
+        params.append(json.dumps(plan_content))
+        idx += 1
+    if tags is not None:
+        fields.append(f"tags = ${idx}")
+        params.append(tags)
+        idx += 1
+    if is_shared is not None:
+        fields.append(f"is_shared = ${idx}")
+        params.append(is_shared)
+        idx += 1
+
+    if not fields:
+        return await get_plan_template(template_id)
+
+    fields.append("updated_at = NOW()")
+    params.append(template_id)
+
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE plan_templates SET {', '.join(fields)} WHERE template_id = ${idx} RETURNING *",
+            *params
+        )
+        return dict(row) if row else None
+
+
+async def delete_plan_template(template_id: str) -> bool:
+    """删除计划模板"""
+    async with get_connection() as conn:
+        result = await conn.execute(
+            "DELETE FROM plan_templates WHERE template_id = $1",
             template_id,
         )
         return result == "DELETE 1"
