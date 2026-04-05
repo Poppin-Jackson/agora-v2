@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.28 | 日期：2026-04-05（Step 75 - Action Items UI）
+> 版本：v2.29 | 日期：2026-04-05（Step 76 - Room Meeting Minutes UI）
 > 版本：v2.26 | 日期：2026-04-05（Step 73 - Participant Activity Dashboard）
 > 版本：v2.25 | 日期：2026-04-05（Step 72 - Dashboard Stats UI）
 > 版本：v2.23 | 日期：2026-04-05（Step 70 - Dashboard Statistics API）
@@ -1600,4 +1600,39 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 75
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 76 (2026-04-05)
+**版本**: v2.29 | **迭代周期**: 13分钟自动触发
+
+### Plan
+完善 Room Meeting Minutes UI（会议纪要生成与查看）
+
+### Do
+问题：后端 `/rooms/{room_id}/meeting-minutes/generate` API 和 `listRoomMeetingMinutes` 前端函数已存在，但 Room 视图缺少：
+1. 生成会议纪要的 UI 入口（按钮 + Modal）
+2. 进入房间时自动加载已有会议纪要列表
+3. Room 侧边栏显示会议纪要列表
+
+修复：
+1. **修改 `enterRoom` 函数**：进入房间时自动调用 `loadRoomMeetingMinutes(roomId)`
+2. **Room 侧边栏新增「📝 会议纪要」区块**：
+   - 显示该房间的会议纪要列表（最多5条）
+   - 点击纪要卡片打开详情 Modal
+   - 「生成」按钮打开生成 Modal
+   - 显示纪要数量统计
+3. **新增「生成会议纪要」Modal**：
+   - 标题输入（可选）
+   - 复选框：包含决策要点/行动项/阶段时间线/消息记录
+   - 生成/取消按钮
+4. **CSS 样式**：`.meeting-minutes-row` / `.minutes-row-title` / `.minutes-row-meta` / `.sidebar-more` / `.generate-meeting-minutes-modal`
+
+### Check
+- ✅ docker-compose build web 成功
+- ✅ npm run build 成功（78 modules, 314.88 kB）
+- ✅ pytest 171 tests passed
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 76
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

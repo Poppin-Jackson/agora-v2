@@ -720,3 +720,19 @@ export const generateMeetingMinutes = (roomId: string, data?: {
   include_timeline?: boolean;
   include_messages?: boolean;
 }) => api.post(`/rooms/${roomId}/meeting-minutes/generate`, data || {})
+
+// ── Room Watch ─────────────────────────────────────────────────────────
+export const watchRoom = (roomId: string, data: { user_id: string; user_name?: string }) =>
+  api.post(`/rooms/${roomId}/watch`, data)
+
+export const listRoomWatchers = (roomId: string) =>
+  api.get(`/rooms/${roomId}/watchers`)
+
+export const unwatchRoom = (roomId: string, userId: string) =>
+  api.delete(`/rooms/${roomId}/watch?user_id=${encodeURIComponent(userId)}`)
+
+export const getUserWatchedRooms = (userId: string) =>
+  api.get(`/users/${encodeURIComponent(userId)}/watched-rooms`)
+
+export const isRoomWatched = (roomId: string, userId: string) =>
+  api.get(`/rooms/${roomId}/watch/status?user_id=${encodeURIComponent(userId)}`)

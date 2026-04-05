@@ -383,6 +383,26 @@ class MeetingMinutesGenerate(BaseModel):
 
 
 # ========================
+# Room Watcher 模型
+# ========================
+
+class RoomWatcherCreate(BaseModel):
+    """关注讨论室"""
+    user_id: str = Field(..., min_length=1)
+    user_name: Optional[str] = None
+
+
+class RoomWatcherResponse(BaseModel):
+    """关注记录响应"""
+    watch_id: str
+    room_id: str
+    plan_id: Optional[str]
+    user_id: str
+    user_name: Optional[str]
+    watched_at: str
+
+
+# ========================
 # Room Template 模型
 # ========================
 
@@ -3389,6 +3409,91 @@ async def remove_room_tags(room_id: str, data: RoomTagRemoveRequest):
     # 内存回退
     _rooms[room_id]["tags"] = remaining_tags
     return {"room_id": room_id, "tags": remaining_tags}
+
+
+# ========================
+# Room Watch API (Step 77)
+# 用户关注讨论室，接收活动通知
+# ========================
+
+@app.post("/rooms/{room_id}/watch", status_code=201)
+async def watch_room(room_id: str, data: RoomWatcherCreate):
+    """
+    关注指定讨论室
+    """
+    # 确保 room 存在
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    room = _rooms[room_id]
+    plan_id = room.get("plan_id")
+
+    watcher = await crud.create_room_watcher(
+        room_id=room_id,
+        plan_id=plan_id,
+        user_id=data.user_id,
+        user_name=data.user_name,
+    )
+    if not watcher:
+        raise HTTPException(status_code=500, detail="Failed to watch room")
+
+    return watcher
+
+
+@app.get("/rooms/{room_id}/watchers")
+async def list_room_watchers(room_id: str):
+    """
+    列出讨论室的所有关注者
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    watchers = await crud.list_room_watchers(room_id)
+    return {"room_id": room_id, "watchers": watchers, "count": len(watchers)}
+
+
+@app.delete("/rooms/{room_id}/watch")
+async def unwatch_room(room_id: str, user_id: str = Query(...)):
+    """
+    取消关注讨论室
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    deleted = await crud.delete_room_watcher(room_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Watch record not found")
+
+    return {"room_id": room_id, "user_id": user_id, "status": "unwatched"}
+
+
+@app.get("/users/{user_id}/watched-rooms")
+async def get_user_watched_rooms(user_id: str):
+    """
+    获取用户关注的所有讨论室
+    """
+    watched = await crud.get_user_watched_rooms(user_id)
+    return {"user_id": user_id, "watched_rooms": watched, "count": len(watched)}
+
+
+@app.get("/rooms/{room_id}/watch/status")
+async def is_room_watched(room_id: str, user_id: str = Query(...)):
+    """
+    检查用户是否关注了指定讨论室
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    watched = await crud.is_room_watched(room_id, user_id)
+    return {"room_id": room_id, "user_id": user_id, "watched": watched}
 
 
 # ========================

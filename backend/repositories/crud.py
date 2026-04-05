@@ -3262,3 +3262,125 @@ async def delete_meeting_minutes(meeting_minutes_id: str) -> bool:
             del _meeting_minutes[(rid, mid)]
             return True
     return False
+
+
+# ── In-memory room watchers store ───────────────────────────────────────
+_room_watchers: dict[str, dict] = {}  # watch_id -> record
+
+
+async def create_room_watcher(room_id: str, user_id: str, user_name: str | None = None, plan_id: str | None = None) -> dict | None:
+    """关注讨论室（同一用户对同一房间不重复）"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO room_watchers (room_id, plan_id, user_id, user_name)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (room_id, user_id) DO UPDATE
+                SET user_name = EXCLUDED.user_name, watched_at = NOW()
+                RETURNING *
+            """, room_id, plan_id, user_id, user_name)
+            record = dict(row)
+            _room_watchers[str(row["watch_id"])] = record
+            return record
+    except Exception as e:
+        logger.warning(f"[CRUD] create_room_watcher DB failed: {e}")
+    # Memory fallback
+    for wid, rec in _room_watchers.items():
+        if rec["room_id"] == room_id and rec["user_id"] == user_id:
+            rec["watched_at"] = datetime.utcnow().isoformat()
+            if user_name:
+                rec["user_name"] = user_name
+            return rec
+    wid = str(uuid.uuid4())
+    record = {
+        "watch_id": wid,
+        "room_id": room_id,
+        "plan_id": plan_id or "",
+        "user_id": user_id,
+        "user_name": user_name,
+        "watched_at": datetime.utcnow().isoformat(),
+    }
+    _room_watchers[wid] = record
+    return record
+
+
+async def list_room_watchers(room_id: str) -> list[dict]:
+    """列出讨论室的所有关注者"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM room_watchers WHERE room_id = $1 ORDER BY watched_at DESC",
+                room_id
+            )
+            records = [dict(row) for row in rows]
+            for row in rows:
+                _room_watchers[str(row["watch_id"])] = dict(row)
+            return records
+    except Exception as e:
+        logger.warning(f"[CRUD] list_room_watchers DB failed: {e}")
+    # Memory fallback
+    return [rec for rec in _room_watchers.values() if rec["room_id"] == room_id]
+
+
+async def delete_room_watcher(room_id: str, user_id: str) -> bool:
+    """取消关注讨论室"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM room_watchers WHERE room_id = $1 AND user_id = $2",
+                room_id, user_id
+            )
+            if result == "DELETE 1":
+                for wid, rec in list(_room_watchers.items()):
+                    if rec["room_id"] == room_id and rec["user_id"] == user_id:
+                        del _room_watchers[wid]
+                return True
+    except Exception as e:
+        logger.warning(f"[CRUD] delete_room_watcher DB failed: {e}")
+    # Memory fallback
+    for wid, rec in list(_room_watchers.items()):
+        if rec["room_id"] == room_id and rec["user_id"] == user_id:
+            del _room_watchers[wid]
+            return True
+    return False
+
+
+async def get_user_watched_rooms(user_id: str) -> list[dict]:
+    """获取用户关注的所有讨论室"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM room_watchers WHERE user_id = $1 ORDER BY watched_at DESC",
+                user_id
+            )
+            records = [dict(row) for row in rows]
+            for row in rows:
+                _room_watchers[str(row["watch_id"])] = dict(row)
+            return records
+    except Exception as e:
+        logger.warning(f"[CRUD] get_user_watched_rooms DB failed: {e}")
+    # Memory fallback
+    return [rec for rec in _room_watchers.values() if rec["user_id"] == user_id]
+
+
+async def is_room_watched(room_id: str, user_id: str) -> bool:
+    """检查用户是否关注了指定讨论室"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM room_watchers WHERE room_id = $1 AND user_id = $2",
+                room_id, user_id
+            )
+            return row is not None
+    except Exception as e:
+        logger.warning(f"[CRUD] is_room_watched DB failed: {e}")
+    # Memory fallback
+    return any(
+        rec["room_id"] == room_id and rec["user_id"] == user_id
+        for rec in _room_watchers.values()
+    )

@@ -131,6 +131,11 @@ import api, {
   updateMeetingMinutes,
   deleteMeetingMinutes,
   generateMeetingMinutes,
+  watchRoom,
+  listRoomWatchers,
+  unwatchRoom,
+  getUserWatchedRooms,
+  isRoomWatched,
 } from './api'
 
 // ─── View State ──────────────────────────────────────────
@@ -554,6 +559,10 @@ const roomTagsForm = reactive({
 const roomTagsLoading = ref(false)
 const showNotifications = ref(false)
 const currentUser = reactive({ user_id: 'user-1', name: '访客', level: 5 })
+
+// ─── Room Watch State ─────────────────────────────────────
+const isWatchingRoom = ref(false)
+const roomWatchLoading = ref(false)
 
 const notificationTypeLabel: Record<string, string> = {
   task_assigned: '📋 任务分配',
@@ -2540,6 +2549,49 @@ async function handleUpdateRoomTags(tags: string[]) {
   }
 }
 
+// ─── Room Watch Functions ────────────────────────────────────
+
+async function loadWatchStatus() {
+  if (!currentRoom.value) return
+  try {
+    const res = await isRoomWatched(currentRoom.value.room_id, currentUser.user_id)
+    isWatchingRoom.value = res.data?.watched || false
+  } catch (e) {
+    isWatchingRoom.value = false
+  }
+}
+
+async function handleWatchRoom() {
+  if (!currentRoom.value) return
+  roomWatchLoading.value = true
+  try {
+    await watchRoom(currentRoom.value.room_id, {
+      user_id: currentUser.user_id,
+      user_name: currentUser.name,
+    })
+    isWatchingRoom.value = true
+  } catch (e) {
+    console.error('watch room failed', e)
+    alert('关注失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    roomWatchLoading.value = false
+  }
+}
+
+async function handleUnwatchRoom() {
+  if (!currentRoom.value) return
+  roomWatchLoading.value = true
+  try {
+    await unwatchRoom(currentRoom.value.room_id, currentUser.user_id)
+    isWatchingRoom.value = false
+  } catch (e) {
+    console.error('unwatch room failed', e)
+    alert('取消关注失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    roomWatchLoading.value = false
+  }
+}
+
 function getTaskTitle(taskId: string): string {
   const task = planTasks.value.find(t => t.task_id === taskId)
   return task ? (task.task_number ? `${task.task_number} ${task.title}` : task.title) : ''
@@ -2739,6 +2791,16 @@ async function enterRoom(roomId: string) {
     if (problemStates.includes(phaseRes.data?.current_phase)) {
       await loadProblemState(roomId, planId)
     }
+
+    // Step 76: Load room meeting minutes
+    try {
+      await loadRoomMeetingMinutes(roomId)
+    } catch (e) {
+      console.error('loadRoomMeetingMinutes failed', e)
+    }
+
+    // Step 77: Load room watch status
+    await loadWatchStatus()
 
     // Load hierarchical review / converging context for HIERARCHICAL_REVIEW or CONVERGING phase
     const initPhase = phaseRes.data?.current_phase
@@ -5898,6 +5960,50 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Generate Meeting Minutes Modal -->
+      <div v-if="showGenerateMeetingMinutes" class="modal-overlay" @click.self="showGenerateMeetingMinutes = false">
+        <div class="modal-content generate-meeting-minutes-modal">
+          <div class="modal-header">
+            <h3>📝 生成会议纪要</h3>
+            <button class="modal-close" @click="showGenerateMeetingMinutes = false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>标题（可选）</label>
+              <input v-model="generateMeetingMinutesForm.title" class="input" placeholder="留空则使用默认标题" />
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="generateMeetingMinutesForm.include_decisions" />
+                包含决策要点
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="generateMeetingMinutesForm.include_action_items" />
+                包含行动项
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="generateMeetingMinutesForm.include_timeline" />
+                包含阶段时间线
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="generateMeetingMinutesForm.include_messages" />
+                包含消息记录
+              </label>
+            </div>
+            <div class="modal-actions">
+              <button class="btn-primary" @click="handleGenerateMeetingMinutes(currentRoom?.room_id)">生成</button>
+              <button class="btn-secondary" @click="showGenerateMeetingMinutes = false">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Room Templates Modal -->
       <div v-if="showRoomTemplates" class="modal-overlay" @click.self="showRoomTemplates = false">
         <div class="modal-content room-templates-modal">
@@ -6938,6 +7044,32 @@ onUnmounted(() => {
             <div class="info-row">
               <span class="info-label">版本</span>
               <span class="info-value">{{ currentRoom?.version || currentRoom?.current_version || '-' }}</span>
+            </div>
+          </div>
+
+          <!-- Meeting Minutes Section in Room Sidebar -->
+          <div class="sidebar-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">📝 会议纪要 ({{ roomMeetingMinutes.length }})</div>
+              <button class="btn-add-participant" @click="showGenerateMeetingMinutes = true">
+                生成
+              </button>
+            </div>
+            <div v-if="roomMeetingMinutes.length === 0" class="sidebar-empty">暂无会议纪要</div>
+            <div
+              v-for="minutes in roomMeetingMinutes.slice(0, 5)"
+              :key="minutes.meeting_minutes_id"
+              class="meeting-minutes-row"
+              @click="openMeetingMinutesDetail(minutes)"
+            >
+              <div class="minutes-row-title">{{ minutes.title }}</div>
+              <div class="minutes-row-meta">
+                <span v-if="minutes.created_by">{{ minutes.created_by }}</span>
+                <span v-if="minutes.duration_minutes">{{ minutes.duration_minutes }}分钟</span>
+              </div>
+            </div>
+            <div v-if="roomMeetingMinutes.length > 5" class="sidebar-more">
+              还有 {{ roomMeetingMinutes.length - 5 }} 条纪要...
             </div>
           </div>
         </aside>
@@ -9423,6 +9555,7 @@ body {
 .sidebar-title-row { display: flex; align-items: center; justify-content: space-between; }
 .sidebar-title { color: #4a4a6a; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .sidebar-empty { color: #3a3a5a; font-size: 0.85rem; padding: 8px 0; }
+.sidebar-more { color: #4a4a6a; font-size: 0.78rem; padding: 6px 0; text-align: center; }
 
 /* Step 63: Phase Timeline */
 .phase-timeline-count { color: #5a5a8a; font-size: 0.72rem; }
@@ -11431,5 +11564,42 @@ body {
   max-width: 700px;
   max-height: 80vh;
   overflow-y: auto;
+}
+
+/* Step 76: Meeting Minutes Room Sidebar */
+.meeting-minutes-row {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #1a1a2e;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.meeting-minutes-row:hover {
+  background: #252540;
+}
+.minutes-row-title {
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.minutes-row-meta {
+  font-size: 0.75rem;
+  color: #64748b;
+  display: flex;
+  gap: 8px;
+}
+.generate-meeting-minutes-modal {
+  max-width: 480px;
+}
+.generate-meeting-minutes-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.generate-meeting-minutes-modal .form-group {
+  margin-bottom: 0;
 }
 </style>
