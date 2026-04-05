@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.41 | 日期：2026-04-06（Step 90 - Debate State API 测试覆盖）
+> 版本：v2.44 | 日期：2026-04-06（Step 93 - Approval API 边界测试覆盖）
 > 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
 > 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
 > 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
@@ -2115,4 +2115,167 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 90
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 91 (2026-04-06)
+**版本**: v2.42 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Task Comments API 和 Task Checkpoints API 添加完整测试覆盖
+
+背景：Task Comments（评论）和 Task Checkpoints（检查点）是任务管理的重要功能，分别支持：
+- Comments：团队成员对任务进行讨论和反馈
+- Checkpoints：任务分解为可验证的里程碑节点
+
+此前这两个 API 没有任何专用测试类，属于测试空白。
+
+### Do
+新增两个测试类（共18个测试用例）：
+
+**`TestTaskComments`**（8个测试用例）：
+1. `test_create_comment` — 创建任务评论，验证所有字段
+2. `test_create_comment_without_author_level` — author_level 可选
+3. `test_list_comments` — 列出任务所有评论
+4. `test_update_comment` — 更新评论内容
+5. `test_delete_comment` — 删除评论并验证消失
+6. `test_comment_not_found` — 假 UUID 返回 404
+7. `test_comment_empty_content` — 空内容返回 422
+8. `test_comment_task_not_found` — API 只验证 plan 不验证 task_id（实际返回 201）
+
+**`TestTaskCheckpoints`**（10个测试用例）：
+1. `test_create_checkpoint` — 创建检查点，默认 pending 状态
+2. `test_list_checkpoints` — 列出任务所有检查点
+3. `test_update_checkpoint_status` — 更新为 completed，设置 completed_at
+4. `test_update_checkpoint_name` — 更新检查点名称
+5. `test_update_checkpoint_pending_from_completed` — completed 可改回 pending
+6. `test_delete_checkpoint` — 删除检查点并验证消失
+7. `test_checkpoint_not_found` — 假 UUID 返回 404
+8. `test_checkpoint_empty_name` — 空名称返回 422
+9. `test_checkpoint_invalid_status` — 无效状态返回 422
+10. `test_checkpoint_task_not_found` — API 只验证 plan 不验证 task_id（实际返回 201）
+
+辅助函数 `_create_plan_and_task()`：创建计划+任务，返回 (plan_id, version, task_id)。
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestTaskComments 8/8 passed
+- ✅ pytest TestTaskCheckpoints 10/10 passed
+- ✅ pytest 262/262 passed（+18 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 91
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 92 (2026-04-06)
+**版本**: v2.43 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Plan Tags API 添加完整测试覆盖
+
+背景：Plan Tags API（`/plans/{plan_id}/tags`）允许对计划进行标签化管理，是计划分类和筛选的基础功能。与 Room Tags API 结构完全对称（GET/PATCH/POST add/POST remove），但 Room Tags 有 20 个测试，Plan Tags 之前完全没有测试覆盖。
+
+### Do
+新增 `TestPlanTags` 测试类（11个测试用例）：
+
+1. **`test_get_plan_tags_empty`** — 获取计划标签（空标签）
+   - 新建计划标签为空数组 `[]`
+   - 验证返回格式 `{"plan_id": "...", "tags": []}`
+
+2. **`test_update_plan_tags`** — 更新计划标签（替换模式）
+   - `PATCH /plans/{plan_id}/tags` 全量替换标签
+   - 验证返回标签列表与设置一致
+
+3. **`test_add_plan_tags`** — 添加计划标签
+   - 先设置 `["重要"]`，再添加 `["紧急"]`
+   - 验证两个标签都存在于最终列表
+
+4. **`test_add_plan_tags_deduplication`** — 添加计划标签（去重）
+   - 添加已存在的 `["重要"]` + `["新标签"]`
+   - 验证 `"重要"` 只出现一次
+
+5. **`test_remove_plan_tags`** — 移除计划标签
+   - 设置 `["重要", "紧急", "技术评审"]`，移除 `["紧急"]`
+   - 验证 `"紧急"` 不在最终列表，`"重要"` 和 `"技术评审"` 保留
+
+6. **`test_search_plans_by_tags`** — 搜索计划（按标签过滤）
+   - 设置 `["重要", "技术评审"]`
+   - `GET /plans/search?q=测试&tags=重要`
+   - 验证返回的计划包含 `"重要"` 标签
+
+7. **`test_plan_tags_plan_not_found`** — 计划不存在返回404
+   - `GET /plans/{fake_id}/tags` → 404
+
+8. **`test_update_plan_tags_not_found`** — 更新标签（计划不存在返回404）
+   - `PATCH /plans/{fake_id}/tags` → 404
+
+9. **`test_add_plan_tags_not_found`** — 添加标签（计划不存在返回404）
+   - `POST /plans/{fake_id}/tags/add` → 404
+
+10. **`test_remove_plan_tags_not_found`** — 移除标签（计划不存在返回404）
+    - `POST /plans/{fake_id}/tags/remove` → 404
+
+11. **`test_plan_tags_persistence`** — 计划标签持久化验证
+    - 设置 `["初始标签"]` → GET 验证 → 更新为 `["新标签1", "新标签2"]` → GET 验证最新值
+    - 确保标签读写一致，无数据丢失
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestPlanTags 11/11 passed
+- ✅ pytest 273/273 passed（+11 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 92（版本 v2.43）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 93 (2026-04-06)
+**版本**: v2.44 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Approval API 添加边界测试覆盖
+
+背景：Approval API（L1-L7审批流）是计划审批的核心功能，但只有4个基础测试（启动/层级说明/L7通过/完整链），缺少边界测试覆盖。与 Step 84-92 的补全模式对齐。
+
+### Do
+新增 6 个 Approval 边界测试用例（TestApprovalFlow 类从 4 → 10 个）：
+
+1. **`test_approval_not_found`** — 审批不存在的计划返回404
+   - GET /approval → 404
+   - POST /approval/start → 404
+   - GET /approval/levels 是静态描述，不验证plan存在
+
+2. **`test_approval_reject`** — L7审批拒绝，审批流状态变为rejected
+   - 启动审批流后，L7执行 reject action
+   - 验证 new_current_level=7（停在L7），status=rejected
+
+3. **`test_approval_invalid_level_action`** — 在审批链中不存在的层级执行操作返回400
+   - 正常启动审批流（L1-L7都在链中）
+   - 尝试在L8执行操作（非有效层级）
+   - 验证返回 400 + Level not in approval chain
+
+4. **`test_approval_without_start`** — 未启动审批流就执行操作返回400
+   - 未调用 /approval/start，直接尝试在L7执行审批
+   - 验证返回 400 + Approval flow not found
+
+5. **`test_approval_skip_levels`** — 跳过某些层级审批
+   - 启动时 skip_levels=[7, 6]
+   - 验证 levels 中不包含 7 和 6
+   - 验证 L5 在 levels 中且状态为 pending
+
+6. **`test_approval_already_approved`** — 对已完成的审批流再次操作仍然成功
+   - 完成全部 L7→L1 审批，验证 plan.status=approved
+   - 再次尝试 L7 approve（API不阻止重审）
+   - 验证返回 200，new_status=fully_approved
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestApprovalFlow 10/10 passed
+- ✅ pytest 279/279 passed（+6 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 93（版本 v2.44）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
