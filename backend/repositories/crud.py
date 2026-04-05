@@ -167,15 +167,13 @@ async def copy_plan(
         row = await conn.fetchrow(
             """
             INSERT INTO plans (plan_id, plan_number, title, topic, requirements, hierarchy_id,
-                               current_version, versions, purpose, mode, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+                               current_version, versions, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
             RETURNING *
             """,
             new_plan_id, new_plan_number, new_title, orig["topic"],
             orig.get("requirements"), orig.get("hierarchy_id", "default"),
             "v1.0", json.dumps(["v1.0"]),
-            orig.get("purpose", "initial_discussion"),
-            orig.get("mode", "hierarchical"),
         )
 
     # 复制 constraints
@@ -2623,7 +2621,6 @@ async def create_time_entry(
     notes: str = "",
 ) -> dict:
     """创建时间记录并累加到任务的 actual_hours"""
-    from ..db import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():

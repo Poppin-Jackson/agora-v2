@@ -1,5 +1,8 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.39 | 日期：2026-04-05（Step 87 - Decisions API 完整测试覆盖）
+> 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
+> 版本：v2.37 | 日期：2026-04-05（Step 85 - Risks API 边界测试覆盖）
 > 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
 > 版本：v2.35 | 日期：2026-04-05（Step 83 - Meeting Minutes Generate 边界测试覆盖）
 > 版本：v2.34 | 日期：2026-04-05（Step 82 - Edict Acknowledgment API 测试覆盖）
@@ -1865,6 +1868,101 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - 更新 SPEC.md 完成 Step 84
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 
+## Step 85 (2026-04-05)
+**版本**: v2.37 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Risks API 添加边界测试覆盖
+
+背景：Risks API（Version 风险）已有 create/list/update/delete 覆盖，但缺少 `test_risk_not_found` 边界测试。与 Step 84 Stakeholders API 补全模式对齐。
+
+### Do
+新增 `test_risk_not_found` 测试用例（TestRisks 类从 2 → 3 个）：
+
+- **`test_risk_not_found`** — 风险不存在返回404
+  - 创建测试计划后使用假 UUID 测试 GET/PATCH/DELETE
+  - 验证返回 404
+  - 验证在不存在的计划中获取风险也返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRisks 3/3 passed
+- ✅ pytest 206/206 passed（+1 new test）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 85
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 86 (2026-04-05)
+**版本**: v2.38 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Constraints API 添加边界测试覆盖
+
+背景：Constraints API（Plan 约束）已有 create/list/get/update/delete 覆盖，但缺少 `test_constraint_not_found` 边界测试。与 Step 84/85 补全模式对齐。
+
+### Do
+新增 `test_constraint_not_found` 测试用例（TestConstraints 类从 2 → 3 个）：
+
+- **`test_constraint_not_found`** — 约束不存在返回404
+  - 创建真实计划，使用假 UUID 测试 GET/PATCH/DELETE
+  - 验证返回 404 + "Constraint not found"
+  - PATCH 端点先检查 plan 存在，再检查 constraint 存在
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestConstraints 3/3 passed
+- ✅ pytest 207/207 passed（+1 new test）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 86
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 87 (2026-04-05)
+**版本**: v2.39 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Decisions API 添加完整测试覆盖
+
+背景：Decisions API 是计划版本的核心功能（创建/列出/获取/更新/删除决策），但没有任何专用的测试类。与 Step 84/85/86 补全模式对齐，填补测试空白。
+
+### Do
+新增 `TestDecisions` 测试类（6个测试用例）：
+
+1. **`test_create_decision`** — 创建决策（含完整字段：title/decision_text/description/rationale/alternatives_considered/agreed_by/disagreed_by/decided_by）
+   - 验证返回 201，decision_id/decision_number/plan_id/version 字段正确
+   - 验证 agreed_by 和 alternatives_considered 为 list 类型
+
+2. **`test_list_decisions`** — 列出版本所有决策
+   - 创建2个决策后验证列表长度 ≥2
+   - 验证返回格式 `{"decisions": [...]}`
+
+3. **`test_get_decision`** — 获取单个决策详情
+   - 验证返回格式 `{"decision": {...}}`，字段完整
+
+4. **`test_update_decision`** — 更新决策字段
+   - 更新 title/rationale/agreed_by，验证更新生效
+
+5. **`test_decision_not_found`** — 决策不存在返回404
+   - GET 不存在的决策 → 404
+   - PATCH 不存在的决策 → 404
+
+6. **`test_decision_in_version_plan_json`** — 验证决策出现在版本 plan.json 中
+   - 创建决策后调用 `GET /plans/{plan_id}/versions/{version}/plan.json`
+   - 验证 decisions 列表包含新创建的 decision_id
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestDecisions 6/6 passed
+- ✅ pytest 213/213 passed（+6 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 87
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
 ## Step 82 (2026-04-05)
 **版本**: v2.34 | **迭代周期**: 13分钟自动触发
 
@@ -1892,3 +1990,32 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - 更新 SPEC.md 完成 Step 82
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 
+
+## Step 88 (2026-04-05)
+**版本**: v2.39 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Plan Copy API 添加测试覆盖，同时修复 `crud.copy_plan` 数据库写入Bug
+
+背景：Plan Copy API 允许复制计划（不含版本级内容），但完全没有测试覆盖。同时 `crud.copy_plan` 函数存在 Bug：尝试向 `plans` 表写入不存在的 `purpose` 和 `mode` 字段（这两个字段属于 `rooms` 表）。
+
+### Do
+1. 新增 `TestPlanCopy` 测试类（4个测试用例）：
+   - `test_copy_plan` — 基本复制功能
+   - `test_copy_plan_not_found` — 复制不存在的计划返回404
+   - `test_copy_plan_creates_room` — 复制时自动创建配套 Room
+   - `test_copy_plan_preserves_metadata` — 复制保留元数据
+
+2. 修复 `backend/repositories/crud.py` 中 `copy_plan` 函数：
+   - 移除 INSERT 语句中的 `purpose` 和 `mode` 字段（它们属于 rooms 表，不是 plans 表）
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ docker-compose build api 成功
+- ✅ pytest TestPlanCopy 4/4 passed
+- ✅ pytest 217/217 passed（+4 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 88
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

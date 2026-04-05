@@ -2387,6 +2387,40 @@ class TestConstraints:
         resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/constraints/{constraint_id}", timeout=TIMEOUT)
         assert resp.status_code == 204
 
+    def test_constraint_not_found(self):
+        """测试约束不存在返回404"""
+        # 创建真实计划，但使用假constraint_id
+        plan_payload = {"title": "约束不存在测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        fake_constraint_id = str(uuid.uuid4())
+
+        # 获取不存在的约束
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/constraints/{fake_constraint_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Constraint not found"
+
+        # 更新不存在的约束（先检查plan存在，返回Constraint not found）
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/constraints/{fake_constraint_id}",
+            json={"value": "999"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Constraint not found"
+
+        # 删除不存在的约束
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/constraints/{fake_constraint_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Constraint not found"
+
 
 class TestStakeholders:
     """测试 Stakeholders API (Plan 干系人)"""
@@ -2556,6 +2590,36 @@ class TestRisks:
         # 删除风险
         resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/versions/{version}/risks/{risk_id}", timeout=TIMEOUT)
         assert resp.status_code == 204
+
+    def test_risk_not_found(self):
+        """测试风险不存在返回404"""
+        plan_payload = {"title": "测试-风险404", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+        fake_id = str(uuid.uuid4())
+
+        # 获取不存在的风险
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/{version}/risks/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+        # 更新不存在的风险
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/risks/{fake_id}",
+            json={"status": "mitigated"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+        # 删除不存在的风险
+        resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/versions/{version}/risks/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+        # 在不存在的计划中获取风险也应返回404
+        fake_plan = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan}/versions/{version}/risks/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
 
 
 class TestPlanJsonEnrichment:
@@ -5372,6 +5436,419 @@ class TestRoomWatch:
         """取消未关注的讨论室返回404"""
         room_id = room_info["room_id"]
         resp = httpx.delete(f"{API_BASE}/rooms/{room_id}/watch?user_id=never-watched-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+
+# ========================
+# Plan Copy API (Step 88)
+# ========================
+
+class TestPlanCopy:
+    """Plan Copy API 测试 — 复制 Plan 元数据 + constraints + stakeholders"""
+
+    def test_copy_plan(self, room_info):
+        """测试复制 Plan 基本功能"""
+        plan_id = room_info["plan_id"]
+
+        # 复制计划
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201, f"复制失败: {resp.text}"
+        data = resp.json()
+
+        # 验证返回结构
+        assert "plan" in data
+        assert "room" in data
+        new_plan = data["plan"]
+        new_room = data["room"]
+
+        # 验证新计划字段
+        assert new_plan["plan_id"] != plan_id  # 新ID不同
+        assert new_plan["title"].startswith("Copy of ")
+        assert new_plan["current_version"] == "v1.0"
+        assert new_plan["status"] == "initiated"
+
+        # 验证新房间字段
+        assert new_room["room_id"] is not None
+        assert new_room["plan_id"] == new_plan["plan_id"]
+        assert new_room["phase"] == "selecting"
+
+    def test_copy_plan_not_found(self):
+        """测试复制不存在的 Plan 返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(f"{API_BASE}/plans/{fake_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Plan not found"
+
+    def test_copy_plan_creates_room(self, room_info):
+        """测试复制 Plan 时自动创建配套 Room"""
+        plan_id = room_info["plan_id"]
+
+        # 复制计划
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        new_plan_id = data["plan"]["plan_id"]
+        new_room_id = data["room"]["room_id"]
+
+        # 验证新计划可以获取
+        resp = httpx.get(f"{API_BASE}/plans/{new_plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+        # 验证新房间可以获取
+        resp = httpx.get(f"{API_BASE}/rooms/{new_room_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        room = resp.json()
+        assert room["plan_id"] == new_plan_id
+
+    def test_copy_plan_preserves_metadata(self, room_info):
+        """测试复制 Plan 保留元数据（topic/requirements/status）"""
+        plan_id = room_info["plan_id"]
+
+        # 复制计划
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        new_plan = data["plan"]
+
+        # 验证标题前缀
+        assert new_plan["title"].startswith("Copy of ")
+        # topic 应该被保留
+        assert "topic" in new_plan
+
+
+# ========================
+# Decisions API (Step 87)
+# ========================
+
+class TestDecisions:
+    """Decisions API 测试（完整CRUD + 边界覆盖）"""
+
+    def test_create_decision(self, room_info):
+        """创建决策"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+        payload = {
+            "title": "采用微服务架构",
+            "decision_text": "经过技术选型讨论，决定采用微服务架构进行系统重构",
+            "description": "技术选型决策",
+            "rationale": "微服务可独立部署、扩展性强、技术栈灵活",
+            "alternatives_considered": ["单体架构", "SOA架构"],
+            "agreed_by": ["架构师张", "CTO李"],
+            "disagreed_by": [],
+            "decided_by": "技术总监王",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201, f"创建决策失败: {resp.text}"
+        data = resp.json()
+        assert "decision_id" in data
+        decision = data["decision"]
+        assert decision["title"] == "采用微服务架构"
+        assert decision["decision_text"] == "经过技术选型讨论，决定采用微服务架构进行系统重构"
+        assert decision["decision_number"] == 1
+        assert decision["plan_id"] == plan_id
+        assert decision["version"] == version
+        assert decision["agreed_by"] == ["架构师张", "CTO李"]
+        assert decision["alternatives_considered"] == ["单体架构", "SOA架构"]
+
+    def test_list_decisions(self, room_info):
+        """列出版本所有决策"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+
+        # 创建2个决策
+        for title in ["决策A-数据库选型", "决策B-部署策略"]:
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+                json={"title": title, "decision_text": f"这是决策：{title}"},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "decisions" in data
+        assert len(data["decisions"]) >= 2
+
+    def test_get_decision(self, room_info):
+        """获取单个决策详情"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+
+        # 创建决策
+        create_resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json={"title": "获取单个测试", "decision_text": "用于测试获取单个决策"},
+            timeout=TIMEOUT
+        )
+        assert create_resp.status_code == 201
+        decision_id = create_resp.json()["decision_id"]
+
+        # 获取单个决策
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["decision"]["decision_id"] == decision_id
+        assert data["decision"]["title"] == "获取单个测试"
+        assert data["decision"]["decision_text"] == "用于测试获取单个决策"
+
+    def test_update_decision(self, room_info):
+        """更新决策字段"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+
+        # 创建决策
+        create_resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json={"title": "原始标题", "decision_text": "原始内容"},
+            timeout=TIMEOUT
+        )
+        assert create_resp.status_code == 201
+        decision_id = create_resp.json()["decision_id"]
+
+        # 更新决策
+        update_payload = {
+            "title": "更新后标题",
+            "decision_text": "更新后内容",
+            "rationale": "更新理由：需求变更",
+            "agreed_by": ["更新同意者"],
+        }
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            json=update_payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["decision"]["title"] == "更新后标题"
+        assert data["decision"]["rationale"] == "更新理由：需求变更"
+
+    def test_decision_not_found(self, room_info):
+        """决策不存在返回404"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+        fake_decision_id = str(uuid.uuid4())
+
+        # 获取不存在的决策
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{fake_decision_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Decision not found"
+
+        # 更新不存在的决策
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{fake_decision_id}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_decision_in_version_plan_json(self, room_info):
+        """验证决策出现在版本 plan.json 中"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+
+        # 创建决策
+        create_resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json={"title": "计划JSON测试决策", "decision_text": "验证出现在plan.json中"},
+            timeout=TIMEOUT
+        )
+        assert create_resp.status_code == 201
+        decision_id = create_resp.json()["decision_id"]
+
+        # 获取版本 plan.json
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/{version}/plan.json", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "decisions" in data
+        decision_ids = [d["decision_id"] for d in data["decisions"]]
+        assert decision_id in decision_ids
+
+
+class TestTaskTimeEntries:
+    """Step 89: Task Time Entries API Tests — 工时记录 CRUD + 边界"""
+
+    def _create_task_with_plan(self):
+        """创建计划+任务，返回 (plan_id, version, task_id)"""
+        plan_payload = {
+            "title": "工时测试计划",
+            "topic": "测试工时记录功能",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        task_payload = {
+            "title": "实现登录模块",
+            "owner_level": 4,
+            "owner_role": "L4_PLANNER",
+            "priority": "medium",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks",
+            json=task_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, "v1.0", task_id
+
+    def test_create_time_entry(self):
+        """创建时间记录"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {
+            "user_name": "张工",
+            "hours": 2.5,
+            "description": "完成登录页面前端开发",
+            "notes": "包括响应式布局",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201, f"创建时间记录失败: {resp.text}"
+        data = resp.json()
+        assert data["user_name"] == "张工"
+        assert data["hours"] == 2.5
+        assert data["description"] == "完成登录页面前端开发"
+        assert data["notes"] == "包括响应式布局"
+        assert data["task_id"] == task_id
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        assert "time_entry_id" in data
+        assert "created_at" in data
+
+    def test_list_time_entries(self):
+        """列出任务的所有时间记录"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        # 创建 2 条时间记录
+        for i, hours in enumerate([1.0, 3.5]):
+            entry_payload = {
+                "user_name": f"工程师{i+1}",
+                "hours": hours,
+                "description": f"工作内容 {i+1}",
+            }
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+                json=entry_payload,
+                timeout=TIMEOUT,
+            )
+            assert resp.status_code == 201
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        entries = resp.json()
+        assert isinstance(entries, list)
+        assert len(entries) >= 2
+        # 验证字段结构
+        for entry in entries:
+            assert "time_entry_id" in entry
+            assert "hours" in entry
+            assert "user_name" in entry
+
+    def test_get_time_summary(self):
+        """获取任务时间汇总"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        # 创建 3 条时间记录
+        entries_data = [
+            {"user_name": "张工", "hours": 2.0},
+            {"user_name": "张工", "hours": 3.0},
+            {"user_name": "李工", "hours": 1.5},
+        ]
+        for entry in entries_data:
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+                json=entry,
+                timeout=TIMEOUT,
+            )
+            assert resp.status_code == 201
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-summary",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total_hours" in data
+        assert "entry_count" in data
+        assert "contributor_count" in data
+        assert data["total_hours"] == 6.5, f"期望 6.5，实际 {data['total_hours']}"
+        assert data["entry_count"] == 3
+        assert data["contributor_count"] == 2  # 张工 + 李工
+
+    def test_delete_time_entry(self):
+        """删除时间记录"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        # 创建时间记录
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json={"user_name": "王工", "hours": 1.0, "description": "待删除"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        entry_id = resp.json()["time_entry_id"]
+
+        # 删除
+        resp = httpx.delete(f"{API_BASE}/time-entries/{entry_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除（列表中不再出现）
+        list_resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            timeout=TIMEOUT,
+        )
+        entry_ids = [e["time_entry_id"] for e in list_resp.json()]
+        assert entry_id not in entry_ids
+
+    def test_time_entry_not_found(self):
+        """时间记录不存在返回404"""
+        fake_entry_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/time-entries/{fake_entry_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_time_summary_empty_task(self):
+        """无时间记录的任务返回零值汇总"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-summary",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_hours"] == 0
+        assert data["entry_count"] == 0
+        assert data["contributor_count"] == 0
+
+    def test_task_not_found_time_entry(self):
+        """任务不存在时创建时间记录返回404"""
+        plan_id, version, _ = self._create_task_with_plan()
+        fake_task_id = str(uuid.uuid4())
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}/time-entries",
+            json={"user_name": "张工", "hours": 1.0},
+            timeout=TIMEOUT,
+        )
         assert resp.status_code == 404
 
 
