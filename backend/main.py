@@ -1008,6 +1008,8 @@ class ActivityType(str, Enum):
     TASK_UPDATED = "task.updated"
     TASK_COMPLETED = "task.completed"
     TASK_PROGRESS_UPDATED = "task.progress_updated"
+    TASK_TIME_ENTRY_ADDED = "task.time_entry_added"
+    TASK_TIME_ENTRY_DELETED = "task.time_entry_deleted"
     # Decision actions
     DECISION_CREATED = "decision.created"
     DECISION_UPDATED = "decision.updated"
@@ -10061,10 +10063,10 @@ async def create_time_entry_endpoint(
             _tasks[key][task_id]["actual_hours"] = total["total_hours"]
         await log_activity(
             plan_id=plan_id,
-            action_type="task.time_entry_added",
-            description=f"任务 {task.get('title', task_id[:8])} 添加时间记录 {data.hours}h",
-            performed_by=data.user_name or "system",
-            related_id=task_id,
+            action_type=ActivityType.TASK_TIME_ENTRY_ADDED,
+            details={"message": f"任务 {task.get('title', task_id[:8])} 添加时间记录 {data.hours}h"},
+            actor_name=data.user_name or "system",
+            target_id=task_id,
             version=version,
         )
         return entry
@@ -10133,7 +10135,7 @@ async def get_time_summary_endpoint(plan_id: str, version: str, task_id: str):
         return {"total_hours": total, "entry_count": len(entries), "contributor_count": len(set(e.get("user_name", "") for e in entries))}
 
 
-@app.delete("/time-entries/{entry_id}")
+@app.delete("/time-entries/{entry_id}", status_code=204)
 async def delete_time_entry_endpoint(entry_id: str):
     """
     删除时间记录
@@ -10159,13 +10161,13 @@ async def delete_time_entry_endpoint(entry_id: str):
             del _time_entries[task_id][entry_id]
         await log_activity(
             plan_id=plan_id,
-            action_type="task.time_entry_deleted",
-            description=f"删除了时间记录 {entry_id[:8]}",
-            performed_by="system",
-            related_id=task_id,
+            action_type=ActivityType.TASK_TIME_ENTRY_DELETED,
+            details={"message": f"删除了时间记录 {entry_id[:8]}"},
+            actor_name="system",
+            target_id=task_id,
             version=version,
         )
-        return {"deleted": True}
+        return None
     except HTTPException:
         raise
     except Exception as e:
@@ -10174,7 +10176,7 @@ async def delete_time_entry_endpoint(entry_id: str):
         for tid, entries in _time_entries.items():
             if entry_id in entries:
                 del entries[entry_id]
-                return {"deleted": True}
+                return None
         raise HTTPException(status_code=404, detail="Time entry not found")
 
 

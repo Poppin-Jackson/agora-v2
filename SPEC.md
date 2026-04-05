@@ -1,8 +1,8 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.39 | 日期：2026-04-05（Step 87 - Decisions API 完整测试覆盖）
+> 版本：v2.40 | 日期：2026-04-05（Step 89 - Plan/Room Search API 测试覆盖）
+> 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
 > 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
-> 版本：v2.37 | 日期：2026-04-05（Step 85 - Risks API 边界测试覆盖）
 > 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
 > 版本：v2.35 | 日期：2026-04-05（Step 83 - Meeting Minutes Generate 边界测试覆盖）
 > 版本：v2.34 | 日期：2026-04-05（Step 82 - Edict Acknowledgment API 测试覆盖）
@@ -2018,4 +2018,38 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 88
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 89 (2026-04-05)
+**版本**: v2.40 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Plan Search 和 Room Search API 添加测试覆盖
+
+背景：Plan Search API（`GET /plans/search`）和 Room Search API（`GET /rooms/search`）分别在 Step 66 和 Step 67 实现，但一直没有专用测试类。Decisions/Stakeholders/Risks 等 API 已在 Step 84-87 补全测试，搜索 API 测试空白需要填补。
+
+### Do
+新增 `TestPlanSearch` 测试类（5个测试用例）：
+- `test_search_plans_basic` — 基本搜索（按标题关键词匹配）
+- `test_search_plans_by_topic` — 按topic字段搜索
+- `test_search_plans_by_status` — 按status过滤
+- `test_search_plans_pagination` — 分页（limit/offset）
+- `test_search_plans_empty_query` — 空查询返回422验证错误
+
+新增 `TestRoomSearch` 测试类（5个测试用例）：
+- `test_search_rooms_basic` — 基本搜索（按topic关键词匹配）
+- `test_search_rooms_by_plan` — 按plan_id过滤
+- `test_search_rooms_by_phase` — 按phase过滤（含阶段转换）
+- `test_search_rooms_pagination` — 分页（limit/offset）
+- `test_search_rooms_empty_query` — 空查询返回422验证错误
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestPlanSearch 5/5 passed
+- ✅ pytest TestRoomSearch 5/5 passed
+- ✅ pytest 234/234 passed（+10 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 89
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

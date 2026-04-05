@@ -5675,6 +5675,150 @@ class TestDecisions:
         assert decision_id in decision_ids
 
 
+class TestPlanSearch:
+    """Step 89: Plan Search API Tests — 计划搜索功能"""
+
+    def test_search_plans_basic(self, ensure_api):
+        """搜索计划（基本搜索）"""
+        # 创建两个不同标题的计划
+        plan_payload1 = {"title": "智慧城市顶层设计", "topic": "城市规划与数字化转型", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload1, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan1_id = resp.json()["plan"]["plan_id"]
+
+        plan_payload2 = {"title": "教育信息化改革", "topic": "智慧校园建设方案", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload2, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 搜索关键词
+        resp = httpx.get(f"{API_BASE}/plans/search?q=智慧", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "plans" in data
+        assert data["query"] == "智慧"
+        # 两个计划标题都含"智慧"
+        plan_ids = [p["plan_id"] for p in data["plans"]]
+        assert plan1_id in plan_ids
+
+    def test_search_plans_by_topic(self, ensure_api):
+        """按topic搜索计划"""
+        plan_payload = {"title": "医疗系统建设", "topic": "区域医疗数据中心", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/plans/search?q=医疗", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["plans"]) >= 1
+
+    def test_search_plans_by_status(self, ensure_api):
+        """按status过滤搜索结果"""
+        plan_payload = {"title": "状态过滤测试计划", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/plans/search?q=状态过滤&status=active", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        for p in data["plans"]:
+            assert p.get("status") == "active"
+
+    def test_search_plans_pagination(self, ensure_api):
+        """搜索结果分页"""
+        for i in range(3):
+            resp = httpx.post(
+                f"{API_BASE}/plans",
+                json={"title": f"分页测试计划{i}", "topic": "测试分页", "requirements": []},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/plans/search?q=分页测试&limit=1&offset=0", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 1
+        assert len(data["plans"]) <= 1
+
+        resp2 = httpx.get(f"{API_BASE}/plans/search?q=分页测试&limit=1&offset=1", timeout=TIMEOUT)
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["offset"] == 1
+
+    def test_search_plans_empty_query(self, ensure_api):
+        """空查询返回422验证错误"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=", timeout=TIMEOUT)
+        assert resp.status_code == 422  # min_length=1
+
+
+class TestRoomSearch:
+    """Step 89: Room Search API Tests — 讨论室搜索功能"""
+
+    def test_search_rooms_basic(self, ensure_api):
+        """搜索讨论室（基本搜索）"""
+        plan_payload = {"title": "房间搜索测试", "topic": "测试讨论室", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=讨论", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "rooms" in data
+        assert data["query"] == "讨论"
+
+    def test_search_rooms_by_plan(self, ensure_api):
+        """按plan_id过滤搜索结果"""
+        plan_payload = {"title": "房间按计划过滤", "topic": "特定计划房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        plan_payload2 = {"title": "第二个计划", "topic": "其他计划房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload2, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=房间&plan_id={plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        for room in data["rooms"]:
+            assert room.get("plan_id") == plan_id
+
+    def test_search_rooms_by_phase(self, ensure_api):
+        """按phase过滤搜索结果"""
+        plan_payload = {"title": "阶段过滤测试", "topic": "THINKING阶段房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", json={"phase": "THINKING"}, timeout=TIMEOUT)
+
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=阶段&phase=THINKING", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        for room in data["rooms"]:
+            assert room.get("phase") == "THINKING"
+
+    def test_search_rooms_pagination(self, ensure_api):
+        """搜索结果分页"""
+        for i in range(3):
+            resp = httpx.post(
+                f"{API_BASE}/plans",
+                json={"title": f"分页房间测试{i}", "topic": "测试", "requirements": []},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=分页&limit=1&offset=0", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 1
+        assert len(data["rooms"]) <= 1
+
+    def test_search_rooms_empty_query(self, ensure_api):
+        """空查询返回422验证错误"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=", timeout=TIMEOUT)
+        assert resp.status_code == 422  # min_length=1
+
+
 class TestTaskTimeEntries:
     """Step 89: Task Time Entries API Tests — 工时记录 CRUD + 边界"""
 
