@@ -154,6 +154,34 @@ class TestHealth:
         assert "timestamp" in body
 
 
+class TestDashboard:
+    """Dashboard Stats API"""
+
+    def test_get_dashboard_stats_structure(self, ensure_api):
+        """验证仪表盘统计数据结构"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        # 验证所有必需字段存在
+        assert "total_plans" in body
+        assert "total_rooms" in body
+        assert "rooms_by_phase" in body
+        assert "recent_plans" in body
+        assert "recent_rooms" in body
+        assert "recent_activities" in body
+        assert "pending_action_items" in body
+        assert "pending_approvals" in body
+        # 验证字段类型
+        assert isinstance(body["total_plans"], int)
+        assert isinstance(body["total_rooms"], int)
+        assert isinstance(body["rooms_by_phase"], dict)
+        assert isinstance(body["recent_plans"], list)
+        assert isinstance(body["recent_rooms"], list)
+        assert isinstance(body["recent_activities"], list)
+        assert isinstance(body["pending_action_items"], int)
+        assert isinstance(body["pending_approvals"], int)
+
+
 class TestPlanCreation:
     """Plan创建 + 自动Room创建"""
 
@@ -4258,6 +4286,281 @@ class TestRoomTags:
         fake_id = str(uuid.uuid4())
         resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/tags", timeout=TIMEOUT)
         assert resp.status_code == 404
+
+
+class TestActionItems:
+    """Step 70: Action Items API Tests"""
+
+    @pytest.fixture
+    def test_room(self):
+        """创建一个测试房间"""
+        plan_data = {
+            "title": "Action Items Test Plan",
+            "topic": "用于测试行动项的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        return data["room"]
+
+    def test_create_action_item(self, test_room):
+        """创建行动项"""
+        room_id = test_room["room_id"]
+        item_data = {
+            "title": "完成技术方案文档",
+            "description": "需要输出完整的技术方案文档，包含架构设计",
+            "assignee": "张三",
+            "assignee_level": 4,
+            "priority": "high",
+            "created_by": "李四",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items", json=item_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "完成技术方案文档"
+        assert data["description"] == "需要输出完整的技术方案文档，包含架构设计"
+        assert data["assignee"] == "张三"
+        assert data["assignee_level"] == 4
+        assert data["status"] == "open"
+        assert data["priority"] == "high"
+        assert "action_item_id" in data
+        assert "created_at" in data
+
+    def test_list_room_action_items(self, test_room):
+        """列出讨论室行动项"""
+        room_id = test_room["room_id"]
+        # 创建两个行动项
+        for i in range(2):
+            httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+                json={"title": f"行动项 {i+1}", "priority": "medium"},
+                timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/action-items", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["count"] >= 2
+
+    def test_list_action_items_by_status(self, test_room):
+        """按状态筛选行动项"""
+        room_id = test_room["room_id"]
+        # 创建一个 open 行动项
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待完成的任务", "status": "open"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+        # 标记为已完成
+        httpx.patch(f"{API_BASE}/action-items/{item_id}",
+            json={"status": "completed"}, timeout=TIMEOUT).raise_for_status()
+
+        # 只获取 open
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/action-items",
+            params={"status": "open"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        for item in data["items"]:
+            assert item["status"] == "open"
+
+    def test_get_action_item(self, test_room):
+        """获取单个行动项"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "获取测试", "priority": "low"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.get(f"{API_BASE}/action-items/{item_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["action_item_id"] == item_id
+        assert data["title"] == "获取测试"
+
+    def test_update_action_item(self, test_room):
+        """更新行动项"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "原始标题", "priority": "low"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
+            json={"title": "更新后标题", "status": "in_progress", "priority": "high"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "更新后标题"
+        assert data["status"] == "in_progress"
+        assert data["priority"] == "high"
+
+    def test_complete_action_item(self, test_room):
+        """完成行动项"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待完成"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.post(f"{API_BASE}/action-items/{item_id}/complete", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["completed_at"] is not None
+
+    def test_delete_action_item(self, test_room):
+        """删除行动项"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待删除"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.delete(f"{API_BASE}/action-items/{item_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除
+        resp = httpx.get(f"{API_BASE}/action-items/{item_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_action_item_not_found(self):
+        """行动项不存在"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/action-items/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_plan_action_items(self, test_room):
+        """列出计划的所有行动项"""
+        room_id = test_room["room_id"]
+        plan_id = test_room["plan_id"]
+
+        httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "计划行动项"}, timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/action-items", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert data["count"] >= 1
+
+
+class TestVersionComparison:
+    """Step 71: Plan Version Comparison API Tests"""
+
+    @pytest.fixture
+    def test_plan(self):
+        """创建一个测试计划"""
+        plan_data = {
+            "title": "Version Compare Test Plan",
+            "topic": "用于测试版本比较的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        return data["plan"]
+
+    def test_compare_versions_invalid_from_version(self, test_plan):
+        """比较版本：源版本不存在"""
+        plan_id = test_plan["plan_id"]
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/compare",
+            params={"from_version": "v99.0", "to_version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 400
+        assert "不存在" in resp.text
+
+    def test_compare_versions_invalid_to_version(self, test_plan):
+        """比较版本：目标版本不存在"""
+        plan_id = test_plan["plan_id"]
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v99.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 400
+        assert "不存在" in resp.text
+
+    def test_compare_same_version(self, test_plan):
+        """比较版本：相同版本应返回空差异"""
+        plan_id = test_plan["plan_id"]
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["from_version"] == "v1.0"
+        assert data["to_version"] == "v1.0"
+        assert data["summary"]["tasks"]["added"] == 0
+        assert data["summary"]["tasks"]["removed"] == 0
+        assert data["summary"]["requirements"]["added"] == 0
+        assert data["summary"]["requirements"]["removed"] == 0
+
+    def test_compare_with_new_version_tasks_added(self, test_plan):
+        """比较版本：新版本添加了任务"""
+        plan_id = test_plan["plan_id"]
+        version = test_plan["current_version"]
+
+        # 创建新版本（v1.0 -> v1.1）
+        new_tasks = [
+            {
+                "title": "新任务1",
+                "description": "这是一个新任务",
+                "priority": "high",
+                "owner_id": "agent-1",
+                "owner_level": 5,
+            }
+        ]
+        version_data = {
+            "parent_version": version,
+            "type": "enhancement",
+            "description": "添加新任务",
+            "tasks": new_tasks,
+        }
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/versions", json=version_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_version = resp.json()["version"]
+
+        # 比较 v1.0 和 v1.1
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/compare",
+            params={"from_version": version, "to_version": new_version},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["from_version"] == version
+        assert data["to_version"] == new_version
+        assert data["summary"]["tasks"]["added"] >= 1
+        # 找到新增的任务
+        added_tasks = [t for t in data["tasks_added"] if t.get("title") == "新任务1"]
+        assert len(added_tasks) == 1
+
+    def test_compare_versions_response_structure(self, test_plan):
+        """比较版本：验证响应结构完整"""
+        plan_id = test_plan["plan_id"]
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # 验证完整字段
+        assert "plan_id" in data
+        assert "from_version" in data
+        assert "to_version" in data
+        assert "tasks_added" in data
+        assert "tasks_removed" in data
+        assert "tasks_modified" in data
+        assert "requirements_added" in data
+        assert "requirements_removed" in data
+        assert "decisions_added" in data
+        assert "decisions_removed" in data
+        assert "edicts_added" in data
+        assert "edicts_removed" in data
+        assert "issues_added" in data
+        assert "issues_removed" in data
+        assert "risks_added" in data
+        assert "risks_removed" in data
+        assert "summary" in data
+        # 验证 summary 结构
+        for key in ["tasks", "requirements", "decisions", "edicts", "issues", "risks"]:
+            assert key in data["summary"]
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.24 | 日期：2026-04-05（Step 71 - Version Comparison Bug Fix）
+> 版本：v2.23 | 日期：2026-04-05（Step 70 - Dashboard Statistics API）
 > 版本：v2.22 | 日期：2026-04-05（Step 69 - Room Tags System）
 > 版本：v2.21 | 日期：2026-04-05（Step 68 - Plan Template System）
 > 版本：v2.20 | 日期：2026-04-05（Step 67 - Room Search API）
@@ -1390,4 +1392,62 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 69
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 70 (2026-04-05)
+**版本**: v2.23 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Dashboard Statistics API（仪表盘统计数据）
+
+### Do
+- 添加 `get_dashboard_stats` CRUD 函数（backend/repositories/crud.py）
+  - 返回全局概览：total_plans, active_plans, total_rooms, rooms_by_phase
+  - 返回待处理数据：pending_action_items, pending_approvals
+  - 返回最近项目：recent_plans(5), recent_rooms(5), recent_activities(10)
+  - PostgreSQL 优先，异常时返回空数据兜底
+- 添加 Pydantic 模型（backend/main.py）
+- 添加 Dashboard API 端点（backend/main.py）
+  - GET /dashboard/stats — 获取仪表盘统计数据
+- 添加前端 API 函数（frontend/src/api/index.ts）
+  - getDashboardStats
+- 添加 1 个 E2E 测试（TestDashboard）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 166 tests passed（+1 新测试）
+
+### Act
+- 更新 SPEC.md 完成 Step 70
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 71 (2026-04-05)
+**版本**: v2.24 | **迭代周期**: 13分钟自动触发
+
+### Plan
+修复 Version Comparison API 的多个运行时错误
+
+### Do
+修复 5 个 bug：
+1. **Bug 1**: `_get_version_risks` 在 main.py 中定义两次（line 6500 sync + line 10203 async），Python 使用最后定义（async），但 `compare_plan_versions` 调用时未 await
+   - 修复：`from_risks = await _get_version_risks(...)` + `to_risks = await _get_version_risks(...)`
+2. **Bug 2**: `add_plan_version` 使用 `array_append(versions, $2)` 操作 JSONB 列，PostgreSQL 不支持
+   - 修复：`versions = versions || to_jsonb($2::text)`（crud.py line 215）
+3. **Bug 3**: `crud.create_task` 缺少多个参数（actual_hours/progress/status/blocked_by/started_at/completed_at），导致 `create_version` 时 DB 写入失败被静默忽略
+   - 修复：扩展 `create_task` 函数签名，增加全部缺失参数（crud.py）
+4. **Bug 4**: `_get_version_tasks`（line 10220）调用不存在的 `crud.get_tasks`
+   - 修复：改为 `crud.list_tasks`
+5. **Bug 5**: `_get_version_edicts`（line 10210）调用不存在的 `crud.get_edicts`
+   - 修复：改为 `crud.list_edicts`
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 171 tests passed（+3 previously failing tests now pass）
+
+### Act
+- 更新 SPEC.md 完成 Step 71
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

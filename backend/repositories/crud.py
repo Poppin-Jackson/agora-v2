@@ -4,12 +4,15 @@ CRUD 操作层 - 数据库持久化实现
 """
 import json
 import uuid
+import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from asyncpg import Pool, Record
 
 from db import get_pool, get_connection
+
+logger = logging.getLogger(__name__)
 
 
 # ========================
@@ -209,7 +212,7 @@ async def add_plan_version(plan_id: str, new_version: str) -> None:
             """
             UPDATE plans
             SET current_version = $2,
-                versions = array_append(versions, $2),
+                versions = versions || to_jsonb($2::text),
                 updated_at = NOW()
             WHERE plan_id = $1
             """,
@@ -724,8 +727,14 @@ async def create_task(
     priority: str = "medium",
     difficulty: str = "medium",
     estimated_hours: Optional[float] = None,
+    actual_hours: Optional[float] = None,
+    progress: float = 0.0,
+    status: str = "pending",
     dependencies: Optional[List[str]] = None,
+    blocked_by: Optional[List[str]] = None,
     deadline: Optional[str] = None,
+    started_at: Optional[str] = None,
+    completed_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """创建任务记录"""
     async with get_connection() as conn:
@@ -733,16 +742,20 @@ async def create_task(
             """
             INSERT INTO tasks (task_id, plan_id, version, task_number, title,
                               description, owner_id, owner_level, owner_role,
-                              priority, difficulty, estimated_hours, dependencies,
-                              deadline, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+                              priority, difficulty, estimated_hours, actual_hours,
+                              progress, status, dependencies, blocked_by,
+                              deadline, started_at, completed_at,
+                              created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW())
             RETURNING *
             """,
             task_id, plan_id, version, task_number, title,
             description, owner_id, owner_level, owner_role,
-            priority, difficulty, estimated_hours,
+            priority, difficulty, estimated_hours, actual_hours,
+            progress, status,
             json.dumps(dependencies or []),
-            deadline
+            json.dumps(blocked_by or []),
+            deadline, started_at, completed_at
         )
         return dict(row)
 
@@ -2525,3 +2538,294 @@ async def get_task_time_summary(task_id: str) -> dict:
             WHERE task_id = $1
         """, uuid.UUID(task_id) if isinstance(task_id, str) else task_id)
         return dict(row) if row else {"total_hours": 0, "entry_count": 0, "contributor_count": 0}
+
+
+# ── Step 70: Action Items ────────────────────────────────────────────────────
+
+_action_items: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (room_id, action_item_id) → item
+
+
+async def create_action_item(
+    room_id: str,
+    plan_id: str,
+    title: str,
+    description: str = "",
+    assignee: str = None,
+    assignee_level: int = None,
+    priority: str = "medium",
+    due_date: datetime = None,
+    created_by: str = None,
+) -> Dict[str, Any]:
+    """创建行动项"""
+    item_id = uuid.uuid4()
+    now = datetime.utcnow()
+    item = {
+        "action_item_id": str(item_id),
+        "room_id": str(room_id),
+        "plan_id": str(plan_id),
+        "title": title,
+        "description": description,
+        "assignee": assignee,
+        "assignee_level": assignee_level,
+        "status": "open",
+        "priority": priority,
+        "due_date": due_date.isoformat() if due_date else None,
+        "created_by": created_by,
+        "created_at": now.isoformat(),
+        "completed_at": None,
+        "converted_to_task_id": None,
+    }
+    try:
+        async with get_connection() as conn:
+            await conn.execute("""
+                INSERT INTO action_items
+                    (action_item_id, room_id, plan_id, title, description, assignee,
+                     assignee_level, status, priority, due_date, created_by, created_at)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $10, $11)
+            """, item_id, uuid.UUID(room_id), uuid.UUID(plan_id), title, description,
+                assignee, assignee_level, priority, due_date, created_by, now)
+        _action_items[(str(room_id), str(item_id))] = item
+    except Exception as e:
+        logger.warning(f"[CRUD] create_action_item DB failed, using memory: {e}")
+        _action_items[(str(room_id), str(item_id))] = item
+    return item
+
+
+async def list_action_items(room_id: str = None, plan_id: str = None,
+                              status: str = None) -> List[Dict[str, Any]]:
+    """列出行动项"""
+    items = []
+    # DB优先
+    try:
+        async with get_connection() as conn:
+            if room_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM action_items
+                    WHERE room_id = $1
+                    AND ($2::text IS NULL OR status = $2)
+                    ORDER BY created_at DESC
+                """, uuid.UUID(room_id), status)
+            elif plan_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM action_items
+                    WHERE plan_id = $1
+                    AND ($2::text IS NULL OR status = $2)
+                    ORDER BY created_at DESC
+                """, uuid.UUID(plan_id), status)
+            else:
+                rows = await conn.fetch("""
+                    SELECT * FROM action_items
+                    WHERE ($1::text IS NULL OR status = $1)
+                    ORDER BY created_at DESC
+                """, status)
+            items = [dict(row) for row in rows]
+    except Exception as e:
+        logger.warning(f"[CRUD] list_action_items DB failed: {e}")
+
+    # 内存兜底
+    for (rid, aid), item in _action_items.items():
+        if room_id and rid != str(room_id):
+            continue
+        if plan_id and item.get("plan_id") != str(plan_id):
+            continue
+        if status and item.get("status") != status:
+            continue
+        if item not in items:
+            items.append(item)
+    return items
+
+
+async def get_action_item(action_item_id: str) -> Optional[Dict[str, Any]]:
+    """获取单个行动项"""
+    try:
+        async with get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM action_items WHERE action_item_id = $1",
+                uuid.UUID(action_item_id)
+            )
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.warning(f"[CRUD] get_action_item DB failed: {e}")
+    return _action_items.get((None, str(action_item_id)))
+
+
+async def update_action_item(
+    action_item_id: str,
+    title: str = None,
+    description: str = None,
+    assignee: str = None,
+    assignee_level: int = None,
+    status: str = None,
+    priority: str = None,
+    due_date: datetime = None,
+) -> Optional[Dict[str, Any]]:
+    """更新行动项"""
+    item = await get_action_item(action_item_id)
+    if not item:
+        return None
+    updates = []
+    values = []
+    n = 1
+    if title is not None:
+        updates.append(f"title = ${n}"); values.append(title); n += 1
+    if description is not None:
+        updates.append(f"description = ${n}"); values.append(description); n += 1
+    if assignee is not None:
+        updates.append(f"assignee = ${n}"); values.append(assignee); n += 1
+    if assignee_level is not None:
+        updates.append(f"assignee_level = ${n}"); values.append(assignee_level); n += 1
+    if status is not None:
+        updates.append(f"status = ${n}"); values.append(status); n += 1
+        if status == "completed":
+            updates.append(f"completed_at = ${n}"); values.append(datetime.utcnow()); n += 1
+    if priority is not None:
+        updates.append(f"priority = ${n}"); values.append(priority); n += 1
+    if due_date is not None:
+        updates.append(f"due_date = ${n}"); values.append(due_date); n += 1
+    if not updates:
+        return item
+    values.append(uuid.UUID(action_item_id))
+    try:
+        async with get_connection() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE action_items SET {', '.join(updates)} "
+                f"WHERE action_item_id = ${n} RETURNING *",
+                *values
+            )
+            updated = dict(row) if row else None
+    except Exception as e:
+        logger.warning(f"[CRUD] update_action_item DB failed: {e}")
+        updated = None
+
+    if updated:
+        rid = updated.get("room_id")
+        _action_items[(str(rid), action_item_id)] = updated
+    else:
+        for (rid, aid), it in list(_action_items.items()):
+            if aid == action_item_id:
+                if title is not None: it["title"] = title
+                if description is not None: it["description"] = description
+                if assignee is not None: it["assignee"] = assignee
+                if assignee_level is not None: it["assignee_level"] = assignee_level
+                if status is not None:
+                    it["status"] = status
+                    if status == "completed": it["completed_at"] = datetime.utcnow().isoformat()
+                if priority is not None: it["priority"] = priority
+                if due_date is not None: it["due_date"] = due_date.isoformat()
+                updated = it
+                break
+    return updated
+
+
+async def delete_action_item(action_item_id: str) -> bool:
+    """删除行动项"""
+    found = False
+    for (rid, aid), item in list(_action_items.items()):
+        if aid == action_item_id:
+            del _action_items[(rid, aid)]
+            found = True
+            break
+    try:
+        async with get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM action_items WHERE action_item_id = $1",
+                uuid.UUID(action_item_id)
+            )
+        return True
+    except Exception as e:
+        logger.warning(f"[CRUD] delete_action_item DB failed: {e}")
+        return found
+
+
+# ========================
+# Dashboard Statistics
+# ========================
+
+async def get_dashboard_stats() -> Dict[str, Any]:
+    """
+    获取 Dashboard 统计数据
+    返回全局概览：计划数、房间数、各状态分布、最近项目等
+    """
+    try:
+        async with get_connection() as conn:
+            # 计划统计
+            total_plans = await conn.fetchval("SELECT COUNT(*) FROM plans")
+            active_plans = await conn.fetchval(
+                "SELECT COUNT(*) FROM plans WHERE status = 'active'"
+            )
+
+            # 房间统计
+            total_rooms = await conn.fetchval("SELECT COUNT(*) FROM rooms")
+            rooms_by_phase = await conn.fetch("""
+                SELECT phase, COUNT(*) as count
+                FROM rooms
+                WHERE phase IS NOT NULL
+                GROUP BY phase
+                ORDER BY count DESC
+            """)
+            rooms_by_phase_dict = {r["phase"]: r["count"] for r in rooms_by_phase}
+
+            # 最近计划（最近5个）
+            recent_plans = await conn.fetch("""
+                SELECT plan_id, plan_number, title, topic, status, created_at, updated_at
+                FROM plans
+                ORDER BY updated_at DESC
+                LIMIT 5
+            """)
+
+            # 最近房间（最近5个）
+            recent_rooms = await conn.fetch("""
+                SELECT room_id, room_number, topic, phase, plan_id, status, created_at, updated_at
+                FROM rooms
+                ORDER BY updated_at DESC
+                LIMIT 5
+            """)
+
+            # 最近活动（最近10个）
+            recent_activities = await conn.fetch("""
+                SELECT activity_id, action_type, description, actor_id, actor_name,
+                       plan_id, room_id, created_at
+                FROM activities
+                ORDER BY created_at DESC
+                LIMIT 10
+            """)
+
+            # 待处理行动项统计
+            pending_action_items = await conn.fetchval(
+                "SELECT COUNT(*) FROM action_items WHERE status != 'completed'"
+            )
+
+            # 待审批计划数
+            pending_approvals = await conn.fetchval("""
+                SELECT COUNT(*) FROM approval_flows
+                WHERE status IN ('pending', 'in_progress')
+            """)
+
+            return {
+                "total_plans": total_plans or 0,
+                "active_plans": active_plans or 0,
+                "total_rooms": total_rooms or 0,
+                "rooms_by_phase": rooms_by_phase_dict,
+                "pending_action_items": pending_action_items or 0,
+                "pending_approvals": pending_approvals or 0,
+                "recent_plans": [dict(r) for r in recent_plans],
+                "recent_rooms": [dict(r) for r in recent_rooms],
+                "recent_activities": [dict(r) for r in recent_activities],
+            }
+    except Exception as e:
+        logger.warning(f"[CRUD] get_dashboard_stats DB failed: {e}")
+        # 数据库不可用时返回空数据
+        return {
+            "total_plans": 0,
+            "active_plans": 0,
+            "total_rooms": 0,
+            "rooms_by_phase": {},
+            "pending_action_items": 0,
+            "pending_approvals": 0,
+            "recent_plans": [],
+            "recent_rooms": [],
+            "recent_activities": [],
+        }
+

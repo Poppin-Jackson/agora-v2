@@ -28,6 +28,10 @@ export const searchPlans = (query: string, params?: { status?: string; limit?: n
 export const searchRooms = (query: string, params?: { plan_id?: string; phase?: string; tags?: string; limit?: number; offset?: number }) =>
   api.get('/rooms/search', { params: { q: query, ...params } })
 
+// Dashboard
+export const getDashboardStats = () =>
+  api.get('/dashboard/stats')
+
 export const getRoomsByPlan = (planId: string) =>
   api.get(`/plans/${planId}/rooms`)
 
@@ -583,3 +587,7 @@ export const getTimeSummary = (planId: string, version: string, taskId: string) 
 
 export const deleteTimeEntry = (entryId: string) =>
   api.delete(`/time-entries/${entryId}`)
+
+// Step 71: Plan Version Comparison API
+export const comparePlanVersions = (planId: string, fromVersion: string, toVersion: string) =>
+  api.get(`/plans/${planId}/versions/compare`, { params: { from_version: fromVersion, to_version: toVersion } })

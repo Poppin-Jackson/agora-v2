@@ -300,6 +300,51 @@ class SpeechAdd(BaseModel):
 
 
 # ========================
+# Action Items (Step 70)
+# 来源: 08-Data-Models-Details.md §4.1 - 讨论室行动项
+# ========================
+
+class ActionItemCreate(BaseModel):
+    """创建行动项"""
+    title: str = Field(..., min_length=1, description="行动项标题")
+    description: str = ""
+    assignee: Optional[str] = None
+    assignee_level: Optional[int] = Field(None, ge=1, le=7)
+    priority: str = "medium"
+    due_date: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+
+class ActionItemUpdate(BaseModel):
+    """更新行动项"""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    assignee: Optional[str] = None
+    assignee_level: Optional[int] = Field(None, ge=1, le=7)
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    due_date: Optional[datetime] = None
+
+
+class ActionItemResponse(BaseModel):
+    """行动项响应"""
+    action_item_id: str
+    room_id: str
+    plan_id: str
+    title: str
+    description: str
+    assignee: Optional[str]
+    assignee_level: Optional[int]
+    status: str
+    priority: str
+    due_date: Optional[str]
+    created_by: Optional[str]
+    created_at: str
+    completed_at: Optional[str]
+    converted_to_task_id: Optional[str]
+
+
+# ========================
 # Room Template 模型
 # ========================
 
@@ -1948,6 +1993,15 @@ async def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/dashboard/stats")
+async def get_dashboard_stats():
+    """
+    获取 Dashboard 统计数据
+    返回全局概览：计划数、房间数、各状态分布、最近项目等
+    """
+    return await crud.get_dashboard_stats()
+
+
 def _is_duplicate_key_error(e: Exception, constraint_name: str) -> bool:
     """检测异常是否为指定约束的重复键错误"""
     err_str = str(e).lower()
@@ -3116,6 +3170,120 @@ async def remove_room_tags(room_id: str, data: RoomTagRemoveRequest):
     # 内存回退
     _rooms[room_id]["tags"] = remaining_tags
     return {"room_id": room_id, "tags": remaining_tags}
+
+
+# ========================
+# Action Items API (Step 70)
+# 来源: 08-Data-Models-Details.md §4.1 - 讨论室行动项
+# ========================
+
+
+@app.post("/rooms/{room_id}/action-items", status_code=201)
+async def create_action_item(room_id: str, data: ActionItemCreate):
+    """
+    为讨论室创建行动项
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    room = _rooms[room_id]
+    plan_id = room.get("plan_id")
+    if not plan_id:
+        raise HTTPException(status_code=400, detail="Room has no associated plan")
+
+    item = await crud.create_action_item(
+        room_id=room_id,
+        plan_id=plan_id,
+        title=data.title,
+        description=data.description,
+        assignee=data.assignee,
+        assignee_level=data.assignee_level,
+        priority=data.priority,
+        due_date=data.due_date,
+        created_by=data.created_by,
+    )
+    return item
+
+
+@app.get("/rooms/{room_id}/action-items")
+async def list_room_action_items(room_id: str, status: str = None):
+    """
+    列出讨论室的所有行动项
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    items = await crud.list_action_items(room_id=room_id, status=status)
+    return {"room_id": room_id, "status": status, "count": len(items), "items": items}
+
+
+@app.get("/plans/{plan_id}/action-items")
+async def list_plan_action_items(plan_id: str, status: str = None):
+    """
+    列出计划的所有行动项
+    """
+    items = await crud.list_action_items(plan_id=plan_id, status=status)
+    return {"plan_id": plan_id, "status": status, "count": len(items), "items": items}
+
+
+@app.get("/action-items/{action_item_id}")
+async def get_action_item(action_item_id: str):
+    """
+    获取单个行动项
+    """
+    item = await crud.get_action_item(action_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return item
+
+
+@app.patch("/action-items/{action_item_id}")
+async def update_action_item(action_item_id: str, data: ActionItemUpdate):
+    """
+    更新行动项
+    """
+    item = await crud.update_action_item(
+        action_item_id=action_item_id,
+        title=data.title,
+        description=data.description,
+        assignee=data.assignee,
+        assignee_level=data.assignee_level,
+        status=data.status,
+        priority=data.priority,
+        due_date=data.due_date,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return item
+
+
+@app.delete("/action-items/{action_item_id}", status_code=204)
+async def delete_action_item(action_item_id: str):
+    """
+    删除行动项
+    """
+    deleted = await crud.delete_action_item(action_item_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return Response(status_code=204)
+
+
+@app.post("/action-items/{action_item_id}/complete")
+async def complete_action_item(action_item_id: str):
+    """
+    将行动项标记为已完成
+    """
+    item = await crud.update_action_item(
+        action_item_id=action_item_id,
+        status="completed",
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return item
 
 
 @app.post("/rooms/{room_id}/participants")
@@ -5778,6 +5946,42 @@ class VersionCreate(BaseModel):
     decisions: List[dict] = Field(default_factory=list, description="新版本包含的决策列表")
 
 
+class VersionCompareRequest(BaseModel):
+    """版本比较请求"""
+    from_version: str = Field(..., description="源版本，如 v1.0")
+    to_version: str = Field(..., description="目标版本，如 v2.0")
+
+
+class TaskDiff(BaseModel):
+    """任务差异"""
+    task_id: Optional[str] = None
+    task_number: Optional[int] = None
+    title: str = ""
+    status: Optional[str] = None
+    change_type: str = ""  # added | removed | modified
+
+
+class VersionCompareResponse(BaseModel):
+    """版本比较响应"""
+    plan_id: str
+    from_version: str
+    to_version: str
+    tasks_added: List[dict] = Field(default_factory=list)
+    tasks_removed: List[dict] = Field(default_factory=list)
+    tasks_modified: List[dict] = Field(default_factory=list)
+    requirements_added: List[str] = Field(default_factory=list)
+    requirements_removed: List[str] = Field(default_factory=list)
+    decisions_added: List[dict] = Field(default_factory=list)
+    decisions_removed: List[dict] = Field(default_factory=list)
+    edicts_added: List[dict] = Field(default_factory=list)
+    edicts_removed: List[dict] = Field(default_factory=list)
+    issues_added: List[dict] = Field(default_factory=list)
+    issues_removed: List[dict] = Field(default_factory=list)
+    risks_added: List[dict] = Field(default_factory=list)
+    risks_removed: List[dict] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
+
+
 def _calculate_next_version(parent: str, vtype: str) -> str:
     """根据父版本和类型计算新版本号"""
     # 解析版本号，如 v1.3 -> (1, 3)
@@ -6108,6 +6312,194 @@ async def get_version_json(plan_id: str, version: str):
         "plan_update": plan_update,
         "resuming": resuming,
     }
+
+
+@app.get("/plans/{plan_id}/versions/compare")
+async def compare_plan_versions(
+    plan_id: str,
+    from_version: str = Query(..., description="源版本，如 v1.0"),
+    to_version: str = Query(..., description="目标版本，如 v2.0"),
+):
+    """
+    比较两个计划版本的差异
+    Step 71: Plan Version Comparison API
+
+    返回两个版本之间的差异：
+    - tasks: 新增/移除/修改的任务
+    - requirements: 新增/移除的需求
+    - decisions: 新增/移除的决策
+    - edicts: 新增/移除的圣旨
+    - issues: 新增/移除的问题
+    - risks: 新增/移除的风险
+    """
+    # 确保 plan 存在
+    if plan_id not in _plans:
+        await _sync_plan_to_memory(plan_id)
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    plan = _plans[plan_id]
+
+    # 验证版本存在
+    if not _version_exists(plan, from_version):
+        raise HTTPException(status_code=400, detail=f"源版本 '{from_version}' 不存在")
+    if not _version_exists(plan, to_version):
+        raise HTTPException(status_code=400, detail=f"目标版本 '{to_version}' 不存在")
+
+    # 收集 from_version 的数据
+    from_tasks = await _get_version_tasks(plan_id, from_version)
+    from_decisions = _compare_get_decisions(plan_id, from_version)
+    from_edicts = await _compare_get_edicts(plan_id, from_version)
+    from_issues = _get_version_issues(plan_id, from_version)
+    from_risks = await _get_version_risks(plan_id, from_version)
+    from_requirements = plan.get("requirements", [])
+
+    # 收集 to_version 的数据
+    to_tasks = await _get_version_tasks(plan_id, to_version)
+    to_decisions = _compare_get_decisions(plan_id, to_version)
+    to_edicts = await _compare_get_edicts(plan_id, to_version)
+    to_issues = _get_version_issues(plan_id, to_version)
+    to_risks = await _get_version_risks(plan_id, to_version)
+    to_requirements = plan.get("requirements", [])
+
+    # 比较 tasks
+    from_task_ids = {t.get("task_id") for t in from_tasks}
+    to_task_ids = {t.get("task_id") for t in to_tasks}
+    added_task_ids = to_task_ids - from_task_ids
+    removed_task_ids = from_task_ids - to_task_ids
+    common_task_ids = to_task_ids & from_task_ids
+
+    tasks_added = [t for t in to_tasks if t.get("task_id") in added_task_ids]
+    tasks_removed = [t for t in from_tasks if t.get("task_id") in removed_task_ids]
+    tasks_modified = []
+    for t in to_tasks:
+        if t.get("task_id") in common_task_ids:
+            # 找对应的旧版本
+            old_t = next((ot for ot in from_tasks if ot.get("task_id") == t.get("task_id")), None)
+            if old_t and _is_task_modified(old_t, t):
+                tasks_modified.append({
+                    "task_id": t.get("task_id"),
+                    "task_number": t.get("task_number"),
+                    "title": t.get("title"),
+                    "from": {k: v for k, v in old_t.items() if k in ["status", "priority", "progress", "owner_id", "estimated_hours", "actual_hours"]},
+                    "to": {k: v for k, v in t.items() if k in ["status", "priority", "progress", "owner_id", "estimated_hours", "actual_hours"]},
+                })
+
+    # 比较 requirements
+    requirements_added = [r for r in to_requirements if r not in from_requirements]
+    requirements_removed = [r for r in from_requirements if r not in to_requirements]
+
+    # 比较 decisions
+    from_decision_ids = {d.get("decision_id") for d in from_decisions}
+    to_decision_ids = {d.get("decision_id") for d in to_decisions}
+    decisions_added = [d for d in to_decisions if d.get("decision_id") not in from_decision_ids]
+    decisions_removed = [d for d in from_decisions if d.get("decision_id") not in to_decision_ids]
+
+    # 比较 edicts
+    from_edict_ids = {e.get("edict_id") for e in from_edicts}
+    to_edict_ids = {e.get("edict_id") for e in to_edicts}
+    edicts_added = [e for e in to_edicts if e.get("edict_id") not in from_edict_ids]
+    edicts_removed = [e for e in from_edicts if e.get("edict_id") not in to_edict_ids]
+
+    # 比较 issues
+    from_issue_ids = {i.get("issue_id") for i in from_issues}
+    to_issue_ids = {i.get("issue_id") for i in to_issues}
+    issues_added = [i for i in to_issues if i.get("issue_id") not in from_issue_ids]
+    issues_removed = [i for i in from_issues if i.get("issue_id") not in to_issue_ids]
+
+    # 比较 risks
+    from_risk_ids = {r.get("risk_id") for r in from_risks}
+    to_risk_ids = {r.get("risk_id") for r in to_risks}
+    risks_added = [r for r in to_risks if r.get("risk_id") not in from_risk_ids]
+    risks_removed = [r for r in from_risks if r.get("risk_id") not in to_risk_ids]
+
+    # 构建摘要
+    summary = {
+        "tasks": {"added": len(tasks_added), "removed": len(tasks_removed), "modified": len(tasks_modified)},
+        "requirements": {"added": len(requirements_added), "removed": len(requirements_removed)},
+        "decisions": {"added": len(decisions_added), "removed": len(decisions_removed)},
+        "edicts": {"added": len(edicts_added), "removed": len(edicts_removed)},
+        "issues": {"added": len(issues_added), "removed": len(issues_removed)},
+        "risks": {"added": len(risks_added), "removed": len(risks_removed)},
+    }
+
+    return {
+        "plan_id": plan_id,
+        "from_version": from_version,
+        "to_version": to_version,
+        "tasks_added": tasks_added,
+        "tasks_removed": tasks_removed,
+        "tasks_modified": tasks_modified,
+        "requirements_added": requirements_added,
+        "requirements_removed": requirements_removed,
+        "decisions_added": decisions_added,
+        "decisions_removed": decisions_removed,
+        "edicts_added": edicts_added,
+        "edicts_removed": edicts_removed,
+        "issues_added": issues_added,
+        "issues_removed": issues_removed,
+        "risks_added": risks_added,
+        "risks_removed": risks_removed,
+        "summary": summary,
+    }
+
+
+def _is_task_modified(old_task: dict, new_task: dict) -> bool:
+    """检查任务是否有变更"""
+    fields_to_check = ["status", "priority", "progress", "owner_id", "estimated_hours", "actual_hours", "title", "description"]
+    for field in fields_to_check:
+        if old_task.get(field) != new_task.get(field):
+            return True
+    return False
+
+
+async def _get_version_tasks(plan_id: str, version: str) -> List[dict]:
+    """获取指定版本的任务列表"""
+    try:
+        task_rows = await crud.list_tasks(plan_id, version)
+        if task_rows:
+            return [dict(r) for r in task_rows]
+    except Exception as e:
+        logger.warning(f"[DB] _get_version_tasks failed: {e}")
+    key = (plan_id, version)
+    return list(_tasks.get(key, {}).values())
+
+
+def _compare_get_decisions(plan_id: str, version: str) -> List[dict]:
+    """获取指定版本的决策列表（用于版本比较）"""
+    return [
+        {
+            "decision_id": v.get("decision_id"),
+            "decision_number": v.get("decision_number"),
+            "title": v.get("title"),
+            "decision_text": v.get("decision_text"),
+        }
+        for k, v in _decisions.items()
+        if k[0] == plan_id and k[1] == version
+    ]
+
+
+async def _compare_get_edicts(plan_id: str, version: str) -> List[dict]:
+    """获取指定版本的圣旨列表（用于版本比较）"""
+    try:
+        return await list_edicts(plan_id, version)
+    except Exception as e:
+        logger.warning(f"[DB] _compare_get_edicts failed: {e}")
+        return []
+
+
+def _get_version_issues(plan_id: str, version: str) -> List[dict]:
+    """获取指定版本的问题列表"""
+    return [
+        {"issue_id": p.get("issue_id"), "type": p.get("type"), "title": p.get("title")}
+        for p in _problems.values()
+        if p.get("plan_id") == plan_id and p.get("version") == version
+    ]
+
+
+def _get_version_risks(plan_id: str, version: str) -> List[dict]:
+    """获取指定版本的风险列表"""
+    return _risks.get((plan_id, version), [])
 
 
 @app.get("/plans/{plan_id}/versions/{version}/issues/{issue_id}/issue.json")
@@ -9819,19 +10211,19 @@ async def _get_version_risks(plan_id: str, version: str) -> List[Dict[str, Any]]
 
 async def _get_version_edicts(plan_id: str, version: str) -> List[Dict[str, Any]]:
     try:
-        rows = await crud.get_edicts(plan_id, version) or []
+        rows = await crud.list_edicts(plan_id, version) or []
         return rows
     except Exception as e:
-        logger.warning(f"[DB] get_edicts failed: {e}")
+        logger.warning(f"[DB] _get_version_edicts failed: {e}")
         return _edicts.get((plan_id, version), [])
 
 
 async def _get_version_tasks(plan_id: str, version: str) -> List[Dict[str, Any]]:
     try:
-        rows = await crud.get_tasks(plan_id, version) or []
+        rows = await crud.list_tasks(plan_id, version) or []
         return rows
     except Exception as e:
-        logger.warning(f"[DB] get_tasks failed: {e}")
+        logger.warning(f"[DB] _get_version_tasks failed: {e}")
         return _tasks.get((plan_id, version), [])
 
 
