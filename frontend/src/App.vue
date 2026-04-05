@@ -105,6 +105,12 @@ import api, {
   updatePlanTemplate,
   deletePlanTemplate,
   createPlanFromTemplate,
+  listTaskTemplates,
+  createTaskTemplate,
+  updateTaskTemplate,
+  deleteTaskTemplate,
+  createTaskFromTemplate,
+  getDashboardStats,
   getRoomTags,
   updateRoomTags,
   addRoomTags,
@@ -123,6 +129,8 @@ const sortBy = ref<'recent' | 'name'>('recent')
 const selectedPlanStatuses = ref<string[]>([])
 const showCreatePlan = ref(false)
 const newPlanForm = reactive({ title: '', topic: '' })
+const dashboardStats = ref<any>(null)
+const dashboardLoading = ref(false)
 
 // ─── Plan Detail State ──────────────────────────────────
 const currentPlan = ref<any>(null)
@@ -168,6 +176,27 @@ const newPlanTemplateForm = reactive({
   _tagsInput: '',
 })
 const editingPlanTemplate = ref<any>(null)
+
+// ─── Step 73: Task Templates State ────────────────────────
+const taskTemplates = ref<any[]>([])
+const showTaskTemplates = ref(false)
+const showCreateTaskTemplate = ref(false)
+const newTaskTemplateForm = reactive({
+  name: '',
+  description: '',
+  default_title: '',
+  default_description: '',
+  priority: 'medium',
+  difficulty: 'medium',
+  estimated_hours: null as number | null,
+  owner_level: null as number | null,
+  owner_role: '',
+  tags: [] as string[],
+  created_by: '',
+  is_shared: false,
+  _tagsInput: '',
+})
+const editingTaskTemplate = ref<any>(null)
 
 // ─── Decisions State ─────────────────────────────────────
 const planDecisions = ref<any[]>([])
@@ -610,6 +639,13 @@ const statusLabel: Record<string, string> = {
   cancelled: '❌ 已取消',
 }
 
+const priorityLabel: Record<string, string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+  critical: '紧急',
+}
+
 const filteredPlans = computed(() => {
   let result = plans.value
   if (searchQuery.value) {
@@ -790,6 +826,18 @@ async function loadPlans() {
     plans.value = res.data || []
   } catch (e) {
     console.error('loadPlans failed', e)
+  }
+}
+
+async function loadDashboardStats() {
+  dashboardLoading.value = true
+  try {
+    const res = await getDashboardStats()
+    dashboardStats.value = res.data
+  } catch (e) {
+    console.error('loadDashboardStats failed', e)
+  } finally {
+    dashboardLoading.value = false
   }
 }
 
@@ -1897,6 +1945,113 @@ async function handleCreatePlanFromTemplate(tmpl: any) {
   }
 }
 
+// Step 73: Task Template Functions
+async function loadTaskTemplates() {
+  try {
+    const res = await listTaskTemplates()
+    taskTemplates.value = Array.isArray(res.data) ? res.data : (res.data?.templates || [])
+  } catch (e) {
+    console.error('loadTaskTemplates failed', e)
+  }
+}
+
+async function openTaskTemplates() {
+  showTaskTemplates.value = true
+  showCreateTaskTemplate.value = false
+  editingTaskTemplate.value = null
+  await loadTaskTemplates()
+}
+
+async function handleSaveTaskTemplate() {
+  if (!newTaskTemplateForm.name.trim() || !newTaskTemplateForm.default_title.trim()) return
+  try {
+    if (editingTaskTemplate.value) {
+      await updateTaskTemplate(editingTaskTemplate.value.template_id, {
+        name: newTaskTemplateForm.name,
+        description: newTaskTemplateForm.description,
+        default_title: newTaskTemplateForm.default_title,
+        default_description: newTaskTemplateForm.default_description,
+        priority: newTaskTemplateForm.priority,
+        difficulty: newTaskTemplateForm.difficulty,
+        estimated_hours: newTaskTemplateForm.estimated_hours,
+        owner_level: newTaskTemplateForm.owner_level,
+        owner_role: newTaskTemplateForm.owner_role,
+        tags: newTaskTemplateForm.tags,
+        is_shared: newTaskTemplateForm.is_shared,
+      })
+    } else {
+      await createTaskTemplate({
+        name: newTaskTemplateForm.name,
+        description: newTaskTemplateForm.description,
+        default_title: newTaskTemplateForm.default_title,
+        default_description: newTaskTemplateForm.default_description,
+        priority: newTaskTemplateForm.priority,
+        difficulty: newTaskTemplateForm.difficulty,
+        estimated_hours: newTaskTemplateForm.estimated_hours,
+        owner_level: newTaskTemplateForm.owner_level,
+        owner_role: newTaskTemplateForm.owner_role,
+        tags: newTaskTemplateForm.tags,
+        created_by: newTaskTemplateForm.created_by,
+        is_shared: newTaskTemplateForm.is_shared,
+      })
+    }
+    showCreateTaskTemplate.value = false
+    editingTaskTemplate.value = null
+    await loadTaskTemplates()
+  } catch (e) {
+    console.error('handleSaveTaskTemplate failed', e)
+  }
+}
+
+function startEditTaskTemplate(tmpl: any) {
+  editingTaskTemplate.value = tmpl
+  Object.assign(newTaskTemplateForm, {
+    name: tmpl.name,
+    description: tmpl.description || '',
+    default_title: tmpl.default_title || '',
+    default_description: tmpl.default_description || '',
+    priority: tmpl.priority || 'medium',
+    difficulty: tmpl.difficulty || 'medium',
+    estimated_hours: tmpl.estimated_hours ?? null,
+    owner_level: tmpl.owner_level ?? null,
+    owner_role: tmpl.owner_role || '',
+    tags: Array.isArray(tmpl.tags) ? tmpl.tags : [],
+    is_shared: tmpl.is_shared || false,
+  })
+  showCreateTaskTemplate.value = true
+}
+
+async function handleDeleteTaskTemplate(templateId: string) {
+  if (!confirm('确定删除此任务模板？')) return
+  try {
+    await deleteTaskTemplate(templateId)
+    await loadTaskTemplates()
+  } catch (e) {
+    console.error('handleDeleteTaskTemplate failed', e)
+  }
+}
+
+async function handleCreateTaskFromTemplate(tmpl: any) {
+  if (!currentPlan.value) return
+  try {
+    const res = await createTaskFromTemplate(
+      tmpl.template_id,
+      currentPlan.value.plan_id,
+      planDetailActiveVersion.value,
+    )
+    showTaskTemplates.value = false
+    // Refresh tasks list
+    await loadTasks()
+    // Show success notification
+    if (res.data?.task_id) {
+      const task = res.data.task
+      alert(`任务「${task?.title || tmpl.default_title}」已创建`)
+    }
+  } catch (e) {
+    console.error('handleCreateTaskFromTemplate failed', e)
+  }
+}
+
 async function handleCreateRoomFromTemplate(tmpl: any) {
   if (!currentPlan.value) return
   try {
@@ -2354,6 +2509,7 @@ function backToHome() {
   planVersions.value = []
   planRooms.value = []
   loadPlans()
+  loadDashboardStats()
 }
 
 // ─── Room Actions ────────────────────────────────────────
@@ -2902,6 +3058,7 @@ async function handleResumeExecution() {
 // ─── Lifecycle ──────────────────────────────────────────
 onMounted(() => {
   loadPlans()
+  loadDashboardStats()
   loadUnreadCount()
   homePollInterval = setInterval(loadPlans, 10000)
   document.addEventListener('click', closeNotifications)
@@ -2982,6 +3139,39 @@ onUnmounted(() => {
           >名称</button>
         </div>
         <span class="plan-count">{{ filteredPlans.length }} 个计划</span>
+      </div>
+
+      <!-- Dashboard Stats Bar -->
+      <div v-if="dashboardStats" class="dashboard-stats-bar">
+        <div class="stat-card">
+          <div class="stat-value">{{ dashboardStats.total_plans || 0 }}</div>
+          <div class="stat-label">总计划</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ dashboardStats.active_plans || 0 }}</div>
+          <div class="stat-label">进行中</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ dashboardStats.total_rooms || 0 }}</div>
+          <div class="stat-label">总房间</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ dashboardStats.pending_approvals || 0 }}</div>
+          <div class="stat-label">待审批</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ dashboardStats.pending_action_items || 0 }}</div>
+          <div class="stat-label">待处理</div>
+        </div>
+        <div v-if="dashboardStats.rooms_by_phase" class="stat-card stat-card-wide">
+          <div class="stat-label" style="margin-bottom:4px">房间阶段</div>
+          <div class="phase-bars">
+            <div v-for="(count, phase) in dashboardStats.rooms_by_phase" :key="phase" class="phase-bar-item">
+              <span class="phase-bar-label">{{ phaseLabel[phase] || phase }}</span>
+              <span class="phase-bar-count">{{ count }}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Plan Grid -->
@@ -3614,6 +3804,9 @@ onUnmounted(() => {
           </button>
           <button class="btn-secondary" @click="showGanttView = !showGanttView">
             {{ showGanttView ? '📋 列表视图' : '📊 甘特图' }}
+          </button>
+          <button class="btn-secondary" @click="openTaskTemplates" title="任务模板">
+            📝 任务模板
           </button>
         </div>
 
@@ -5355,6 +5548,120 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Step 73: Task Templates Modal -->
+      <div v-if="showTaskTemplates" class="modal-overlay" @click.self="showTaskTemplates = false">
+        <div class="modal-content modal-medium">
+          <div class="modal-header">
+            <h3>📝 任务模板</h3>
+            <div class="modal-header-actions">
+              <button class="btn-primary btn-small" @click="showCreateTaskTemplate = true; editingTaskTemplate = null; Object.assign(newTaskTemplateForm, { name: '', description: '', default_title: '', default_description: '', priority: 'medium', difficulty: 'medium', estimated_hours: null, owner_level: null, owner_role: '', tags: [], is_shared: false, _tagsInput: '' })">
+                + 新建模板
+              </button>
+              <button class="modal-close" @click="showTaskTemplates = false">✕</button>
+            </div>
+          </div>
+          <div class="modal-body">
+            <!-- Create/Edit Task Template Form -->
+            <div v-if="showCreateTaskTemplate" class="template-create-form">
+              <div class="form-row">
+                <label>模板名称 *</label>
+                <input v-model="newTaskTemplateForm.name" class="input" placeholder="例如：开发任务模板" />
+              </div>
+              <div class="form-row">
+                <label>默认任务标题 *</label>
+                <input v-model="newTaskTemplateForm.default_title" class="input" placeholder="例如：[功能开发] 用户模块" />
+              </div>
+              <div class="form-row">
+                <label>默认描述</label>
+                <textarea v-model="newTaskTemplateForm.default_description" class="input" placeholder="任务默认描述..." rows="2"></textarea>
+              </div>
+              <div class="form-row-inline">
+                <div class="form-row">
+                  <label>优先级</label>
+                  <select v-model="newTaskTemplateForm.priority" class="input">
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                    <option value="critical">紧急</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>难度</label>
+                  <select v-model="newTaskTemplateForm.difficulty" class="input">
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row-inline">
+                <div class="form-row">
+                  <label>预估工时（小时）</label>
+                  <input v-model.number="newTaskTemplateForm.estimated_hours" type="number" class="input" min="0" step="0.5" placeholder="0" />
+                </div>
+                <div class="form-row">
+                  <label>负责人层级（L1-L7）</label>
+                  <input v-model.number="newTaskTemplateForm.owner_level" type="number" class="input" min="1" max="7" placeholder="3" />
+                </div>
+              </div>
+              <div class="form-row">
+                <label>负责人角色</label>
+                <input v-model="newTaskTemplateForm.owner_role" class="input" placeholder="例如：前端工程师" />
+              </div>
+              <div class="form-row">
+                <label>标签（逗号分隔）</label>
+                <input v-model="newTaskTemplateForm._tagsInput" class="input" placeholder="例如：开发,功能,后端" @blur="newTaskTemplateForm.tags = newTaskTemplateForm._tagsInput.split(',').map(t => t.trim()).filter(Boolean)" @keyup.enter="newTaskTemplateForm.tags = newTaskTemplateForm._tagsInput.split(',').map(t => t.trim()).filter(Boolean)" />
+              </div>
+              <div class="form-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" v-model="newTaskTemplateForm.is_shared" />
+                  共享模板（所有用户可见）
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="btn-primary" @click="handleSaveTaskTemplate">保存模板</button>
+                <button class="btn-secondary" @click="showCreateTaskTemplate = false">取消</button>
+              </div>
+            </div>
+
+            <!-- Task Templates List -->
+            <div v-if="!showCreateTaskTemplate" class="templates-list">
+              <div v-if="taskTemplates.length === 0" class="empty-state" style="padding: 40px 0">
+                <div class="empty-icon">📝</div>
+                <div class="empty-text">暂无任务模板</div>
+                <div class="empty-sub">点击「新建模板」创建第一个任务模板</div>
+              </div>
+              <div
+                v-for="tmpl in taskTemplates"
+                :key="tmpl.template_id"
+                class="template-card"
+              >
+                <div class="template-card-header">
+                  <div class="template-card-title">{{ tmpl.name }}</div>
+                  <div class="template-card-actions">
+                    <button class="btn-edit" @click="startEditTaskTemplate(tmpl)" title="编辑">✎</button>
+                    <button class="btn-edit" @click="handleDeleteTaskTemplate(tmpl.template_id)" title="删除">🗑</button>
+                  </div>
+                </div>
+                <div class="template-card-desc">默认标题：{{ tmpl.default_title || '无' }}</div>
+                <div class="template-card-meta">
+                  <span class="priority-badge" :class="tmpl.priority || 'medium'">{{ priorityLabel[tmpl.priority] || tmpl.priority || '中' }}</span>
+                  <span v-if="tmpl.estimated_hours" class="template-badge">{{ tmpl.estimated_hours }}h</span>
+                  <span v-if="tmpl.owner_level" class="template-badge">L{{ tmpl.owner_level }}</span>
+                  <span v-if="tmpl.tags && tmpl.tags.length > 0" class="template-badge" v-for="tag in tmpl.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
+                </div>
+                <div class="template-card-footer">
+                  <span v-if="tmpl.is_shared" class="shared-badge">共享</span>
+                  <button class="btn-primary btn-small" @click="handleCreateTaskFromTemplate(tmpl)">
+                    使用此模板创建任务 →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ══════════════════════════════════════════════════════ -->
@@ -6507,6 +6814,65 @@ body {
 .search-input::placeholder { color: #4a4a6a; }
 .plan-count { color: #4a4a6a; font-size: 0.85rem; white-space: nowrap; }
 
+/* ─── Dashboard Stats Bar ─── */
+.dashboard-stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #13131f;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.stat-card {
+  background: #1a1a28;
+  border: 1px solid #2d2d4a;
+  border-radius: 10px;
+  padding: 10px 16px;
+  min-width: 80px;
+  text-align: center;
+}
+.stat-card-wide {
+  flex: 1;
+  min-width: 200px;
+  text-align: left;
+}
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #7c7cff;
+  line-height: 1;
+}
+.stat-label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 4px;
+}
+.phase-bars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.phase-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #2d2d4a;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+}
+.phase-bar-label {
+  color: #a0a0c0;
+}
+.phase-bar-count {
+  color: #7c7cff;
+  font-weight: 600;
+}
+
 .sort-controls {
   display: flex;
   gap: 4px;
@@ -7562,6 +7928,7 @@ body {
 .priority-high { background: rgba(248, 113, 113, 0.15); color: #f87171; }
 .priority-medium { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
 .priority-low { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.priority-critical { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
 .category-badge {
   display: inline-block;
   padding: 2px 8px;

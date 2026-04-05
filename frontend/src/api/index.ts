@@ -571,6 +571,48 @@ export const deletePlanTemplate = (templateId: string) =>
 export const createPlanFromTemplate = (templateId: string, data?: { title?: string; topic?: string }) =>
   api.post(`/plan-templates/${templateId}/create-plan`, data)
 
+// Step 73: Task Template API
+export const createTaskTemplate = (data: {
+  name: string;
+  default_title: string;
+  description?: string;
+  default_description?: string;
+  priority?: string;
+  difficulty?: string;
+  estimated_hours?: number;
+  owner_level?: number;
+  owner_role?: string;
+  tags?: string[];
+  created_by?: string;
+  is_shared?: boolean;
+}) => api.post('/task-templates', data)
+
+export const listTaskTemplates = (params?: { tag?: string; is_shared?: boolean; search?: string; limit?: number; offset?: number }) =>
+  api.get('/task-templates', { params })
+
+export const getTaskTemplate = (templateId: string) =>
+  api.get(`/task-templates/${templateId}`)
+
+export const updateTaskTemplate = (templateId: string, data: Partial<{
+  name: string;
+  description: string;
+  default_title: string;
+  default_description: string;
+  priority: string;
+  difficulty: string;
+  estimated_hours: number;
+  owner_level: number;
+  owner_role: string;
+  tags: string[];
+  is_shared: boolean;
+}>) => api.patch(`/task-templates/${templateId}`, data)
+
+export const deleteTaskTemplate = (templateId: string) =>
+  api.delete(`/task-templates/${templateId}`)
+
+export const createTaskFromTemplate = (templateId: string, planId: string, version: string, title?: string) =>
+  api.post(`/task-templates/${templateId}/create-task`, null, { params: { plan_id: planId, version, title } })
+
 // Step 65: Task Time Tracking API
 export const createTimeEntry = (planId: string, version: string, taskId: string, data: {
   user_name?: string;

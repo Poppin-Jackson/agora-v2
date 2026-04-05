@@ -2389,6 +2389,141 @@ async def delete_plan_template(template_id: str) -> bool:
         return result == "DELETE 1"
 
 
+# Step 73: Task Templates CRUD
+async def create_task_template(
+    template_id: str,
+    name: str,
+    default_title: str,
+    description: str = None,
+    default_description: str = None,
+    priority: str = "medium",
+    difficulty: str = "medium",
+    estimated_hours: float = None,
+    owner_level: int = None,
+    owner_role: str = None,
+    tags: list = None,
+    created_by: str = None,
+    is_shared: bool = False,
+) -> dict:
+    """创建任务模板"""
+    async with get_connection() as conn:
+        tags_json = tags or []
+        row = await conn.fetchrow("""
+            INSERT INTO task_templates
+              (template_id, name, description, default_title, default_description,
+               priority, difficulty, estimated_hours, owner_level, owner_role,
+               tags, created_by, is_shared)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            RETURNING *
+        """,
+            uuid.UUID(template_id) if isinstance(template_id, str) else template_id,
+            name, description, default_title, default_description,
+            priority, difficulty, estimated_hours, owner_level, owner_role,
+            tags_json, created_by, is_shared)
+        return dict(row) if row else None
+
+
+async def list_task_templates(
+    tag: str = None,
+    is_shared: bool = None,
+    search: str = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """列出任务模板"""
+    conditions = []
+    params = []
+    idx = 1
+
+    if tag:
+        conditions.append(f"AND $${idx}$$ = ANY(tags)")
+        params.append(tag)
+        idx += 1
+    if is_shared is not None:
+        conditions.append(f"AND is_shared = $${idx}$$")
+        params.append(is_shared)
+        idx += 1
+    if search:
+        conditions.append(f"AND (name ILIKE $${idx}$$ OR description ILIKE $${idx}$$)")
+        params.append(f"%{search}%")
+        idx += 1
+
+    where = "WHERE TRUE" + " ".join(f" {c}" for c in conditions) if conditions else ""
+    order = "ORDER BY created_at DESC"
+    query = f"SELECT * FROM task_templates {where} {order} LIMIT ${idx} OFFSET ${idx+1}"
+    params.extend([limit, offset])
+
+    async with get_connection() as conn:
+        rows = await conn.fetch(query, *params)
+        return [dict(r) for r in rows]
+
+
+async def get_task_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """获取单个任务模板"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM task_templates WHERE template_id = $1",
+            uuid.UUID(template_id) if isinstance(template_id, str) else template_id,
+        )
+        return dict(row) if row else None
+
+
+async def update_task_template(
+    template_id: str,
+    name: str = None,
+    description: str = None,
+    default_title: str = None,
+    default_description: str = None,
+    priority: str = None,
+    difficulty: str = None,
+    estimated_hours: float = None,
+    owner_level: int = None,
+    owner_role: str = None,
+    tags: list = None,
+    is_shared: bool = None,
+) -> Optional[Dict[str, Any]]:
+    """更新任务模板"""
+    fields = []
+    params = []
+    idx = 1
+
+    for fname, fval in [
+        ("name", name), ("description", description),
+        ("default_title", default_title), ("default_description", default_description),
+        ("priority", priority), ("difficulty", difficulty),
+        ("estimated_hours", estimated_hours), ("owner_level", owner_level),
+        ("owner_role", owner_role), ("tags", tags), ("is_shared", is_shared),
+    ]:
+        if fval is not None:
+            fields.append(f"{fname} = ${idx}")
+            params.append(fval)
+            idx += 1
+
+    if not fields:
+        return await get_task_template(template_id)
+
+    fields.append("updated_at = NOW()")
+    params.append(
+        uuid.UUID(template_id) if isinstance(template_id, str) else template_id)
+
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE task_templates SET {', '.join(fields)} WHERE template_id = ${idx} RETURNING *",
+            *params
+        )
+        return dict(row) if row else None
+
+
+async def delete_task_template(template_id: str) -> bool:
+    """删除任务模板"""
+    async with get_connection() as conn:
+        result = await conn.execute(
+            "DELETE FROM task_templates WHERE template_id = $1",
+            template_id,
+        )
+        return result == "DELETE 1"
+
+
 # Step 63: Room Phase Timeline CRUD
 async def create_phase_timeline_entry(room_id: str, phase: str, entered_at: datetime) -> dict:
     """创建阶段进入记录"""

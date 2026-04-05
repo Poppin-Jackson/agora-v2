@@ -744,6 +744,36 @@ async def _create_tables(pool: Pool):
         except Exception as e:
             logger.warning(f"[DB] Step 70 表迁移跳过（可能已存在）: {e}")
 
+        # ── Step 73: task_templates 表 ─────────────────────────────────────────
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS task_templates (
+                        template_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        name                 TEXT NOT NULL,
+                        description          TEXT,
+                        default_title        TEXT NOT NULL DEFAULT '',
+                        default_description  TEXT,
+                        priority             TEXT DEFAULT 'medium',
+                        difficulty           TEXT DEFAULT 'medium',
+                        estimated_hours      REAL,
+                        owner_level          INTEGER,
+                        owner_role           TEXT,
+                        tags                 TEXT[] DEFAULT '{}',
+                        created_by           TEXT,
+                        is_shared            BOOLEAN DEFAULT FALSE,
+                        created_at           TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at           TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_task_templates_name ON task_templates(name);
+                    CREATE INDEX IF NOT EXISTS idx_task_templates_tags ON task_templates USING GIN(tags);
+                """)
+                logger.info("[DB] Step 73 表迁移完成: task_templates table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 73 表迁移跳过（可能已存在）: {e}")
+
     except Exception as e:
         logger.warning(f"[DB] 列迁移跳过（可能已存在）: {e}")
 

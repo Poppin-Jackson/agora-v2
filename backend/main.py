@@ -389,6 +389,38 @@ class PlanTemplateUpdate(BaseModel):
     is_shared: Optional[bool] = None
 
 
+# Step 73: Task Templates
+class TaskTemplateCreate(BaseModel):
+    """创建任务模板"""
+    name: str
+    description: Optional[str] = None
+    default_title: str
+    default_description: Optional[str] = None
+    priority: Optional[str] = "medium"
+    difficulty: Optional[str] = "medium"
+    estimated_hours: Optional[float] = None
+    owner_level: Optional[int] = None
+    owner_role: Optional[str] = None
+    tags: Optional[List[str]] = None
+    created_by: Optional[str] = None
+    is_shared: Optional[bool] = False
+
+
+class TaskTemplateUpdate(BaseModel):
+    """更新任务模板"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    default_title: Optional[str] = None
+    default_description: Optional[str] = None
+    priority: Optional[str] = None
+    difficulty: Optional[str] = None
+    estimated_hours: Optional[float] = None
+    owner_level: Optional[int] = None
+    owner_role: Optional[str] = None
+    tags: Optional[List[str]] = None
+    is_shared: Optional[bool] = None
+
+
 # ========================
 # L1-L7 层级审批模型
 # ========================
@@ -3037,6 +3069,155 @@ async def create_plan_from_template(template_id: str, data: dict = None):
         raise
     except Exception as e:
         logger.warning(f"[DB] create_plan_from_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Step 73: Task Templates API
+@app.post("/task-templates", status_code=201)
+async def create_task_template(data: TaskTemplateCreate):
+    """创建任务模板"""
+    try:
+        template_id = str(uuid.uuid4())
+        template = await crud.create_task_template(
+            template_id=template_id,
+            name=data.name,
+            default_title=data.default_title,
+            description=data.description,
+            default_description=data.default_description,
+            priority=data.priority,
+            difficulty=data.difficulty,
+            estimated_hours=data.estimated_hours,
+            owner_level=data.owner_level,
+            owner_role=data.owner_role,
+            tags=data.tags,
+            created_by=data.created_by,
+            is_shared=data.is_shared,
+        )
+        logger.info(f"[DB] create_task_template: {template_id}({data.name})")
+        return {"template_id": template_id, "template": dict(template)} if template else None
+    except Exception as e:
+        logger.warning(f"[DB] create_task_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/task-templates")
+async def list_task_templates(
+    tag: str = None,
+    is_shared: bool = None,
+    search: str = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """列出任务模板"""
+    try:
+        templates = await crud.list_task_templates(
+            tag=tag, is_shared=is_shared, search=search,
+            limit=limit, offset=offset,
+        )
+        return {"templates": [dict(t) for t in templates]}
+    except Exception as e:
+        logger.warning(f"[DB] list_task_templates failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/task-templates/{template_id}")
+async def get_task_template(template_id: str):
+    """获取单个任务模板"""
+    try:
+        template = await crud.get_task_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Task template not found")
+        return dict(template)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] get_task_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/task-templates/{template_id}")
+async def update_task_template(template_id: str, data: TaskTemplateUpdate):
+    """更新任务模板"""
+    try:
+        template = await crud.update_task_template(
+            template_id=template_id,
+            name=data.name,
+            description=data.description,
+            default_title=data.default_title,
+            default_description=data.default_description,
+            priority=data.priority,
+            difficulty=data.difficulty,
+            estimated_hours=data.estimated_hours,
+            owner_level=data.owner_level,
+            owner_role=data.owner_role,
+            tags=data.tags,
+            is_shared=data.is_shared,
+        )
+        if not template:
+            raise HTTPException(status_code=404, detail="Task template not found")
+        return dict(template)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] update_task_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/task-templates/{template_id}", status_code=204)
+async def delete_task_template(template_id: str):
+    """删除任务模板"""
+    try:
+        deleted = await crud.delete_task_template(template_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Task template not found")
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] delete_task_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/task-templates/{template_id}/create-task", status_code=201)
+async def create_task_from_template(
+    template_id: str,
+    plan_id: str,
+    version: str,
+    title: str = None,
+    data: dict = None,
+):
+    """从任务模板创建任务"""
+    try:
+        template = await crud.get_task_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Task template not found")
+
+        task_title = title or template.get("default_title", "未命名任务")
+        task_desc = template.get("default_description") or ""
+
+        task_id = str(uuid.uuid4())
+        # task_number is calculated inside create_task
+        task = await crud.create_task(
+            task_id=task_id,
+            plan_id=plan_id,
+            version=version,
+            task_number=0,  # placeholder; create_task recalculates
+            title=task_title,
+            description=task_desc,
+            owner_id=None,
+            owner_level=template.get("owner_level"),
+            owner_role=template.get("owner_role"),
+            priority=template.get("priority", "medium"),
+            difficulty=template.get("difficulty", "medium"),
+            estimated_hours=template.get("estimated_hours"),
+            status="pending",
+        )
+        logger.info(f"[DB] create_task_from_template: {task_id} from template {template_id}")
+        return {"task_id": task_id, "task": dict(task), "template_applied": template.get("name")} if task else None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] create_task_from_template failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

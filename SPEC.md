@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.24 | 日期：2026-04-05（Step 71 - Version Comparison Bug Fix）
+> 版本：v2.25 | 日期：2026-04-05（Step 72 - Dashboard Stats UI）
 > 版本：v2.23 | 日期：2026-04-05（Step 70 - Dashboard Statistics API）
 > 版本：v2.22 | 日期：2026-04-05（Step 69 - Room Tags System）
 > 版本：v2.21 | 日期：2026-04-05（Step 68 - Plan Template System）
@@ -1450,4 +1450,31 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 71
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 72 (2026-04-05)
+**版本**: v2.25 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Dashboard Stats UI（仪表盘统计 UI）
+
+### Do
+- 添加 `dashboardStats` / `dashboardLoading` 状态变量（frontend/src/App.vue）
+- 导入 `getDashboardStats` API 函数
+- 添加 `loadDashboardStats()` 函数，调用 `GET /dashboard/stats`
+- 在 `onMounted` 和 `backToHome()` 中调用 `loadDashboardStats()`
+- Home 视图新增 Dashboard Stats Bar（位于搜索栏与计划卡片之间）
+  - 统计卡片：总计划数 / 进行中计划数 / 总房间数 / 待审批数 / 待处理行动项数
+  - 房间阶段分布：按 phase 分组显示各阶段房间数量
+- 添加 CSS 样式 `.dashboard-stats-bar` / `.stat-card` / `.stat-value` / `.phase-bar-item`
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ npm run build 成功（78 modules, 290.03 kB）
+- ✅ pytest 171 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 72
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
