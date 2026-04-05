@@ -103,6 +103,13 @@ export const listRoomActivities = (roomId: string, limit = 100, offset = 0) =>
 export const listVersionActivities = (planId: string, version: string, limit = 100, offset = 0) =>
   api.get(`/plans/${planId}/versions/${version}/activities`, { params: { limit, offset } })
 
+// ─── Participant Activity ──────────────────────────────────────────────────────
+export const getParticipantActivity = (planId: string, version?: string) =>
+  api.get(`/plans/${planId}/participants/activity`, { params: { version } })
+
+export const listPlanParticipants = (planId: string) =>
+  api.get(`/plans/${planId}/participants`)
+
 // ─── Decisions ────────────────────────────────────────────────────────────────
 export const listDecisions = (planId: string, version: string) =>
   api.get(`/plans/${planId}/versions/${version}/decisions`)

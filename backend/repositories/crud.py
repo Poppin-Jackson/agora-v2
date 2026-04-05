@@ -2964,3 +2964,98 @@ async def get_dashboard_stats() -> Dict[str, Any]:
             "recent_activities": [],
         }
 
+
+
+async def get_participant_activity(plan_id: str, version: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    获取计划内所有参与者的活动统计
+    按参与者聚合：消息数、参与的房间数、决策参与数、活动记录数
+    """
+    try:
+        async with get_connection() as conn:
+            # 获取计划下所有房间
+            room_rows = await conn.fetch(
+                "SELECT room_id FROM rooms WHERE plan_id = $1",
+                plan_id
+            )
+            room_ids = [str(r["room_id"]) for r in room_rows]
+            
+            if not room_ids:
+                return []
+
+            # 获取每个参与者的消息统计
+            msg_stats = await conn.fetch("""
+                SELECT p.participant_id, p.name, p.level, p.role, p.agent_id,
+                       COUNT(m.message_id) as message_count,
+                       COUNT(CASE WHEN m.type = 'speech' THEN 1 END) as speech_count,
+                       COUNT(CASE WHEN m.type = 'challenge' THEN 1 END) as challenge_count,
+                       COUNT(CASE WHEN m.type = 'response' THEN 1 END) as response_count
+                FROM participants p
+                LEFT JOIN messages m ON p.room_id = m.room_id AND p.agent_id = m.agent_id
+                WHERE p.room_id = ANY($1::uuid[])
+                GROUP BY p.participant_id, p.name, p.level, p.role, p.agent_id
+            """, room_ids)
+
+            # 获取每个参与者参与的房间数
+            room_counts = await conn.fetch("""
+                SELECT p.participant_id,
+                       COUNT(DISTINCT p.room_id) as rooms_joined
+                FROM participants p
+                WHERE p.room_id = ANY($1::uuid[]) AND p.is_active = TRUE
+                GROUP BY p.participant_id
+            """, room_ids)
+            room_count_map = {str(r["participant_id"]): r["rooms_joined"] for r in room_counts}
+
+            # 获取每个参与者的活动记录数
+            activity_counts = await conn.fetch("""
+                SELECT actor_id, COUNT(*) as activity_count
+                FROM activities
+                WHERE plan_id = $1 AND actor_id IS NOT NULL
+                GROUP BY actor_id
+            """, plan_id)
+            activity_count_map = {r["actor_id"]: r["activity_count"] for r in activity_counts}
+
+            # 构建结果
+            result = []
+            for row in msg_stats:
+                pid = str(row["participant_id"])
+                result.append({
+                    "participant_id": pid,
+                    "name": row["name"],
+                    "level": row["level"],
+                    "role": row["role"],
+                    "agent_id": row["agent_id"],
+                    "message_count": row["message_count"] or 0,
+                    "speech_count": row["speech_count"] or 0,
+                    "challenge_count": row["challenge_count"] or 0,
+                    "response_count": row["response_count"] or 0,
+                    "rooms_joined": room_count_map.get(pid, 0),
+                    "activity_count": activity_count_map.get(row["agent_id"], 0),
+                })
+
+            return result
+    except Exception as e:
+        logger.warning(f"[CRUD] get_participant_activity DB failed: {e}")
+        return []
+
+
+async def list_plan_participants(plan_id: str) -> List[Dict[str, Any]]:
+    """
+    获取计划下所有房间的所有参与者（去重）
+    """
+    try:
+        async with get_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (p.agent_id) 
+                       p.participant_id, p.agent_id, p.name, p.level, p.role,
+                       p.source, p.joined_at, p.is_active,
+                       p.contributions
+                FROM participants p
+                JOIN rooms r ON p.room_id = r.room_id
+                WHERE r.plan_id = $1 AND p.is_active = TRUE
+                ORDER BY p.agent_id, p.joined_at DESC
+            """, plan_id)
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"[CRUD] list_plan_participants DB failed: {e}")
+        return []

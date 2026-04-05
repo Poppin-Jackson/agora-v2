@@ -55,6 +55,8 @@ import api, {
   getActivity,
   listRoomActivities,
   listVersionActivities,
+  getParticipantActivity,
+  listPlanParticipants,
   searchRoomMessages,
   listNotifications,
   markNotificationRead,
@@ -144,7 +146,7 @@ const compareLoading = ref(false)
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
-const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'analytics' | 'snapshots' | 'escalations'>('overview')
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'participants' | 'activities' | 'analytics' | 'snapshots' | 'escalations'>('overview')
 const planDetailActiveVersion = ref<string>('')
 const exportLoading = ref(false)
 
@@ -298,6 +300,10 @@ type ActivityScope = 'plan' | 'room' | 'version'
 const activityScope = ref<ActivityScope>('plan')
 const activityScopeRoomId = ref<string>('')
 const activityScopeVersion = ref<string>('')
+
+// ─── Participants State ──────────────────────────────────
+const participantActivity = ref<any[]>([])
+const planParticipants = ref<any[]>([])
 
 // ─── Snapshots State ─────────────────────────────────────
 const planSnapshots = ref<any[]>([])
@@ -1123,6 +1129,35 @@ async function loadAnalyticsData() {
   }
 }
 
+async function loadTasks() {
+  if (!currentPlan.value) return
+  const version = planDetailActiveVersion.value || 'v1.0'
+  try {
+    const [tasksRes, metricsRes] = await Promise.all([
+      listTasks(currentPlan.value.plan_id, version),
+      getTaskMetrics(currentPlan.value.plan_id, version),
+    ])
+    planTasks.value = tasksRes.data?.tasks || []
+    planMetrics.value = metricsRes.data
+  } catch (e) {
+    console.error('loadTasks failed', e)
+  }
+}
+
+async function loadParticipantActivity() {
+  if (!currentPlan.value) return
+  try {
+    const [actRes, partRes] = await Promise.all([
+      getParticipantActivity(currentPlan.value.plan_id),
+      listPlanParticipants(currentPlan.value.plan_id),
+    ])
+    participantActivity.value = actRes.data || []
+    planParticipants.value = partRes.data || []
+  } catch (e) {
+    console.error('loadParticipantActivity failed', e)
+  }
+}
+
 // Watch tab switch to load snapshots when entering the tab
 watch(activePlanTab, (newTab) => {
   if (newTab === 'snapshots') {
@@ -1136,6 +1171,9 @@ watch(activePlanTab, (newTab) => {
   }
   if (newTab === 'escalations') {
     loadPlanEscalations()
+  }
+  if (newTab === 'participants') {
+    loadParticipantActivity()
   }
   if (newTab === 'activities') {
     // Reset scope to plan and initialize version from current
@@ -3319,13 +3357,13 @@ onUnmounted(() => {
       <!-- Plan Tabs -->
       <div class="plan-tabs">
         <button
-          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'analytics', 'snapshots', 'escalations']"
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'participants', 'activities', 'analytics', 'snapshots', 'escalations']"
           :key="tab"
           class="plan-tab"
           :class="{ active: activePlanTab === tab }"
           @click="activePlanTab = tab as any"
         >
-          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : '升级' }}
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'participants' ? '参与者' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : '升级' }}
         </button>
       </div>
 
@@ -3843,8 +3881,8 @@ onUnmounted(() => {
 
         <!-- Task Metrics -->
         <div v-if="planMetrics" class="tasks-metrics">
-          <span>✅ 已完成 {{ planMetrics.completed_tasks || 0 }} / {{ planMetrics.total_tasks || planTasks.length || 0 }}</span>
-          <span class="metric-rate">完成率 {{ planMetrics.completion_rate || 0 }}%</span>
+          <span>✅ 已完成 {{ planMetrics.tasks?.completed || 0 }} / {{ planMetrics.tasks?.total || planTasks.length || 0 }}</span>
+          <span class="metric-rate">完成率 {{ ((planMetrics.tasks?.completion_rate || 0) * 100).toFixed(0) }}%</span>
         </div>
 
         <!-- Gantt Chart View -->
@@ -4844,6 +4882,89 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-if="req.notes" class="requirement-card-notes">{{ req.notes }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Participants Tab -->
+      <div v-else-if="activePlanTab === 'participants'" class="plan-content">
+        <!-- Summary Bar -->
+        <div v-if="participantActivity.length > 0" class="participant-summary-bar">
+          <div class="summary-item">
+            <span class="summary-value">{{ participantActivity.length }}</span>
+            <span class="summary-label">参与者</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-value">{{ participantActivity.reduce((s: number, p: any) => s + p.message_count, 0) }}</span>
+            <span class="summary-label">总消息</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-value">{{ participantActivity.reduce((s: number, p: any) => s + p.speech_count, 0) }}</span>
+            <span class="summary-label">总发言</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-value">{{ participantActivity.reduce((s: number, p: any) => s + p.challenge_count, 0) }}</span>
+            <span class="summary-label">总挑战</span>
+          </div>
+        </div>
+
+        <!-- Participant Activity List -->
+        <div v-if="participantActivity.length === 0" class="empty-state">
+          <div style="padding: 60px 0; text-align: center; color: #9ca3af;">
+            <div style="font-size: 32px; margin-bottom: 12px;">👥</div>
+            <div>暂无参与者活动数据</div>
+          </div>
+        </div>
+
+        <div v-else class="participant-list">
+          <div v-for="p in participantActivity" :key="p.participant_id" class="participant-card">
+            <div class="participant-card-header">
+              <div class="participant-avatar">{{ p.name?.charAt(0)?.toUpperCase() || '?' }}</div>
+              <div class="participant-info">
+                <div class="participant-name">{{ p.name }}</div>
+                <div class="participant-meta">
+                  <span class="level-badge">L{{ p.level }}</span>
+                  <span class="role-badge">{{ p.role }}</span>
+                  <span class="rooms-badge">🏛️ {{ p.rooms_joined }} 房间</span>
+                </div>
+              </div>
+            </div>
+            <div class="participant-stats">
+              <div class="stat-item">
+                <div class="stat-num">{{ p.message_count }}</div>
+                <div class="stat-lbl">消息</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-num">{{ p.speech_count }}</div>
+                <div class="stat-lbl">发言</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-num">{{ p.challenge_count }}</div>
+                <div class="stat-lbl">挑战</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-num">{{ p.response_count }}</div>
+                <div class="stat-lbl">回应</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-num">{{ p.activity_count }}</div>
+                <div class="stat-lbl">活动</div>
+              </div>
+            </div>
+            <!-- Activity Bar -->
+            <div class="participant-bar">
+              <div class="bar-label">消息分布</div>
+              <div class="bar-track">
+                <div class="bar-fill bar-speech" :style="{ width: p.message_count > 0 ? (p.speech_count / p.message_count * 100) + '%' : '0%' }" title="发言"></div>
+                <div class="bar-fill bar-challenge" :style="{ width: p.message_count > 0 ? (p.challenge_count / p.message_count * 100) + '%' : '0%' }" title="挑战"></div>
+                <div class="bar-fill bar-response" :style="{ width: p.message_count > 0 ? (p.response_count / p.message_count * 100) + '%' : '0%' }" title="回应"></div>
+              </div>
+              <div class="bar-legend">
+                <span class="legend-item"><span class="dot dot-speech"></span>发言</span>
+                <span class="legend-item"><span class="dot dot-challenge"></span>挑战</span>
+                <span class="legend-item"><span class="dot dot-response"></span>回应</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -10521,4 +10642,161 @@ body {
 .gantt-empty .empty-icon { font-size: 2rem; margin-bottom: 8px; }
 .gantt-empty .empty-text { font-size: 1rem; color: #94a3b8; margin-bottom: 4px; }
 .gantt-empty .empty-sub { font-size: 0.8rem; color: #64748b; }
+
+/* Participants Tab */
+.participant-summary-bar {
+  display: flex;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #13131f;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.participant-summary-bar .summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+.participant-summary-bar .summary-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #818cf8;
+}
+.participant-summary-bar .summary-label {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+.participant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.participant-card {
+  background: #13131f;
+  border-radius: 10px;
+  padding: 14px 16px;
+  border: 1px solid #1e1e32;
+}
+.participant-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.participant-card .participant-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #4338ca;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.participant-card .participant-info {
+  flex: 1;
+}
+.participant-card .participant-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #d0d0e8;
+}
+.participant-card .participant-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+.level-badge {
+  background: #1e1e32;
+  color: #a5b4fc;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.role-badge {
+  background: #1e1e32;
+  color: #86efac;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+.rooms-badge {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+.participant-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.participant-stats .stat-item {
+  flex: 1;
+  background: #0a0a14;
+  border-radius: 6px;
+  padding: 6px 4px;
+  text-align: center;
+}
+.participant-stats .stat-num {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #d0d0e8;
+}
+.participant-stats .stat-lbl {
+  font-size: 0.62rem;
+  color: #4a4a6a;
+  margin-top: 1px;
+}
+.participant-bar {
+  background: #0a0a14;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.participant-bar .bar-label {
+  font-size: 0.68rem;
+  color: #4a4a6a;
+  margin-bottom: 5px;
+}
+.participant-bar .bar-track {
+  height: 6px;
+  background: #1e1e32;
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+}
+.participant-bar .bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.participant-bar .bar-speech { background: #818cf8; }
+.participant-bar .bar-challenge { background: #f87171; }
+.participant-bar .bar-response { background: #34d399; }
+.participant-bar .bar-legend {
+  display: flex;
+  gap: 10px;
+  margin-top: 5px;
+}
+.participant-bar .legend-item {
+  font-size: 0.62rem;
+  color: #4a4a6a;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.participant-bar .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.participant-bar .dot-speech { background: #818cf8; }
+.participant-bar .dot-challenge { background: #f87171; }
+.participant-bar .dot-response { background: #34d399; }
 </style>

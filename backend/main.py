@@ -7117,6 +7117,112 @@ async def get_activity(activity_id: str):
 
 
 # ============================================================
+# Step 73: Participant Activity Dashboard
+# ============================================================
+
+class ParticipantActivityResponse(BaseModel):
+    participant_id: str
+    name: str
+    level: int
+    role: str
+    agent_id: str
+    message_count: int
+    speech_count: int
+    challenge_count: int
+    response_count: int
+    rooms_joined: int
+    activity_count: int
+
+
+@app.get("/plans/{plan_id}/participants/activity", response_model=List[ParticipantActivityResponse])
+async def get_participant_activity(plan_id: str, version: Optional[str] = None):
+    """
+    获取计划内所有参与者的活动统计
+    返回每个参与者的消息数、发言数、挑战数、回应数、参与房间数、活动记录数
+    来源: Step 73 - Participant Activity Dashboard
+    """
+    # DB 优先
+    if _db_active:
+        try:
+            rows = await crud.get_participant_activity(plan_id, version)
+            if rows:
+                return rows
+        except Exception as e:
+            logger.warning(f"[DB] get_participant_activity failed: {e}")
+
+    # 内存兜底
+    room_ids = [rid for rid, r in _rooms.items() if r.get("plan_id") == plan_id]
+    participant_map: Dict[str, Dict] = {}
+
+    for rid in room_ids:
+        for p in _participants.get(rid, []):
+            pid = p.get("participant_id") or p.get("agent_id")
+            if pid not in participant_map:
+                participant_map[pid] = {
+                    "participant_id": pid,
+                    "name": p.get("name", "Unknown"),
+                    "level": p.get("level", 5),
+                    "role": p.get("role", "Member"),
+                    "agent_id": p.get("agent_id", ""),
+                    "message_count": 0,
+                    "speech_count": 0,
+                    "challenge_count": 0,
+                    "response_count": 0,
+                    "rooms_joined": 0,
+                    "activity_count": 0,
+                }
+            participant_map[pid]["rooms_joined"] += 1
+
+    # 统计消息
+    for rid in room_ids:
+        for msg in _messages.get(rid, []):
+            aid = msg.get("agent_id")
+            if aid and aid in participant_map:
+                participant_map[aid]["message_count"] += 1
+                msg_type = msg.get("type", "")
+                if msg_type == "speech":
+                    participant_map[aid]["speech_count"] += 1
+                elif msg_type == "challenge":
+                    participant_map[aid]["challenge_count"] += 1
+                elif msg_type == "response":
+                    participant_map[aid]["response_count"] += 1
+
+    # 统计活动记录
+    for aid, act in _activities.items():
+        if act.get("plan_id") == plan_id and act.get("actor_id") in participant_map:
+            participant_map[act["actor_id"]]["activity_count"] += 1
+
+    return list(participant_map.values())
+
+
+@app.get("/plans/{plan_id}/participants", response_model=List[Dict[str, Any]])
+async def list_plan_participants(plan_id: str):
+    """
+    获取计划下所有房间的所有参与者（去重）
+    来源: Step 73 - Participant Activity Dashboard
+    """
+    if _db_active:
+        try:
+            rows = await crud.list_plan_participants(plan_id)
+            if rows:
+                return rows
+        except Exception as e:
+            logger.warning(f"[DB] list_plan_participants failed: {e}")
+
+    # 内存兜底
+    room_ids = [rid for rid, r in _rooms.items() if r.get("plan_id") == plan_id]
+    seen = set()
+    result = []
+    for rid in room_ids:
+        for p in _participants.get(rid, []):
+            key = p.get("agent_id", p.get("participant_id"))
+            if key and key not in seen:
+                seen.add(key)
+                result.append(p)
+    return result
+
+
+# ============================================================
 # Step 34: Notification System
 # ============================================================
 

@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.27 | 日期：2026-04-05（Step 74 - Fix Tasks Tab Metrics Bug）
+> 版本：v2.26 | 日期：2026-04-05（Step 73 - Participant Activity Dashboard）
 > 版本：v2.25 | 日期：2026-04-05（Step 72 - Dashboard Stats UI）
 > 版本：v2.23 | 日期：2026-04-05（Step 70 - Dashboard Statistics API）
 > 版本：v2.22 | 日期：2026-04-05（Step 69 - Room Tags System）
@@ -1477,4 +1479,64 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 72
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 73 (2026-04-05)
+**版本**: v2.26 | **迭代周期**: 13分钟自动触发
+
+### Plan
+实现 Participant Activity Dashboard（参与者活动仪表盘）
+
+### Do
+- 添加 `get_participant_activity` CRUD 函数（backend/repositories/crud.py）
+  - 查询计划下所有参与者的活动统计（消息数/发言数/挑战数/回应数/参与房间数/活动记录数）
+  - PostgreSQL 优先，内存兜底
+- 添加 `list_plan_participants` CRUD 函数（backend/repositories/crud.py）
+  - 获取计划下所有房间的去重参与者列表
+- 添加 Pydantic 模型 `ParticipantActivityResponse`（backend/main.py）
+- 添加 API 端点（backend/main.py）
+  - `GET /plans/{plan_id}/participants/activity` — 获取参与者活动统计
+  - `GET /plans/{plan_id}/participants` — 获取计划下所有参与者
+- 添加前端 API 函数（frontend/src/api/index.ts）
+  - `getParticipantActivity(planId)` / `listPlanParticipants(planId)`
+- 添加 Participants Tab UI（frontend/src/App.vue）
+  - 新增第 11 个 Tab「参与者」
+  - 摘要栏：参与者总数/总消息/总发言/总挑战
+  - 参与者卡片：头像/姓名/层级/角色/参与房间数 + 消息分布条形图
+  - 消息分布：发言(紫)/挑战(红)/回应(绿) 分段条
+- 修复预存 bug：添加缺失的 `loadTasks` 函数（解决 TypeScript 编译错误）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ docker-compose build web 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ npm run build 成功（78 modules, 302.10 kB）
+- ✅ pytest 171 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 73
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 74 (2026-04-05)
+**版本**: v2.27 | **迭代周期**: 13分钟自动触发
+
+### Plan
+修复 Tasks Tab 指标栏的显示 Bug
+
+### Do
+修复 Tasks Tab 指标栏（tasks-metrics）使用错误字段名的问题：
+- `planMetrics.completed_tasks` → `planMetrics.tasks?.completed`（API 嵌套在 tasks 下）
+- `planMetrics.total_tasks` → `planMetrics.tasks?.total`
+- `planMetrics.completion_rate` → `planMetrics.tasks?.completion_rate`（需 ×100 转为百分比）
+
+根因：Tasks Tab 指标栏直接访问顶层 `planMetrics.completed_tasks`，但 API 返回结构为 `planMetrics.tasks.completed`。analytics 标签页正确使用嵌套路径，但 tasks 标签页遗漏。
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ npm run build 成功（78 modules, 302.20 kB）
+- ✅ pytest 171 tests passed
+
+### Act
+- 更新 SPEC.md 完成 Step 74
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
