@@ -676,3 +676,47 @@ export const completeActionItem = (actionItemId: string) =>
 
 export const deleteActionItem = (actionItemId: string) =>
   api.delete(`/action-items/${actionItemId}`)
+
+// ── Meeting Minutes ──────────────────────────────────────────────
+export const createMeetingMinutes = (roomId: string, data: {
+  title: string;
+  content?: string;
+  summary?: string;
+  decisions_summary?: string;
+  action_items_summary?: string;
+  participants_list?: string[];
+  held_at?: string;
+  duration_minutes?: number;
+  created_by?: string;
+}) => api.post(`/rooms/${roomId}/meeting-minutes`, data)
+
+export const listRoomMeetingMinutes = (roomId: string) =>
+  api.get(`/rooms/${roomId}/meeting-minutes`)
+
+export const listPlanMeetingMinutes = (planId: string) =>
+  api.get(`/plans/${planId}/meeting-minutes`)
+
+export const getMeetingMinutes = (meetingMinutesId: string) =>
+  api.get(`/meeting-minutes/${meetingMinutesId}`)
+
+export const updateMeetingMinutes = (meetingMinutesId: string, data: {
+  title?: string;
+  content?: string;
+  summary?: string;
+  decisions_summary?: string;
+  action_items_summary?: string;
+  participants_list?: string[];
+  held_at?: string;
+  duration_minutes?: number;
+}) => api.patch(`/meeting-minutes/${meetingMinutesId}`, data)
+
+export const deleteMeetingMinutes = (meetingMinutesId: string) =>
+  api.delete(`/meeting-minutes/${meetingMinutesId}`)
+
+export const generateMeetingMinutes = (roomId: string, data?: {
+  title?: string;
+  include_decisions?: boolean;
+  include_action_items?: boolean;
+  include_timeline?: boolean;
+  include_messages?: boolean;
+}) => api.post(`/rooms/${roomId}/meeting-minutes/generate`, data || {})

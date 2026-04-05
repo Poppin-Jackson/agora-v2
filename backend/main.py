@@ -345,6 +345,44 @@ class ActionItemResponse(BaseModel):
 
 
 # ========================
+# Meeting Minutes 模型
+# ========================
+
+class MeetingMinutesCreate(BaseModel):
+    """创建会议纪要"""
+    title: str = Field(..., min_length=1)
+    content: Optional[str] = ""
+    summary: Optional[str] = ""
+    decisions_summary: Optional[str] = ""
+    action_items_summary: Optional[str] = ""
+    participants_list: Optional[List[str]] = []
+    held_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+    created_by: Optional[str] = None
+
+
+class MeetingMinutesUpdate(BaseModel):
+    """更新会议纪要"""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    summary: Optional[str] = None
+    decisions_summary: Optional[str] = None
+    action_items_summary: Optional[str] = None
+    participants_list: Optional[List[str]] = None
+    held_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+
+
+class MeetingMinutesGenerate(BaseModel):
+    """从讨论室生成会议纪要"""
+    title: Optional[str] = None  # 不提供则自动生成
+    include_decisions: bool = True
+    include_action_items: bool = True
+    include_timeline: bool = True
+    include_messages: bool = False  # 是否包含完整消息历史
+
+
+# ========================
 # Room Template 模型
 # ========================
 
@@ -10456,6 +10494,207 @@ async def export_version_markdown(plan_id: str, version: str):
         room_details=room_details, version_filter=version,
     )
     return {"content": md, "format": "markdown", "plan_id": plan_id, "version": version}
+
+
+# ========================
+# Meeting Minutes API
+# ========================
+
+@app.post("/rooms/{room_id}/meeting-minutes", status_code=201)
+async def create_meeting_minutes(room_id: str, body: MeetingMinutesCreate):
+    """
+    为讨论室创建会议纪要
+    """
+    room = await get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    plan_id = room.get("plan_id")
+    version = room.get("version")
+
+    record = await crud.create_meeting_minutes(
+        room_id=room_id,
+        plan_id=plan_id,
+        title=body.title,
+        version=version,
+        content=body.content,
+        summary=body.summary,
+        decisions_summary=body.decisions_summary,
+        action_items_summary=body.action_items_summary,
+        participants_list=body.participants_list,
+        held_at=body.held_at,
+        duration_minutes=body.duration_minutes,
+        created_by=body.created_by,
+    )
+    return record
+
+
+@app.get("/rooms/{room_id}/meeting-minutes")
+async def list_room_meeting_minutes(room_id: str):
+    """
+    列出讨论室的会议纪要
+    """
+    room = await get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    records = await crud.list_meeting_minutes(room_id=room_id)
+    return records
+
+
+@app.get("/plans/{plan_id}/meeting-minutes")
+async def list_plan_meeting_minutes(plan_id: str):
+    """
+    列出计划的会议纪要
+    """
+    plan = await get_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    records = await crud.list_meeting_minutes(plan_id=plan_id)
+    return records
+
+
+@app.get("/meeting-minutes/{meeting_minutes_id}")
+async def get_meeting_minutes(meeting_minutes_id: str):
+    """
+    获取单个会议纪要
+    """
+    record = await crud.get_meeting_minutes(meeting_minutes_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Meeting minutes not found")
+    return record
+
+
+@app.patch("/meeting-minutes/{meeting_minutes_id}")
+async def update_meeting_minutes(meeting_minutes_id: str, body: MeetingMinutesUpdate):
+    """
+    更新会议纪要
+    """
+    record = await crud.update_meeting_minutes(
+        meeting_minutes_id,
+        title=body.title,
+        content=body.content,
+        summary=body.summary,
+        decisions_summary=body.decisions_summary,
+        action_items_summary=body.action_items_summary,
+        participants_list=body.participants_list,
+        held_at=body.held_at,
+        duration_minutes=body.duration_minutes,
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Meeting minutes not found")
+    return record
+
+
+@app.delete("/meeting-minutes/{meeting_minutes_id}", status_code=204)
+async def delete_meeting_minutes(meeting_minutes_id: str):
+    """
+    删除会议纪要
+    """
+    success = await crud.delete_meeting_minutes(meeting_minutes_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Meeting minutes not found")
+    return Response(status_code=204)
+
+
+@app.post("/rooms/{room_id}/meeting-minutes/generate", status_code=201)
+async def generate_meeting_minutes(room_id: str, body: MeetingMinutesGenerate = None):
+    """
+    从讨论室数据自动生成会议纪要
+    包括：讨论摘要、决策要点、行动项、时间线
+    """
+    room = await get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if body is None:
+        body = MeetingMinutesGenerate()
+
+    plan_id = room.get("plan_id")
+    version = room.get("version")
+    topic = room.get("topic", "未命名讨论")
+
+    # 获取讨论室上下文和历史
+    ctx = await get_room_context(room_id)
+    messages = await get_room_history(room_id)
+
+    # 生成标题
+    title = body.title or f"会议纪要：{topic}"
+
+    # 生成摘要
+    msg_count = len(messages)
+    participant_names = [p.get("name", "Unknown") for p in ctx.get("participants", [])]
+    summary = f"本次讨论共 {msg_count} 条消息，{len(participant_names)} 位参与者参与讨论。"
+
+    # 生成内容
+    content_parts = []
+
+    # 时间线
+    if body.include_timeline:
+        timeline = await crud.get_room_phase_timeline(room_id)
+        if timeline:
+            content_parts.append("## 阶段时间线\n")
+            for entry in timeline:
+                entered = entry.get("entered_at", "")
+                exited = entry.get("exited_at", "")
+                duration = entry.get("duration_secs", 0)
+                phase = entry.get("phase", "")
+                exited_via = entry.get("exited_via", "")
+                if exited:
+                    content_parts.append(f"- {phase}: {entered[:19]} → {exited[:19]} (持续 {duration} 秒, 退出方式: {exited_via})\n")
+                else:
+                    content_parts.append(f"- {phase}: {entered[:19]} (进行中)\n")
+
+    # 决策摘要
+    decisions_summary = ""
+    if body.include_decisions:
+        decisions = await crud.list_decisions(plan_id=plan_id, version=version)
+        if decisions:
+            decisions_summary = f"本次讨论共产生 {len(decisions)} 项决策。"
+            content_parts.append("\n## 决策要点\n")
+            for d in decisions:
+                content_parts.append(f"- **{d.get('title', '未命名决策')}**: {d.get('decision_text', '')}\n")
+                content_parts.append(f"  - 决策人: {d.get('decided_by', '未知')}\n")
+        else:
+            decisions_summary = "本次讨论暂无决策。"
+
+    # 行动项摘要
+    action_items_summary = ""
+    if body.include_action_items:
+        action_items = await crud.list_action_items(room_id=room_id)
+        if action_items:
+            action_items_summary = f"本次讨论共产生 {len(action_items)} 个行动项。"
+            content_parts.append("\n## 行动项\n")
+            for a in action_items:
+                assignee = a.get("assignee", "未分配")
+                priority = a.get("priority", "medium")
+                content_parts.append(f"- [{priority}] {a.get('title', '')} - {assignee}\n")
+        else:
+            action_items_summary = "本次讨论暂无行动项。"
+
+    # 完整消息历史（可选）
+    if body.include_messages and messages:
+        content_parts.append("\n## 讨论记录\n")
+        for msg in messages[-50:]:  # 最近50条
+            sender = msg.get("agent_id", "unknown")
+            content_parts.append(f"- {sender}: {msg.get('content', '')}\n")
+
+    content = "".join(content_parts)
+
+    # 创建会议纪要记录
+    record = await crud.create_meeting_minutes(
+        room_id=room_id,
+        plan_id=plan_id,
+        title=title,
+        version=version,
+        content=content,
+        summary=summary,
+        decisions_summary=decisions_summary,
+        action_items_summary=action_items_summary,
+        participants_list=participant_names,
+        held_at=datetime.utcnow(),
+        created_by="system",
+    )
+    return record
 
 
 # --- 辅助函数（数据获取）---

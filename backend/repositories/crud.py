@@ -3059,3 +3059,206 @@ async def list_plan_participants(plan_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"[CRUD] list_plan_participants DB failed: {e}")
         return []
+
+
+# ── Step 76: Meeting Minutes CRUD ────────────────────────────────────────────
+
+_meeting_minutes: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+async def create_meeting_minutes(
+    room_id: str,
+    plan_id: str,
+    title: str,
+    version: str = None,
+    content: str = None,
+    summary: str = None,
+    decisions_summary: str = None,
+    action_items_summary: str = None,
+    participants_list: List[str] = None,
+    held_at: datetime = None,
+    duration_minutes: int = None,
+    created_by: str = None,
+) -> Dict[str, Any]:
+    """创建会议纪要"""
+    minutes_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    record = {
+        "meeting_minutes_id": minutes_id,
+        "room_id": room_id,
+        "plan_id": plan_id,
+        "version": version,
+        "title": title,
+        "content": content or "",
+        "summary": summary or "",
+        "decisions_summary": decisions_summary or "",
+        "action_items_summary": action_items_summary or "",
+        "participants_list": participants_list or [],
+        "held_at": held_at or now,
+        "duration_minutes": duration_minutes,
+        "created_by": created_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+    # PostgreSQL write
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO meeting_minutes
+                (meeting_minutes_id, room_id, plan_id, version, title, content,
+                 summary, decisions_summary, action_items_summary, participants_list,
+                 held_at, duration_minutes, created_by, created_at, updated_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            """, minutes_id, room_id, plan_id, version, title, content or "",
+                summary or "", decisions_summary or "", action_items_summary or "",
+                participants_list or [], held_at or now, duration_minutes,
+                created_by, now, now)
+        _meeting_minutes[(room_id, minutes_id)] = record
+        logger.info(f"[CRUD] Created meeting_minutes in DB: {minutes_id}")
+    except Exception as e:
+        logger.warning(f"[CRUD] create_meeting_minutes DB failed: {e}")
+        _meeting_minutes[(room_id, minutes_id)] = record
+    return record
+
+
+async def list_meeting_minutes(room_id: str = None, plan_id: str = None) -> List[Dict[str, Any]]:
+    """列出会议纪要（按room_id或plan_id过滤）"""
+    results = []
+    # PostgreSQL read
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if room_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM meeting_minutes
+                    WHERE room_id = $1
+                    ORDER BY created_at DESC
+                """, room_id)
+                results = [dict(r) for r in rows]
+            elif plan_id:
+                rows = await conn.fetch("""
+                    SELECT * FROM meeting_minutes
+                    WHERE plan_id = $1
+                    ORDER BY created_at DESC
+                """, plan_id)
+                results = [dict(r) for r in rows]
+            else:
+                rows = await conn.fetch("""
+                    SELECT * FROM meeting_minutes ORDER BY created_at DESC LIMIT 100
+                """)
+                results = [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"[CRUD] list_meeting_minutes DB failed: {e}")
+        results = []
+    # Memory fallback
+    if not results:
+        key_prefix = (room_id,) if room_id else None
+        if key_prefix:
+            for (rid, mid), rec in _meeting_minutes.items():
+                if rid == room_id:
+                    results.append(rec)
+        else:
+            results = list(_meeting_minutes.values())
+        results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return results
+
+
+async def get_meeting_minutes(meeting_minutes_id: str) -> Optional[Dict[str, Any]]:
+    """获取单个会议纪要"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM meeting_minutes WHERE meeting_minutes_id = $1",
+                meeting_minutes_id
+            )
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.warning(f"[CRUD] get_meeting_minutes DB failed: {e}")
+    # Memory fallback
+    for rec in _meeting_minutes.values():
+        if rec.get("meeting_minutes_id") == meeting_minutes_id:
+            return rec
+    return None
+
+
+async def update_meeting_minutes(
+    meeting_minutes_id: str,
+    title: str = None,
+    content: str = None,
+    summary: str = None,
+    decisions_summary: str = None,
+    action_items_summary: str = None,
+    participants_list: List[str] = None,
+    held_at: datetime = None,
+    duration_minutes: int = None,
+) -> Optional[Dict[str, Any]]:
+    """更新会议纪要"""
+    now = datetime.utcnow()
+    updates = []
+    values = []
+    n = 0
+    n += 1; updates.append(f"title=${n}"); values.append(title)
+    n += 1; updates.append(f"content=${n}"); values.append(content)
+    n += 1; updates.append(f"summary=${n}"); values.append(summary)
+    n += 1; updates.append(f"decisions_summary=${n}"); values.append(decisions_summary)
+    n += 1; updates.append(f"action_items_summary=${n}"); values.append(action_items_summary)
+    n += 1; updates.append(f"participants_list=${n}"); values.append(participants_list)
+    n += 1; updates.append(f"held_at=${n}"); values.append(held_at)
+    n += 1; updates.append(f"duration_minutes=${n}"); values.append(duration_minutes)
+    n += 1; updates.append(f"updated_at=${n}"); values.append(now)
+    values.append(meeting_minutes_id)
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""UPDATE meeting_minutes SET {','.join(updates)}
+                    WHERE meeting_minutes_id=${n} RETURNING *""",
+                *values
+            )
+            if row:
+                record = dict(row)
+                _meeting_minutes[(str(record["room_id"]), meeting_minutes_id)] = record
+                return record
+    except Exception as e:
+        logger.warning(f"[CRUD] update_meeting_minutes DB failed: {e}")
+    # Memory fallback
+    for (rid, mid), rec in _meeting_minutes.items():
+        if mid == meeting_minutes_id:
+            if title is not None: rec["title"] = title
+            if content is not None: rec["content"] = content
+            if summary is not None: rec["summary"] = summary
+            if decisions_summary is not None: rec["decisions_summary"] = decisions_summary
+            if action_items_summary is not None: rec["action_items_summary"] = action_items_summary
+            if participants_list is not None: rec["participants_list"] = participants_list
+            if held_at is not None: rec["held_at"] = held_at
+            if duration_minutes is not None: rec["duration_minutes"] = duration_minutes
+            rec["updated_at"] = now
+            return rec
+    return None
+
+
+async def delete_meeting_minutes(meeting_minutes_id: str) -> bool:
+    """删除会议纪要"""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM meeting_minutes WHERE meeting_minutes_id = $1",
+                meeting_minutes_id
+            )
+            if result == "DELETE 1":
+                for (rid, mid), rec in list(_meeting_minutes.items()):
+                    if mid == meeting_minutes_id:
+                        del _meeting_minutes[(rid, mid)]
+                return True
+    except Exception as e:
+        logger.warning(f"[CRUD] delete_meeting_minutes DB failed: {e}")
+    # Memory fallback
+    for (rid, mid), rec in list(_meeting_minutes.items()):
+        if mid == meeting_minutes_id:
+            del _meeting_minutes[(rid, mid)]
+            return True
+    return False

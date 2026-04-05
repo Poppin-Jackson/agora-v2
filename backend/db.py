@@ -774,6 +774,36 @@ async def _create_tables(pool: Pool):
         except Exception as e:
             logger.warning(f"[DB] Step 73 表迁移跳过（可能已存在）: {e}")
 
+        # ── Step 76: meeting_minutes 表 ────────────────────────────────────────
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS meeting_minutes (
+                        meeting_minutes_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        room_id             UUID REFERENCES rooms(room_id) ON DELETE CASCADE,
+                        plan_id             UUID REFERENCES plans(plan_id) ON DELETE CASCADE,
+                        version             TEXT,
+                        title               TEXT NOT NULL,
+                        content             TEXT,
+                        summary             TEXT,
+                        decisions_summary   TEXT,
+                        action_items_summary TEXT,
+                        participants_list   TEXT[] DEFAULT '{}',
+                        held_at             TIMESTAMPTZ,
+                        duration_minutes    INTEGER,
+                        created_by          TEXT,
+                        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_meeting_minutes_room ON meeting_minutes(room_id);
+                    CREATE INDEX IF NOT EXISTS idx_meeting_minutes_plan ON meeting_minutes(plan_id);
+                """)
+                logger.info("[DB] Step 76 表迁移完成: meeting_minutes table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 76 表迁移跳过（可能已存在）: {e}")
+
     except Exception as e:
         logger.warning(f"[DB] 列迁移跳过（可能已存在）: {e}")
 

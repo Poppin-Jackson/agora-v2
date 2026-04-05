@@ -124,6 +124,13 @@ import api, {
   updateActionItem,
   completeActionItem,
   deleteActionItem,
+  createMeetingMinutes,
+  listRoomMeetingMinutes,
+  listPlanMeetingMinutes,
+  getMeetingMinutes,
+  updateMeetingMinutes,
+  deleteMeetingMinutes,
+  generateMeetingMinutes,
 } from './api'
 
 // ─── View State ──────────────────────────────────────────
@@ -153,7 +160,7 @@ const compareLoading = ref(false)
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
-const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'participants' | 'activities' | 'analytics' | 'snapshots' | 'escalations' | 'action_items'>('overview')
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'participants' | 'activities' | 'analytics' | 'snapshots' | 'escalations' | 'action_items' | 'meeting_minutes'>('overview')
 const planDetailActiveVersion = ref<string>('')
 const exportLoading = ref(false)
 
@@ -344,6 +351,32 @@ const newActionItemForm = reactive({
   priority: 'medium',
   due_date: '',
   created_by: '',
+})
+
+// ─── Meeting Minutes State ──────────────────────────────
+const planMeetingMinutes = ref<any[]>([])
+const roomMeetingMinutes = ref<any[]>([])
+const meetingMinutesLoading = ref(false)
+const showAddMeetingMinutes = ref(false)
+const selectedMeetingMinutes = ref<any>(null)
+const showGenerateMeetingMinutes = ref(false)
+const newMeetingMinutesForm = reactive({
+  title: '',
+  content: '',
+  summary: '',
+  decisions_summary: '',
+  action_items_summary: '',
+  participants_list: [] as string[],
+  held_at: '',
+  duration_minutes: undefined as number | undefined,
+  created_by: '',
+})
+const generateMeetingMinutesForm = reactive({
+  title: '',
+  include_decisions: true,
+  include_action_items: true,
+  include_timeline: true,
+  include_messages: false,
 })
 
 // ─── Room State ─────────────────────────────────────────
@@ -1225,6 +1258,83 @@ function resetActionItemForm() {
   showAddActionItem.value = false
 }
 
+// ─── Meeting Minutes Functions ─────────────────────────────────────
+async function loadPlanMeetingMinutes() {
+  if (!currentPlan.value) return
+  meetingMinutesLoading.value = true
+  try {
+    const res = await listPlanMeetingMinutes(currentPlan.value.plan_id)
+    planMeetingMinutes.value = res.data || []
+  } catch (e) {
+    console.error('loadPlanMeetingMinutes failed', e)
+  } finally {
+    meetingMinutesLoading.value = false
+  }
+}
+
+async function loadRoomMeetingMinutes(roomId: string) {
+  try {
+    const res = await listRoomMeetingMinutes(roomId)
+    roomMeetingMinutes.value = res.data || []
+  } catch (e) {
+    console.error('loadRoomMeetingMinutes failed', e)
+  }
+}
+
+async function handleGenerateMeetingMinutes(roomId: string) {
+  meetingMinutesLoading.value = true
+  try {
+    await generateMeetingMinutes(roomId, {
+      title: generateMeetingMinutesForm.title || undefined,
+      include_decisions: generateMeetingMinutesForm.include_decisions,
+      include_action_items: generateMeetingMinutesForm.include_action_items,
+      include_timeline: generateMeetingMinutesForm.include_timeline,
+      include_messages: generateMeetingMinutesForm.include_messages,
+    })
+    generateMeetingMinutesForm.title = ''
+    generateMeetingMinutesForm.include_decisions = true
+    generateMeetingMinutesForm.include_action_items = true
+    generateMeetingMinutesForm.include_timeline = true
+    generateMeetingMinutesForm.include_messages = false
+    showGenerateMeetingMinutes.value = false
+    await loadRoomMeetingMinutes(roomId)
+    if (currentPlan.value) await loadPlanMeetingMinutes()
+  } catch (e) {
+    console.error('handleGenerateMeetingMinutes failed', e)
+  } finally {
+    meetingMinutesLoading.value = false
+  }
+}
+
+async function handleDeleteMeetingMinutes(minutesId: string) {
+  meetingMinutesLoading.value = true
+  try {
+    await deleteMeetingMinutes(minutesId)
+    if (currentPlan.value) await loadPlanMeetingMinutes()
+  } catch (e) {
+    console.error('handleDeleteMeetingMinutes failed', e)
+  } finally {
+    meetingMinutesLoading.value = false
+  }
+}
+
+async function openMeetingMinutesDetail(minutes: any) {
+  selectedMeetingMinutes.value = minutes
+}
+
+function resetMeetingMinutesForm() {
+  newMeetingMinutesForm.title = ''
+  newMeetingMinutesForm.content = ''
+  newMeetingMinutesForm.summary = ''
+  newMeetingMinutesForm.decisions_summary = ''
+  newMeetingMinutesForm.action_items_summary = ''
+  newMeetingMinutesForm.participants_list = []
+  newMeetingMinutesForm.held_at = ''
+  newMeetingMinutesForm.duration_minutes = undefined
+  showAddMeetingMinutes.value = false
+  selectedMeetingMinutes.value = null
+}
+
 async function openEscalationAction(esc: any) {
   selectedEscalation.value = esc
   escalationActionForm.action = ''
@@ -1329,6 +1439,9 @@ watch(activePlanTab, (newTab) => {
   }
   if (newTab === 'action_items') {
     loadPlanActionItems()
+  }
+  if (newTab === 'meeting_minutes') {
+    loadPlanMeetingMinutes()
   }
 })
 
@@ -3505,13 +3618,13 @@ onUnmounted(() => {
       <!-- Plan Tabs -->
       <div class="plan-tabs">
         <button
-          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'participants', 'activities', 'analytics', 'snapshots', 'escalations', 'action_items']"
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'participants', 'activities', 'analytics', 'snapshots', 'escalations', 'action_items', 'meeting_minutes']"
           :key="tab"
           class="plan-tab"
           :class="{ active: activePlanTab === tab }"
           @click="activePlanTab = tab as any"
         >
-          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'participants' ? '参与者' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : tab === 'escalations' ? '升级' : '行动' }}
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'participants' ? '参与者' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : tab === 'escalations' ? '升级' : tab === 'action_items' ? '行动' : '纪要' }}
         </button>
       </div>
 
@@ -5700,6 +5813,86 @@ onUnmounted(() => {
                 <button class="btn-edit btn-small" @click="startEditActionItem(item)">编辑</button>
                 <button class="btn-delete btn-small" @click="handleDeleteActionItem(item.action_item_id, item.room_id)">删除</button>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Meeting Minutes Tab -->
+      <div v-else-if="activePlanTab === 'meeting_minutes'" class="plan-content">
+        <div class="tab-header-row">
+          <div class="tab-title">📝 会议纪要</div>
+          <div class="tab-header-actions">
+            <button class="btn-primary" @click="loadPlanMeetingMinutes()">刷新</button>
+          </div>
+        </div>
+
+        <!-- Empty State -->
+        <div v-if="planMeetingMinutes.length === 0 && !meetingMinutesLoading" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">📝</div>
+          <div class="empty-text">暂无会议纪要</div>
+          <div class="empty-sub">在讨论室中生成会议纪要，将显示在这里</div>
+        </div>
+
+        <!-- Meeting Minutes List -->
+        <div v-if="planMeetingMinutes.length > 0" class="meeting-minutes-list">
+          <div
+            v-for="minutes in planMeetingMinutes"
+            :key="minutes.meeting_minutes_id"
+            class="meeting-minutes-card"
+            @click="openMeetingMinutesDetail(minutes)"
+          >
+            <div class="meeting-minutes-header">
+              <div class="meeting-minutes-title">{{ minutes.title }}</div>
+              <div class="meeting-minutes-time">{{ new Date(minutes.created_at || Date.now()).toLocaleString() }}</div>
+            </div>
+            <div v-if="minutes.summary" class="meeting-minutes-summary">{{ minutes.summary }}</div>
+            <div v-if="minutes.decisions_summary" class="meeting-minutes-badge decisions">📜 {{ minutes.decisions_summary }}</div>
+            <div v-if="minutes.action_items_summary" class="meeting-minutes-badge actions">✅ {{ minutes.action_items_summary }}</div>
+            <div class="meeting-minutes-meta">
+              <span v-if="minutes.created_by">👤 {{ minutes.created_by }}</span>
+              <span v-if="minutes.duration_minutes">⏱ {{ minutes.duration_minutes }}分钟</span>
+              <span v-if="minutes.participants_list && minutes.participants_list.length > 0">👥 {{ minutes.participants_list.length }}人</span>
+            </div>
+            <div class="meeting-minutes-footer">
+              <button class="btn-delete btn-small" @click.stop="handleDeleteMeetingMinutes(minutes.meeting_minutes_id)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Meeting Minutes Detail Modal -->
+      <div v-if="selectedMeetingMinutes" class="modal-overlay" @click.self="selectedMeetingMinutes = null">
+        <div class="modal-content meeting-minutes-detail-modal">
+          <div class="modal-header">
+            <h3>📝 {{ selectedMeetingMinutes.title }}</h3>
+            <button class="modal-close" @click="selectedMeetingMinutes = null">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="minutes-detail-meta">
+              <span v-if="selectedMeetingMinutes.created_by">👤 {{ selectedMeetingMinutes.created_by }}</span>
+              <span v-if="selectedMeetingMinutes.created_at">🕐 {{ new Date(selectedMeetingMinutes.created_at).toLocaleString() }}</span>
+              <span v-if="selectedMeetingMinutes.duration_minutes">⏱ {{ selectedMeetingMinutes.duration_minutes }}分钟</span>
+            </div>
+            <div v-if="selectedMeetingMinutes.summary" class="minutes-section">
+              <div class="minutes-section-title">📋 摘要</div>
+              <div class="minutes-section-content">{{ selectedMeetingMinutes.summary }}</div>
+            </div>
+            <div v-if="selectedMeetingMinutes.decisions_summary" class="minutes-section">
+              <div class="minutes-section-title">📜 决策要点</div>
+              <div class="minutes-section-content">{{ selectedMeetingMinutes.decisions_summary }}</div>
+            </div>
+            <div v-if="selectedMeetingMinutes.action_items_summary" class="minutes-section">
+              <div class="minutes-section-title">✅ 行动项</div>
+              <div class="minutes-section-content">{{ selectedMeetingMinutes.action_items_summary }}</div>
+            </div>
+            <div v-if="selectedMeetingMinutes.participants_list && selectedMeetingMinutes.participants_list.length > 0" class="minutes-section">
+              <div class="minutes-section-title">👥 参与者</div>
+              <div class="minutes-section-content">{{ selectedMeetingMinutes.participants_list.join(', ') }}</div>
+            </div>
+            <div v-if="selectedMeetingMinutes.content" class="minutes-section">
+              <div class="minutes-section-title">📄 完整内容</div>
+              <pre class="minutes-content">{{ selectedMeetingMinutes.content }}</pre>
             </div>
           </div>
         </div>
@@ -11131,5 +11324,112 @@ body {
 }
 .btn-delete:hover {
   background: #7f1d1d;
+}
+
+/* Meeting Minutes Styles */
+.meeting-minutes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 4px;
+}
+.meeting-minutes-card {
+  background: #12121e;
+  border: 1px solid #1e1e32;
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.meeting-minutes-card:hover {
+  border-color: #3b3b5c;
+}
+.meeting-minutes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.meeting-minutes-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+.meeting-minutes-time {
+  font-size: 0.68rem;
+  color: #4a4a6a;
+}
+.meeting-minutes-summary {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+.meeting-minutes-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  margin-right: 6px;
+  margin-bottom: 4px;
+}
+.meeting-minutes-badge.decisions {
+  background: #1e1e32;
+  color: #c4b5fd;
+}
+.meeting-minutes-badge.actions {
+  background: #1e1e32;
+  color: #6ee7b7;
+}
+.meeting-minutes-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 8px;
+}
+.meeting-minutes-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.minutes-detail-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.82rem;
+  color: #64748b;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1e1e32;
+}
+.minutes-section {
+  margin-bottom: 16px;
+}
+.minutes-section-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+.minutes-section-content {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+.minutes-content {
+  background: #0a0a14;
+  border: 1px solid #1e1e32;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.meeting-minutes-detail-modal {
+  max-width: 700px;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 </style>
