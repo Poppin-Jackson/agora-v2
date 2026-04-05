@@ -102,6 +102,7 @@ class PlanCreate(BaseModel):
     hierarchy_id: Optional[str] = "default"
     purpose: RoomPurpose = Field(default=RoomPurpose.INITIAL_DISCUSSION)
     mode: RoomMode = Field(default=RoomMode.HIERARCHICAL)
+    tags: Optional[List[str]] = Field(default_factory=list)
 
 
 # ========================
@@ -297,6 +298,26 @@ class RoomTagRemoveRequest(BaseModel):
 class SpeechAdd(BaseModel):
     agent_id: str
     content: str
+
+
+# ========================
+# Plan Tags (Step 80)
+# ========================
+
+
+class PlanTagUpdate(BaseModel):
+    """更新计划标签"""
+    tags: List[str] = Field(..., description="标签列表（替换模式）")
+
+
+class PlanTagAddRequest(BaseModel):
+    """添加计划标签"""
+    tags: List[str] = Field(..., description="要添加的标签列表")
+
+
+class PlanTagRemoveRequest(BaseModel):
+    """移除计划标签"""
+    tags: List[str] = Field(..., description="要移除的标签列表")
 
 
 # ========================
@@ -2121,6 +2142,7 @@ async def create_plan(data: PlanCreate):
         "created_at": now,
         "current_version": "v1.0",
         "versions": ["v1.0"],
+        "tags": data.tags or [],
     }
 
     # 自动创建讨论室
@@ -2151,6 +2173,7 @@ async def create_plan(data: PlanCreate):
                     requirements=data.requirements,
                     hierarchy_id=data.hierarchy_id or "default",
                     current_version="v1.0",
+                    tags=data.tags or [],
                 )
                 await crud.create_room(
                     room_id=room_id,
@@ -2346,6 +2369,7 @@ async def copy_plan(plan_id: str, data: dict = None):
 async def search_plans(
     q: str = Query(..., min_length=1, description="Search query (matches title or topic)"),
     status: Optional[str] = Query(None, description="Filter by status"),
+    tags: Optional[str] = Query(None, description="Filter by tags (comma-separated)"),
     limit: int = Query(50, ge=1, le=100, description="Max results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
 ):
@@ -2353,9 +2377,12 @@ async def search_plans(
     搜索 Plans by title or topic
     来源: Step 66 - Plan Search API
     """
+    # 解析 tags 参数
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
     if _db_active:
         try:
-            rows = await crud.search_plans(q, status, limit, offset)
+            rows = await crud.search_plans(q, status, tag_list, limit, offset)
             plans = [_row_to_plan(r) for r in rows]
             # 同步到内存
             for p in plans:
@@ -2364,6 +2391,7 @@ async def search_plans(
             return {
                 "query": q,
                 "status": status,
+                "tags": tags,
                 "count": len(plans),
                 "limit": limit,
                 "offset": offset,
@@ -2380,13 +2408,19 @@ async def search_plans(
         topic = p.get("topic", "").lower()
         if query_lower in title or query_lower in topic:
             if status is None or p.get("status") == status:
+                # Tags 过滤
+                if tag_list:
+                    plan_tags = p.get("tags", [])
+                    if not any(t in plan_tags for t in tag_list):
+                        continue
                 filtered.append(p)
-    
+
     # 分页
     paginated = filtered[offset:offset + limit]
     return {
         "query": q,
         "status": status,
+        "tags": tags,
         "count": len(paginated),
         "total": len(filtered),
         "limit": limit,
@@ -2501,6 +2535,133 @@ async def list_plans():
             logger.warning(f"[DB] list_plans: {e}")
 
     return list(_plans.values())
+
+
+# ========================
+# Plan Tags API (Step 80)
+# ========================
+
+
+@app.get("/plans/{plan_id}/tags")
+async def get_plan_tags(plan_id: str):
+    """
+    获取计划标签
+    """
+    # PostgreSQL 优先读取
+    if _db_active:
+        try:
+            row = await crud.get_plan(plan_id)
+            if row:
+                return {"plan_id": plan_id, "tags": row.get("tags", [])}
+        except Exception as e:
+            logger.warning(f"[DB] get_plan_tags {plan_id}: {e}")
+
+    # 内存回退
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return {"plan_id": plan_id, "tags": _plans[plan_id].get("tags", [])}
+
+
+@app.patch("/plans/{plan_id}/tags")
+async def update_plan_tags(plan_id: str, data: PlanTagUpdate):
+    """
+    替换计划标签（PATCH - 全量替换）
+    """
+    # 确保 plan 存在
+    if plan_id not in _plans:
+        if _db_active:
+            try:
+                row = await crud.get_plan(plan_id)
+                if row:
+                    _plans[plan_id] = _row_to_plan(row)
+            except Exception as e:
+                logger.warning(f"[DB] get_plan for tags {plan_id}: {e}")
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_plan(plan_id, tags=data.tags)
+            if row:
+                _plans[plan_id] = _row_to_plan(row)
+                return {"plan_id": plan_id, "tags": data.tags}
+        except Exception as e:
+            logger.warning(f"[DB] update_plan_tags {plan_id}: {e}")
+
+    # 内存回退
+    _plans[plan_id]["tags"] = data.tags
+    return {"plan_id": plan_id, "tags": data.tags}
+
+
+@app.post("/plans/{plan_id}/tags/add")
+async def add_plan_tags(plan_id: str, data: PlanTagAddRequest):
+    """
+    添加标签到计划（增量添加）
+    """
+    # 确保 plan 存在
+    if plan_id not in _plans:
+        if _db_active:
+            try:
+                row = await crud.get_plan(plan_id)
+                if row:
+                    _plans[plan_id] = _row_to_plan(row)
+            except Exception as e:
+                logger.warning(f"[DB] get_plan for tags {plan_id}: {e}")
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    current_tags = _plans[plan_id].get("tags", [])
+    new_tags = list(set(current_tags + data.tags))  # 去重
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_plan(plan_id, tags=new_tags)
+            if row:
+                _plans[plan_id] = _row_to_plan(row)
+                return {"plan_id": plan_id, "tags": new_tags}
+        except Exception as e:
+            logger.warning(f"[DB] add_plan_tags {plan_id}: {e}")
+
+    # 内存回退
+    _plans[plan_id]["tags"] = new_tags
+    return {"plan_id": plan_id, "tags": new_tags}
+
+
+@app.post("/plans/{plan_id}/tags/remove")
+async def remove_plan_tags(plan_id: str, data: PlanTagRemoveRequest):
+    """
+    从计划移除标签
+    """
+    # 确保 plan 存在
+    if plan_id not in _plans:
+        if _db_active:
+            try:
+                row = await crud.get_plan(plan_id)
+                if row:
+                    _plans[plan_id] = _row_to_plan(row)
+            except Exception as e:
+                logger.warning(f"[DB] get_plan for tags {plan_id}: {e}")
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    current_tags = _plans[plan_id].get("tags", [])
+    remaining_tags = [t for t in current_tags if t not in data.tags]  # 移除指定标签
+
+    # PostgreSQL 优先更新
+    if _db_active:
+        try:
+            row = await crud.update_plan(plan_id, tags=remaining_tags)
+            if row:
+                _plans[plan_id] = _row_to_plan(row)
+                return {"plan_id": plan_id, "tags": remaining_tags}
+        except Exception as e:
+            logger.warning(f"[DB] remove_plan_tags {plan_id}: {e}")
+
+    # 内存回退
+    _plans[plan_id]["tags"] = remaining_tags
+    return {"plan_id": plan_id, "tags": remaining_tags}
 
 
 # ========================
@@ -8398,7 +8559,7 @@ async def get_task(plan_id: str, version: str, task_id: str):
     # but data may still exist in PostgreSQL from previous sessions
     try:
         row = await crud.get_task(task_id)
-        if row and row["plan_id"] == plan_id and row["version"] == version:
+        if row and str(row["plan_id"]) == plan_id and str(row["version"]) == version:
             return dict(row)
     except Exception as e:
         logger.warning(f"[DB] get_task failed: {e}")
@@ -10615,7 +10776,7 @@ async def create_meeting_minutes(room_id: str, body: MeetingMinutesCreate):
         raise HTTPException(status_code=404, detail="Room not found")
 
     plan_id = room.get("plan_id")
-    version = room.get("version")
+    version = room.get("version") or room.get("current_version")
 
     record = await crud.create_meeting_minutes(
         room_id=room_id,
@@ -10715,7 +10876,7 @@ async def generate_meeting_minutes(room_id: str, body: MeetingMinutesGenerate = 
         body = MeetingMinutesGenerate()
 
     plan_id = room.get("plan_id")
-    version = room.get("version")
+    version = room.get("version") or room.get("current_version")
     topic = room.get("topic", "未命名讨论")
 
     # 获取讨论室上下文和历史
@@ -10739,15 +10900,17 @@ async def generate_meeting_minutes(room_id: str, body: MeetingMinutesGenerate = 
         if timeline:
             content_parts.append("## 阶段时间线\n")
             for entry in timeline:
-                entered = entry.get("entered_at", "")
-                exited = entry.get("exited_at", "")
+                entered_raw = entry.get("entered_at", "")
+                exited_raw = entry.get("exited_at", "")
                 duration = entry.get("duration_secs", 0)
                 phase = entry.get("phase", "")
                 exited_via = entry.get("exited_via", "")
-                if exited:
-                    content_parts.append(f"- {phase}: {entered[:19]} → {exited[:19]} (持续 {duration} 秒, 退出方式: {exited_via})\n")
+                entered = entered_raw[:19] if isinstance(entered_raw, str) else entered_raw.strftime("%Y-%m-%dT%H:%M")
+                if exited_raw:
+                    exited = exited_raw[:19] if isinstance(exited_raw, str) else exited_raw.strftime("%Y-%m-%dT%H:%M")
+                    content_parts.append(f"- {phase}: {entered} → {exited} (持续 {duration} 秒, 退出方式: {exited_via})\n")
                 else:
-                    content_parts.append(f"- {phase}: {entered[:19]} (进行中)\n")
+                    content_parts.append(f"- {phase}: {entered} (进行中)\n")
 
     # 决策摘要
     decisions_summary = ""

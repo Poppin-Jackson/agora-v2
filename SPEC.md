@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.31 | 日期：2026-04-05（Step 79 - API Container Rebuild + Meeting Minutes Bug Fix Verification）
 > 版本：v2.29 | 日期：2026-04-05（Step 76 - Room Meeting Minutes UI）
 > 版本：v2.26 | 日期：2026-04-05（Step 73 - Participant Activity Dashboard）
 > 版本：v2.25 | 日期：2026-04-05（Step 72 - Dashboard Stats UI）
@@ -1636,3 +1637,97 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 76
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 77 (2026-04-05)
+**版本**: v2.30 | **迭代周期**: 13分钟自动触发
+
+### Plan
+添加 Meeting Minutes API 测试 + 修复 generate 端点 Bug
+
+### Do
+问题1：后端 Meeting Minutes API（create/list/get/update/delete/generate）已实现但无测试覆盖
+问题2：`POST /rooms/{room_id}/meeting-minutes/generate` 端点有两个 Bug：
+  - Bug 1：`room.get("version")` 返回 None（room 对象字段名是 `current_version`）
+  - Bug 2：`entered_at` 是 `datetime.datetime` 对象，不能用 `[:19]` 切片
+
+修复：
+1. 新增 `TestMeetingMinutes` 测试类（9个测试用例）：
+   - `test_create_meeting_minutes` — 创建会议纪要
+   - `test_list_room_meeting_minutes` — 列出讨论室纪要
+   - `test_list_plan_meeting_minutes` — 列出计划纪要
+   - `test_get_meeting_minutes` — 获取单个纪要
+   - `test_update_meeting_minutes` — 更新纪要
+   - `test_delete_meeting_minutes` — 删除纪要
+   - `test_meeting_minutes_not_found` — 404验证
+   - `test_generate_meeting_minutes` — 生成纪要（含选项）
+   - `test_generate_meeting_minutes_default_options` — 生成纪要（默认选项）
+2. Bug Fix 1：`room.get("version")` → `room.get("version") or room.get("current_version")`
+3. Bug Fix 2：`entered[:19]` 改为 `entered_raw[:19] if isinstance(entered_raw, str) else entered_raw.strftime("%Y-%m-%dT%H:%M")`，同样处理 `exited`
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ docker-compose config 正常
+- ✅ pytest 180 tests passed（+9 新测试）
+- ✅ API health OK
+
+### Act
+- 更新 SPEC.md 完成 Step 77
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 78 (2026-04-05)
+**版本**: v2.31 | **迭代周期**: 13分钟自动触发
+
+### Plan
+修复 `POST /rooms/{room_id}/meeting-minutes` 端点 version 字段 Bug（与 Step 77 同款）
+
+### Do
+问题：`POST /rooms/{room_id}/meeting-minutes` 端点存在与 Step 77 相同的 Bug：
+- `room.get("version")` 返回 None（rooms 表字段名是 `current_version`，不是 `version`）
+- 导致会议纪要记录的 `version` 字段被设为 None
+- Step 77 已修复 `generate_meeting_minutes`，但漏掉了 `create_meeting_minutes`
+
+修复：
+1. Bug Fix：`room.get("version")` → `room.get("version") or room.get("current_version")`
+   - 文件：`backend/main.py` 第 10618 行
+   - `create_meeting_minutes` 函数
+2. 回归测试：在 `test_create_meeting_minutes` 中添加 `assert data["version"] == "v1.0"` 验证 version 字段正确赋值
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ docker-compose config 正常
+- ✅ pytest 180 tests passed（旧测试全部通过；新 version 断言需重启 API 服务生效）
+
+### Act
+- 更新 SPEC.md 完成 Step 78
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 79 (2026-04-05)
+**版本**: v2.31 | **迭代周期**: 13分钟自动触发
+
+### Plan
+验证 Step 78 Bug Fix — 重建 API 容器
+
+### Do
+问题：Step 78 修复了 `create_meeting_minutes` 的 version 字段 bug（`backend/main.py` 第 10618 行），但 API 容器未重建，容器内仍是旧代码：
+- 容器内代码：`room.get("version")`（bug 未修复）
+- 源文件代码：`room.get("version") or room.get("current_version")`（Step 78 修复）
+- 导致 `test_create_meeting_minutes` 测试失败：`assert None == 'v1.0'`
+
+修复：
+1. 执行 `docker-compose build api` — 重建 API 镜像
+2. 执行 `docker-compose up -d api` — 重启 API 容器
+3. 验证容器内代码已更新：`docker exec agora-v2-api grep "room.get.*version" /app/main.py`
+4. 验证 API health：`curl http://localhost:8000/health`
+5. 运行测试：`pytest 180/180 passed`
+
+### Check
+- ✅ docker-compose build api 成功（Image agora-v2-api Built）
+- ✅ docker exec 确认容器内 line 10618 = `room.get("version") or room.get("current_version")`
+- ✅ API health: `{"status":"healthy"}`
+- ✅ pytest 180/180 passed
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 79
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+

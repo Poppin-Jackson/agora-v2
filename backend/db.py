@@ -113,8 +113,19 @@ async def _create_tables(pool: Pool):
         current_version TEXT DEFAULT 'v1.0',
         versions     JSONB DEFAULT '["v1.0"]',
         created_at   TIMESTAMPTZ DEFAULT NOW(),
-        updated_at   TIMESTAMPTZ DEFAULT NOW()
+        updated_at   TIMESTAMPTZ DEFAULT NOW(),
+        tags         TEXT[] DEFAULT '{}'
     );
+
+    -- plans 表迁移：添加 tags 列（如果不存在）
+    DO $$
+    BEGIN
+        ALTER TABLE plans ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+    EXCEPTION WHEN undefined_column THEN
+        ALTER TABLE plans ADD COLUMN tags TEXT[] DEFAULT '{}';
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS idx_plans_tags ON plans USING GIN(tags);
 
     -- rooms 表
     CREATE TABLE IF NOT EXISTS rooms (

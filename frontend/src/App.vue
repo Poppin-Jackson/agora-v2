@@ -117,6 +117,10 @@ import api, {
   updateRoomTags,
   addRoomTags,
   removeRoomTags,
+  getPlanTags,
+  updatePlanTags,
+  addPlanTags,
+  removePlanTags,
   createActionItem,
   listRoomActionItems,
   listPlanActionItems,
@@ -557,6 +561,14 @@ const roomTagsForm = reactive({
   newTag: '',
 })
 const roomTagsLoading = ref(false)
+
+// Plan Tags (Step 80)
+const showPlanTagsModal = ref(false)
+const planTagsForm = reactive({
+  newTag: '',
+})
+const planTagsLoading = ref(false)
+
 const showNotifications = ref(false)
 const currentUser = reactive({ user_id: 'user-1', name: '访客', level: 5 })
 
@@ -2549,6 +2561,55 @@ async function handleUpdateRoomTags(tags: string[]) {
   }
 }
 
+// Plan Tags Management (Step 80)
+function togglePlanTags() {
+  showPlanTagsModal.value = !showPlanTagsModal.value
+  planTagsForm.newTag = ''
+}
+
+async function handleAddPlanTag() {
+  if (!currentPlan.value || !planTagsForm.newTag.trim()) return
+  planTagsLoading.value = true
+  try {
+    const res = await addPlanTags(currentPlan.value.plan_id, [planTagsForm.newTag.trim()])
+    currentPlan.value.tags = res.data.tags
+    planTagsForm.newTag = ''
+  } catch (e) {
+    console.error('add plan tag failed', e)
+    alert('添加标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    planTagsLoading.value = false
+  }
+}
+
+async function handleRemovePlanTag(tag: string) {
+  if (!currentPlan.value) return
+  planTagsLoading.value = true
+  try {
+    const res = await removePlanTags(currentPlan.value.plan_id, [tag])
+    currentPlan.value.tags = res.data.tags
+  } catch (e) {
+    console.error('remove plan tag failed', e)
+    alert('移除标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    planTagsLoading.value = false
+  }
+}
+
+async function handleUpdatePlanTags(tags: string[]) {
+  if (!currentPlan.value) return
+  planTagsLoading.value = true
+  try {
+    const res = await updatePlanTags(currentPlan.value.plan_id, tags)
+    currentPlan.value.tags = res.data.tags
+  } catch (e) {
+    console.error('update plan tags failed', e)
+    alert('更新标签失败: ' + (e as any)?.response?.data?.detail || (e as Error).message)
+  } finally {
+    planTagsLoading.value = false
+  }
+}
+
 // ─── Room Watch Functions ────────────────────────────────────
 
 async function loadWatchStatus() {
@@ -3643,12 +3704,47 @@ onUnmounted(() => {
         <button class="btn-secondary" :disabled="exportLoading" @click="handleExportVersion" title="导出版本 Markdown">
           📄 版本
         </button>
+        <!-- Plan Tags Button -->
+        <button class="room-tags-btn" @click.stop="togglePlanTags" title="标签管理">
+          🏷️ 标签
+        </button>
         <!-- Notification Bell -->
         <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
           🔔
           <span v-if="unreadCount > 0" class="notification-badge">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
         </button>
       </header>
+
+      <!-- Plan Tags Display -->
+      <div v-if="currentPlan?.tags?.length" class="room-header-tags" style="background: rgba(30,30,40,0.9); padding: 6px 16px; border-bottom: 1px solid rgba(99,102,241,0.2);">
+        <span v-for="tag in currentPlan.tags" :key="tag" class="header-tag">{{ tag }}</span>
+      </div>
+
+      <!-- Plan Tags Modal -->
+      <div v-if="showPlanTagsModal" class="modal-overlay" @click.self="showPlanTagsModal = false">
+        <div class="modal-content room-tags-modal">
+          <button class="modal-close" @click="showPlanTagsModal = false">✕</button>
+          <h3>🏷️ 计划标签</h3>
+          <div v-if="currentPlan?.tags?.length" class="room-tags-list">
+            <span v-for="tag in currentPlan.tags" :key="tag" class="room-tag-item">
+              {{ tag }}
+              <button class="tag-remove-btn" @click="handleRemovePlanTag(tag)">✕</button>
+            </span>
+          </div>
+          <div v-else class="room-tags-empty">暂无标签</div>
+          <div class="room-tags-form">
+            <input
+              v-model="planTagsForm.newTag"
+              class="input"
+              placeholder="输入标签名称"
+              @keyup.enter="handleAddPlanTag"
+            />
+            <button class="btn-primary" @click="handleAddPlanTag" :disabled="planTagsLoading || !planTagsForm.newTag.trim()">
+              添加
+            </button>
+          </div>
+        </div>
+      </div>
 
       <!-- Create Room Form -->
       <div v-if="showCreateRoom" class="create-panel">

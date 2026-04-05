@@ -48,6 +48,19 @@ export const addRoomTags = (roomId: string, tags: string[]) =>
 export const removeRoomTags = (roomId: string, tags: string[]) =>
   api.post(`/rooms/${roomId}/tags/remove`, { tags })
 
+// Plan Tags
+export const getPlanTags = (planId: string) =>
+  api.get(`/plans/${planId}/tags`)
+
+export const updatePlanTags = (planId: string, tags: string[]) =>
+  api.patch(`/plans/${planId}/tags`, { tags })
+
+export const addPlanTags = (planId: string, tags: string[]) =>
+  api.post(`/plans/${planId}/tags/add`, { tags })
+
+export const removePlanTags = (planId: string, tags: string[]) =>
+  api.post(`/plans/${planId}/tags/remove`, { tags })
+
 // Rooms
 export const getRoom = (roomId: string) =>
   api.get(`/rooms/${roomId}`)

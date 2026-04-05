@@ -21,18 +21,21 @@ logger = logging.getLogger(__name__)
 
 async def create_plan(plan_id: str, plan_number: str, title: str, topic: str,
                       requirements: List[str], hierarchy_id: str,
-                      current_version: str = "v1.0") -> Dict[str, Any]:
+                      current_version: str = "v1.0",
+                      tags: List[str] = None) -> Dict[str, Any]:
+    if tags is None:
+        tags = []
     async with get_connection() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO plans (plan_id, plan_number, title, topic, requirements, hierarchy_id,
-                               current_version, versions, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                               current_version, versions, created_at, updated_at, tags)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), $9)
             RETURNING *
             """,
             plan_id, plan_number, title, topic,
             json.dumps(requirements), hierarchy_id,
-            current_version, json.dumps([current_version])
+            current_version, json.dumps([current_version]), tags
         )
         return dict(row)
 
@@ -53,7 +56,12 @@ async def update_plan(plan_id: str, **fields) -> Optional[Dict[str, Any]]:
     values = []
     for i, (k, v) in enumerate(fields.items(), start=1):
         set_clauses.append(f"{k} = ${i}")
-        values.append(json.dumps(v) if isinstance(v, (list, dict)) else v)
+        # tags 是 TEXT[] 数组类型，直接传递 list（asyncpg 自动处理）
+        # 其他 list/dict 字段使用 json.dumps
+        if k == "tags" and isinstance(v, list):
+            values.append(v)
+        else:
+            values.append(json.dumps(v) if isinstance(v, (list, dict)) else v)
     values.append(plan_id)
     async with get_connection() as conn:
         row = await conn.fetchrow(
@@ -70,25 +78,32 @@ async def list_plans() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def search_plans(query: str, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+async def search_plans(query: str, status: Optional[str] = None,
+                        tags: Optional[List[str]] = None,
+                        limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
     """
-    搜索 Plans by title or topic
+    搜索 Plans by title or topic, optionally filtered by status and tags
     """
     async with get_connection() as conn:
-        # Build the query with optional status filter
+        # Build the query with optional status and tags filter
         sql = """
-            SELECT * FROM plans 
+            SELECT * FROM plans
             WHERE (title ILIKE $1 OR topic ILIKE $1)
         """
         params = [f"%{query}%"]
-        
+
         if status:
             sql += f" AND status = ${len(params) + 1}"
             params.append(status)
-        
+
+        # Tags 过滤 - 使用数组重叠操作符 &&
+        if tags:
+            sql += f" AND tags && ${len(params) + 1}"
+            params.append(tags)
+
         sql += f" ORDER BY created_at DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         params.extend([limit, offset])
-        
+
         rows = await conn.fetch(sql, *params)
         return [dict(r) for r in rows]
 
@@ -2436,7 +2451,7 @@ async def list_task_templates(
     idx = 1
 
     if tag:
-        conditions.append(f"AND $${idx}$$ = ANY(tags)")
+        conditions.append(f"AND ${idx} = ANY(tags)")
         params.append(tag)
         idx += 1
     if is_shared is not None:

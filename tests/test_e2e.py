@@ -4183,6 +4183,173 @@ class TestPlanTemplates:
         assert resp.status_code == 200
 
 
+class TestTaskTemplates:
+    """Task Templates API Tests"""
+
+    def test_list_task_templates(self):
+        """列出任务模板（默认模板应该存在）"""
+        resp = httpx.get(f"{API_BASE}/task-templates", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert isinstance(result, dict)
+        assert "templates" in result
+        assert isinstance(result["templates"], list)
+
+    def test_create_task_template(self):
+        """创建任务模板"""
+        template_data = {
+            "name": "测试任务模板",
+            "default_title": "自动化测试任务",
+            "description": "用于自动化测试的任务模板",
+            "priority": "high",
+            "difficulty": "medium",
+            "estimated_hours": 8.0,
+            "owner_level": 3,
+            "owner_role": "开发",
+            "tags": ["test", "automation"],
+            "is_shared": False,
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "template_id" in result
+        template_id = result["template_id"]
+
+        # 验证创建成功
+        resp = httpx.get(f"{API_BASE}/task-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "测试任务模板"
+        assert tmpl["default_title"] == "自动化测试任务"
+        assert tmpl["priority"] == "high"
+        assert tmpl["difficulty"] == "medium"
+        assert tmpl["estimated_hours"] == 8.0
+        assert tmpl["owner_level"] == 3
+        assert tmpl["owner_role"] == "开发"
+        assert "test" in tmpl["tags"]
+        assert tmpl["is_shared"] is False
+
+    def test_update_task_template(self):
+        """更新任务模板"""
+        # 先创建一个模板
+        template_data = {
+            "name": "待更新任务模板",
+            "default_title": "更新前任务",
+            "priority": "low",
+            "difficulty": "easy",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 更新模板
+        resp = httpx.patch(f"{API_BASE}/task-templates/{template_id}", json={
+            "name": "已更新任务模板",
+            "priority": "critical",
+            "estimated_hours": 16.0,
+        }, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "已更新任务模板"
+        assert tmpl["priority"] == "critical"
+        assert tmpl["estimated_hours"] == 16.0
+        assert tmpl["default_title"] == "更新前任务"  # 未更新的字段保持不变
+        assert tmpl["difficulty"] == "easy"
+
+    def test_delete_task_template(self):
+        """删除任务模板"""
+        template_data = {
+            "name": "待删除任务模板",
+            "default_title": "删除任务",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 删除模板
+        resp = httpx.delete(f"{API_BASE}/task-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除
+        resp = httpx.get(f"{API_BASE}/task-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_task_template_not_found(self):
+        """模板不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/task-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_task_from_template(self):
+        """从任务模板创建任务"""
+        # 先创建一个计划
+        plan_data = {
+            "title": "从模板创建任务测试",
+            "topic": "测试主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # 创建一个任务模板
+        template_data = {
+            "name": "任务创建模板",
+            "default_title": "模板默认任务",
+            "default_description": "这是从模板创建的任务",
+            "priority": "medium",
+            "difficulty": "hard",
+            "estimated_hours": 12.0,
+            "owner_level": 4,
+            "owner_role": "测试",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 从模板创建任务
+        resp = httpx.post(
+            f"{API_BASE}/task-templates/{template_id}/create-task",
+            params={"plan_id": plan_id, "version": "v1.0", "title": "自定义任务标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "task_id" in result
+        assert result.get("template_applied") == "任务创建模板"
+        task_id = result["task_id"]
+
+        # 验证任务已创建
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        task = resp.json()
+        assert task["title"] == "自定义任务标题"
+        assert task["plan_id"] == plan_id
+        assert task["priority"] == "medium"
+        assert task["estimated_hours"] == 12.0
+
+    def test_list_task_templates_with_tag_filter(self):
+        """按标签筛选任务模板"""
+        # 创建一个带特定标签的模板
+        template_data = {
+            "name": "标签测试任务模板",
+            "default_title": "测试任务",
+            "tags": ["tag-filter-test", "automation"],
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 按标签筛选
+        resp = httpx.get(f"{API_BASE}/task-templates", params={"tag": "tag-filter-test"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert isinstance(result, dict)
+        templates = result.get("templates", [])
+        # 验证返回的模板包含指定标签
+        for tmpl in templates:
+            if tmpl.get("name") == "标签测试任务模板":
+                assert "tag-filter-test" in tmpl.get("tags", [])
+
+
 class TestRoomTags:
     """Step 69: Room Tags API Tests"""
 
@@ -4561,6 +4728,166 @@ class TestVersionComparison:
         # 验证 summary 结构
         for key in ["tasks", "requirements", "decisions", "edicts", "issues", "risks"]:
             assert key in data["summary"]
+
+
+class TestMeetingMinutes:
+    """Step 77: Meeting Minutes API Tests"""
+
+    @pytest.fixture
+    def test_plan(self):
+        """创建一个测试计划（带讨论室）"""
+        plan_data = {
+            "title": "会议纪要测试计划",
+            "topic": "用于测试会议纪要的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        # 返回完整数据（包含 plan 和 room）
+        return data
+
+    def test_create_meeting_minutes(self, test_plan):
+        """创建会议纪要"""
+        room_id = test_plan["room"]["room_id"]
+        minutes_data = {
+            "title": "第一次会议纪要",
+            "content": "本次会议讨论了项目计划和技术方案。",
+            "summary": "讨论了项目计划和技术方案，确定了初步方向。",
+            "decisions_summary": "决定采用微服务架构。",
+            "action_items_summary": "张三负责架构设计，李四负责文档编写。",
+            "participants_list": ["张三", "李四", "王五"],
+            "duration_minutes": 90,
+            "created_by": "张三",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes", json=minutes_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "第一次会议纪要"
+        assert data["content"] == "本次会议讨论了项目计划和技术方案。"
+        assert data["summary"] == "讨论了项目计划和技术方案，确定了初步方向。"
+        assert data["decisions_summary"] == "决定采用微服务架构。"
+        assert data["action_items_summary"] == "张三负责架构设计，李四负责文档编写。"
+        assert data["participants_list"] == ["张三", "李四", "王五"]
+        assert data["duration_minutes"] == 90
+        assert data["created_by"] == "张三"
+        assert "meeting_minutes_id" in data
+        assert "created_at" in data
+        assert data["room_id"] == room_id
+        assert data["version"] == "v1.0", "version should be set from room.current_version"
+
+    def test_list_room_meeting_minutes(self, test_plan):
+        """列出讨论室的会议纪要"""
+        room_id = test_plan["room"]["room_id"]
+        # 创建两条纪要
+        for i in range(2):
+            httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+                json={"title": f"会议纪要 {i+1}", "content": f"内容{i+1}"},
+                timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/meeting-minutes", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) >= 2
+        for item in data:
+            assert item["room_id"] == room_id
+
+    def test_list_plan_meeting_minutes(self, test_plan):
+        """列出计划的会议纪要"""
+        plan_id = test_plan["plan"]["plan_id"]
+        room_id = test_plan["room"]["room_id"]
+        httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": "计划会议纪要", "content": "内容"},
+            timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/meeting-minutes", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert any(m["title"] == "计划会议纪要" for m in data)
+
+    def test_get_meeting_minutes(self, test_plan):
+        """获取单个会议纪要"""
+        room_id = test_plan["room"]["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": "获取测试纪要", "content": "测试内容"}, timeout=TIMEOUT)
+        minutes_id = resp.json()["meeting_minutes_id"]
+
+        resp = httpx.get(f"{API_BASE}/meeting-minutes/{minutes_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["meeting_minutes_id"] == minutes_id
+        assert data["title"] == "获取测试纪要"
+        assert data["content"] == "测试内容"
+
+    def test_update_meeting_minutes(self, test_plan):
+        """更新会议纪要"""
+        room_id = test_plan["room"]["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": "原始标题", "content": "原始内容"}, timeout=TIMEOUT)
+        minutes_id = resp.json()["meeting_minutes_id"]
+
+        resp = httpx.patch(f"{API_BASE}/meeting-minutes/{minutes_id}",
+            json={"title": "更新后标题", "content": "更新后内容", "summary": "新增摘要"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "更新后标题"
+        assert data["content"] == "更新后内容"
+        assert data["summary"] == "新增摘要"
+
+    def test_delete_meeting_minutes(self, test_plan):
+        """删除会议纪要"""
+        room_id = test_plan["room"]["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": "待删除纪要", "content": "内容"}, timeout=TIMEOUT)
+        minutes_id = resp.json()["meeting_minutes_id"]
+
+        resp = httpx.delete(f"{API_BASE}/meeting-minutes/{minutes_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除
+        resp = httpx.get(f"{API_BASE}/meeting-minutes/{minutes_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_meeting_minutes_not_found(self):
+        """会议纪要不存在的404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/meeting-minutes/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_generate_meeting_minutes(self, test_plan):
+        """从讨论室生成会议纪要（包含决策和行动项）"""
+        room_id = test_plan["room"]["room_id"]
+        # 生成纪要（不包含消息历史）
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            json={
+                "title": "自动生成会议纪要",
+                "include_decisions": True,
+                "include_action_items": True,
+                "include_timeline": True,
+                "include_messages": False,
+            },
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "自动生成会议纪要"
+        assert data["room_id"] == room_id
+        assert "meeting_minutes_id" in data
+
+    def test_generate_meeting_minutes_default_options(self, test_plan):
+        """生成会议纪要（使用默认选项）"""
+        room_id = test_plan["room"]["room_id"]
+        # 不传 body，使用全部默认选项
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "meeting_minutes_id" in data
+        assert "title" in data
 
 
 if __name__ == "__main__":
