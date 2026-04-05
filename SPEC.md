@@ -1,5 +1,9 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
+> 版本：v2.35 | 日期：2026-04-05（Step 83 - Meeting Minutes Generate 边界测试覆盖）
+> 版本：v2.34 | 日期：2026-04-05（Step 82 - Edict Acknowledgment API 测试覆盖）
+> 版本：v2.33 | 日期：2026-04-05（Step 81 - Room Watch API 测试覆盖）
 > 版本：v2.31 | 日期：2026-04-05（Step 79 - API Container Rebuild + Meeting Minutes Bug Fix Verification）
 > 版本：v2.29 | 日期：2026-04-05（Step 76 - Room Meeting Minutes UI）
 > 版本：v2.26 | 日期：2026-04-05（Step 73 - Participant Activity Dashboard）
@@ -1729,5 +1733,162 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 79
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 80 (2026-04-05)
+**版本**: v2.32 | **迭代周期**: 13分钟自动触发
+
+### Plan
+修复 Task blocked_by JSONB 字符串解析 Bug（Task Dependency 测试失败）
+
+### Do
+问题：`TestTaskDependencyBlocking::test_multiple_dependencies_all_block` 测试失败，错误信息：`assert len(resp.json().get("blocked_by", [])) == 0` 但 `blocked_by='[]'`（字符串，不是空列表）
+
+根因分析：
+1. `blocked_by` 字段在 PostgreSQL JSONB 列中存储为 JSON 字符串（如 `'["task_id"]'`）
+2. asyncpg 在多数情况下能自动解码 JSONB，但在 `update_task`/`get_task`/`list_tasks` 的某些路径中返回字符串
+3. `_on_task_completed` 函数中 `blocked_by` 读取时未做 JSON 字符串到 list 的解析，导致字符串包含判断错误
+
+修复（2个文件）：
+
+**backend/main.py** (`_on_task_completed` 函数，第 1782-1788 行)：
+- 添加 `blocked_by` 的 JSON 字符串解析，与 `dependencies` 字段一致
+- 修复前：`blocked_by = task.get("blocked_by", [])`（字符串直接使用）
+- 修复后：检查 `isinstance(blocked_by, str)` 并用 `json.loads()` 解析
+
+**backend/repositories/crud.py**（3个函数）：
+- `get_task`：添加 JSONB 字段 `blocked_by`/`dependencies` 的显式 `json.loads()` 解码
+- `list_tasks`：对每条记录添加 JSONB 字段的显式 `json.loads()` 解码
+- `update_task`：在 RETURNING 后对 JSONB 字段做显式 `json.loads()` 解码
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ pytest 187/187 passed（+1 previously failing test now passes）
+- ✅ docker-compose config 正常
+- ✅ 调试脚本验证 `blocked_by` 类型正确（创建时 list → A完成后 list → B完成后 list）
+
+### Act
+- 更新 SPEC.md 完成 Step 80
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 81 (2026-04-05)
+**版本**: v2.33 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Watch 功能添加完整 API 测试覆盖
+
+背景：Room Watch API（5个端点）允许用户关注/取消关注讨论室，是通知系统的基础。之前没有任何测试覆盖，是测试空白区。
+
+### Do
+新增 `TestRoomWatch` 测试类（7个测试用例）：
+- `test_watch_room` — 关注讨论室
+- `test_list_room_watchers` — 列出讨论室的所有关注者
+- `test_unwatch_room` — 取消关注讨论室
+- `test_get_user_watched_rooms` — 获取用户关注的所有讨论室
+- `test_is_room_watched` — 检查用户是否关注了指定讨论室
+- `test_watch_nonexistent_room` — 关注不存在的讨论室返回404
+- `test_unwatch_not_watching` — 取消未关注的讨论室返回404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRoomWatch 7/7 passed
+- ✅ pytest 194/194 passed（+7 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 81
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 83 (2026-04-05)
+**版本**: v2.35 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Meeting Minutes Generate API 添加边界测试覆盖
+
+背景：Meeting Minutes API 已完整实现并通过基础测试（Step 77），但 `generate_meeting_minutes` 函数缺少边界测试：所有选项关闭/房间不存在/含决策和行动项的完整摘要场景。
+
+### Do
+新增 3 个 Meeting Minutes 测试用例（TestMeetingMinutes 类从 9 → 12 个）：
+
+1. **`test_generate_meeting_minutes_all_options_disabled`** — 生成会议纪要（所有可选内容关闭）
+   - 验证 `include_decisions=False` / `include_action_items=False` / `include_timeline=False` / `include_messages=False`
+   - 验证 `content` 为空，`decisions_summary` 和 `action_items_summary` 为空字符串
+
+2. **`test_generate_meeting_minutes_room_not_found`** — 生成会议纪要（房间不存在返回404）
+   - 使用假 UUID 调用 `POST /rooms/{fake_id}/meeting-minutes/generate`
+   - 验证返回 404 + `{"detail": "Room not found"}`
+
+3. **`test_generate_meeting_minutes_with_decisions_and_action_items`** — 生成含决策和行动项的完整摘要
+   - 先创建 1 个决策（标题"采用微服务架构"）+ 1 个行动项（唯一标题避免混淆）
+   - 验证 `decisions_summary` 含"项决策"，`content` 含决策标题
+   - 验证 `action_items_summary` 含"个行动项"，`content` 含行动项标题
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestMeetingMinutes 12/12 passed
+- ✅ pytest 203/203 passed（+3 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 83
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 84 (2026-04-05)
+**版本**: v2.36 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Stakeholders API 添加边界测试覆盖
+
+背景：Stakeholders API（Plan 干系人）已实现并通过基础测试，但缺少边界测试：删除操作和404场景未覆盖。TestStakeholders 类仅2个测试，缺少 delete 和 not_found 测试用例。
+
+### Do
+新增 2 个 Stakeholders 测试用例（TestStakeholders 类从 2 → 4 个）：
+
+1. **`test_delete_stakeholder`** — 删除干系人
+   - 创建干系人后调用 DELETE
+   - 验证返回 204
+   - 验证 GET 返回 404
+
+2. **`test_stakeholder_not_found`** — 干系人不存在返回404
+   - 使用假 UUID 获取/更新/删除不存在的干系人
+   - 验证 GET 返回 404 + `{"detail": "Stakeholder not found"}`
+   - 验证 PATCH 返回 404
+   - 验证 DELETE 返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestStakeholders 4/4 passed
+- ✅ pytest 205/205 passed（+2 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 84
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 82 (2026-04-05)
+**版本**: v2.34 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Edict Acknowledgment（圣旨签收）API 添加完整测试覆盖
+
+背景：Edict Acknowledgment API（L7下行 decree 签收）允许各层级参与者确认收到圣旨，是朝堂议政的关键流程。之前 API 已实现、前端 `acknowledgeEdict`/`listEdictAcknowledgments`/`deleteEdictAcknowledgment` 已接入，但完全没有测试覆盖。
+
+### Do
+新增 `TestEdictAcknowledgment` 测试类（6个测试用例）：
+- `test_create_edict_acknowledgment` — 创建圣旨签收记录（含 level/comment 字段验证）
+- `test_list_edict_acknowledgments` — 列出圣旨的所有签收记录（2条验证）
+- `test_delete_edict_acknowledgment` — 删除圣旨签收记录
+- `test_multiple_acknowledgments_same_edict` — 同一圣旨 L1-L7 共7个层级依次签收
+- `test_edict_acknowledgment_edict_not_found` — 签收不存在的圣旨返回404
+- `test_edict_acknowledgment_delete_not_found` — 删除不存在的签收记录返回404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestEdictAcknowledgment 6/6 passed
+- ✅ pytest 200/200 passed（+6 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 82
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 

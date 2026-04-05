@@ -2441,6 +2441,51 @@ class TestStakeholders:
         assert resp.json()["interest"] == "high"
         assert resp.json()["influence"] == "high"
 
+    def test_delete_stakeholder(self):
+        """测试删除干系人"""
+        plan_payload = {"title": "测试-干系人删除", "topic": "测试删除", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        s = {"name": "待删除单位", "level": 5, "interest": "medium", "influence": "medium"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/stakeholders", json=s, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        stakeholder_id = resp.json()["stakeholder_id"]
+
+        # 删除干系人
+        resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/stakeholders/{stakeholder_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/stakeholders/{stakeholder_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_stakeholder_not_found(self):
+        """测试干系人不存在返回404"""
+        plan_payload = {"title": "测试-干系人404", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        fake_id = str(uuid.uuid4())
+
+        # 获取不存在的干系人
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/stakeholders/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Stakeholder not found"
+
+        # 更新不存在的干系人
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/stakeholders/{fake_id}",
+            json={"interest": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+        # 删除不存在的干系人
+        resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/stakeholders/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
 
 class TestRisks:
     """测试 Risks API (Version 风险)"""
@@ -3414,6 +3459,219 @@ class TestEdictAPI:
         assert "edicts" in result
         assert len(result["edicts"]) == 1
         assert result["edicts"][0]["title"] == edict_data["title"]
+
+
+class TestEdictAcknowledgment:
+    """测试圣旨签收（Acknowledgment）API — Step 82"""
+
+    def test_create_edict_acknowledgment(self):
+        """创建圣旨签收记录"""
+        plan_payload = {"title": "测试EdictAck-Create", "topic": "L7下行 decree 签收测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        # 先创建一条圣旨
+        edict_data = {
+            "title": "关于XX事项的圣旨",
+            "content": "兹决定...，着各部遵照执行。",
+            "issued_by": "L7-战略层",
+            "recipients": [6, 5, 4],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        # 签收圣旨（L4 签收人）
+        ack_data = {
+            "acknowledged_by": "L4-执行层-张三",
+            "level": 4,
+            "comment": "已收到，理解内容，准备执行。",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        result = resp.json()
+        assert result["acknowledgment"]["ack_id"]
+        assert result["acknowledgment"]["edict_id"] == edict_id
+        assert result["acknowledgment"]["plan_id"] == plan_id
+        assert result["acknowledgment"]["acknowledged_by"] == "L4-执行层-张三"
+        assert result["acknowledgment"]["level"] == 4
+        assert result["acknowledgment"]["comment"] == "已收到，理解内容，准备执行。"
+        assert "acknowledged_at" in result["acknowledgment"]
+
+    def test_list_edict_acknowledgments(self):
+        """列出圣旨的所有签收记录"""
+        plan_payload = {"title": "测试EdictAck-List", "topic": "L7下行 decree 签收列表"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        # 创建圣旨
+        edict_data = {"title": "第1号圣旨", "content": "测试内容", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        # L3 和 L5 分别签收
+        for lvl, name in [(3, "L3-参与者-李四"), (5, "L5-协调者-王五")]:
+            ack_data = {"acknowledged_by": name, "level": lvl, "comment": f"L{lvl}已阅"}
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+                json=ack_data, timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+
+        # 列出签收记录
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        assert result["count"] == 2
+        assert len(result["acknowledgments"]) == 2
+        # 验证字段完整性
+        for ack in result["acknowledgments"]:
+            assert ack["edict_id"] == edict_id
+            assert ack["plan_id"] == plan_id
+            assert ack["version"] == version
+            assert "ack_id" in ack
+            assert "acknowledged_by" in ack
+            assert "acknowledged_at" in ack
+
+    def test_delete_edict_acknowledgment(self):
+        """删除圣旨签收记录"""
+        plan_payload = {"title": "测试EdictAck-Delete", "topic": "L7下行 decree 签收删除"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        # 创建圣旨
+        edict_data = {"title": "待删除签收", "content": "测试", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        # 创建签收
+        ack_data = {"acknowledged_by": "L5-张三", "level": 5, "comment": "已阅"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        ack_id = resp.json()["acknowledgment"]["ack_id"]
+
+        # 删除签收
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments/{ack_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+
+        # 验证已删除（列表中不存在）
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        ack_ids = [a["ack_id"] for a in result["acknowledgments"]]
+        assert ack_id not in ack_ids
+
+    def test_multiple_acknowledgments_same_edict(self):
+        """同一圣旨多个层级签收"""
+        plan_payload = {"title": "测试EdictAck-Multi", "topic": "多层级签收"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {"title": "多层级圣旨", "content": "内容", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        # L1-L7 共7个层级依次签收
+        ack_ids = []
+        for lvl in range(1, 8):
+            ack_data = {"acknowledged_by": f"L{lvl}-用户{lvl}", "level": lvl, "comment": f"L{lvl}确认"}
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+                json=ack_data, timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+            ack_ids.append(resp.json()["acknowledgment"]["ack_id"])
+
+        # 验证7条签收记录
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        assert result["count"] == 7
+        # 验证所有 ack_id 都存在
+        result_ack_ids = [a["ack_id"] for a in result["acknowledgments"]]
+        for aid in ack_ids:
+            assert aid in result_ack_ids
+
+    def test_edict_acknowledgment_edict_not_found(self):
+        """签收不存在的圣旨返回404"""
+        plan_payload = {"title": "测试EdictAck-404", "topic": "404测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+        fake_edict_id = str(uuid.uuid4())
+
+        ack_data = {"acknowledged_by": "L5-测试", "level": 5}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{fake_edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_edict_acknowledgment_delete_not_found(self):
+        """删除不存在的签收记录返回404"""
+        plan_payload = {"title": "测试EdictAck-Del404", "topic": "删除404测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {"title": "删除404测试", "content": "内容", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+        fake_ack_id = str(uuid.uuid4())
+
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments/{fake_ack_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
 
 
 class TestPlanAnalytics:
@@ -4888,6 +5146,233 @@ class TestMeetingMinutes:
         data = resp.json()
         assert "meeting_minutes_id" in data
         assert "title" in data
+
+    def test_generate_meeting_minutes_all_options_disabled(self, test_plan):
+        """生成会议纪要（所有可选内容关闭）"""
+        room_id = test_plan["room"]["room_id"]
+        # 禁用所有可选内容
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            json={
+                "title": "仅摘要纪要",
+                "include_decisions": False,
+                "include_action_items": False,
+                "include_timeline": False,
+                "include_messages": False,
+            },
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "仅摘要纪要"
+        assert data["room_id"] == room_id
+        assert "meeting_minutes_id" in data
+        # content 应该为空（因为所有可选内容都被禁用）
+        assert data.get("content") == "" or data.get("content") is None
+        # 摘要仍然存在
+        assert "summary" in data
+        # decisions_summary 和 action_items_summary 应该为空
+        assert data.get("decisions_summary") == ""
+        assert data.get("action_items_summary") == ""
+
+    def test_generate_meeting_minutes_room_not_found(self):
+        """生成会议纪要（房间不存在返回404）"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_room_id}/meeting-minutes/generate",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Room not found"
+
+    def test_generate_meeting_minutes_with_decisions_and_action_items(self, test_plan):
+        """生成会议纪要（含决策和行动项的完整摘要）"""
+        room_id = test_plan["room"]["room_id"]
+        plan_id = test_plan["plan"]["plan_id"]
+        version = test_plan["plan"].get("current_version", "v1.0")
+
+        # 创建一个决策
+        httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json={
+                "title": "采用微服务架构",
+                "decision_text": "决定采用微服务架构进行系统设计",
+                "decided_by": "张三",
+            },
+            timeout=TIMEOUT
+        ).raise_for_status()
+
+        # 创建一个行动项（使用唯一标题避免与其他测试混淆）
+        unique_title = f"完成架构设计文档-{uuid.uuid4().hex[:8]}"
+        httpx.post(
+            f"{API_BASE}/rooms/{room_id}/action-items",
+            json={
+                "title": unique_title,
+                "assignee": "张三",
+                "priority": "high",
+                "created_by": "李四",
+            },
+            timeout=TIMEOUT
+        ).raise_for_status()
+
+        # 生成会议纪要
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            json={
+                "title": "完整会议纪要",
+                "include_decisions": True,
+                "include_action_items": True,
+                "include_timeline": False,
+                "include_messages": False,
+            },
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "完整会议纪要"
+        # 决策摘要应该包含决策数量（至少有1项）
+        assert "项决策" in data.get("decisions_summary", "")
+        # 内容中应该包含决策标题（在决策要点章节）
+        assert "采用微服务架构" in data.get("content", "")
+        # 行动项摘要应该包含行动项数量（至少有1个）
+        assert "个行动项" in data.get("action_items_summary", "")
+        # 内容中应该包含我们创建的行动项标题
+        assert unique_title in data.get("content", "")
+
+
+# ========================
+# Room Watch API (Step 81)
+# ========================
+
+class TestRoomWatch:
+    """Room Watch 功能测试（5个端点全部覆盖）"""
+
+    def test_watch_room(self, room_info):
+        """关注讨论室"""
+        room_id = room_info["room_id"]
+        user_id = f"user-{uuid.uuid4().hex[:8]}"
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id, "user_name": "测试观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201, f"关注失败: {resp.text}"
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["user_id"] == user_id
+        assert data["user_name"] == "测试观众"
+
+    def test_list_room_watchers(self, room_info):
+        """列出讨论室的所有关注者"""
+        room_id = room_info["room_id"]
+        user_id_1 = f"user-{uuid.uuid4().hex[:8]}"
+        user_id_2 = f"user-{uuid.uuid4().hex[:8]}"
+
+        # 添加两个关注者
+        for uid, uname in [(user_id_1, "观众A"), (user_id_2, "观众B")]:
+            resp = httpx.post(
+                f"{API_BASE}/rooms/{room_id}/watch",
+                json={"user_id": uid, "user_name": uname},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+
+        # 列出关注者
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/watchers", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["count"] >= 2
+        watcher_ids = {w["user_id"] for w in data["watchers"]}
+        assert user_id_1 in watcher_ids
+        assert user_id_2 in watcher_ids
+
+    def test_unwatch_room(self, room_info):
+        """取消关注讨论室"""
+        room_id = room_info["room_id"]
+        user_id = f"user-{uuid.uuid4().hex[:8]}"
+
+        # 先关注
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id, "user_name": "临时观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+
+        # 再取消关注
+        resp = httpx.delete(f"{API_BASE}/rooms/{room_id}/watch?user_id={user_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "unwatched"
+        assert data["user_id"] == user_id
+
+        # 验证已不在关注者列表
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/watchers", timeout=TIMEOUT)
+        watcher_ids = {w["user_id"] for w in resp.json()["watchers"]}
+        assert user_id not in watcher_ids
+
+    def test_get_user_watched_rooms(self, room_info):
+        """获取用户关注的所有讨论室"""
+        room_id = room_info["room_id"]
+        user_id = f"user-{uuid.uuid4().hex[:8]}"
+
+        # 关注房间
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id, "user_name": "专注观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+
+        # 获取用户关注的房间列表
+        resp = httpx.get(f"{API_BASE}/users/{user_id}/watched-rooms", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == user_id
+        assert data["count"] >= 1
+        room_ids = [r["room_id"] for r in data["watched_rooms"]]
+        assert room_id in room_ids
+
+    def test_is_room_watched(self, room_info):
+        """检查用户是否关注了指定讨论室"""
+        room_id = room_info["room_id"]
+        user_id_yes = f"user-{uuid.uuid4().hex[:8]}"
+        user_id_no = f"user-{uuid.uuid4().hex[:8]}"
+
+        # user_id_yes 关注房间
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id_yes, "user_name": "已关注"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+
+        # 检查已关注
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/watch/status?user_id={user_id_yes}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json()["watched"] is True
+
+        # 检查未关注
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/watch/status?user_id={user_id_no}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json()["watched"] is False
+
+    def test_watch_nonexistent_room(self):
+        """关注不存在的讨论室返回404"""
+        fake_room = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_room}/watch",
+            json={"user_id": "any-user", "user_name": "幽灵观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_unwatch_not_watching(self, room_info):
+        """取消未关注的讨论室返回404"""
+        room_id = room_info["room_id"]
+        resp = httpx.delete(f"{API_BASE}/rooms/{room_id}/watch?user_id=never-watched-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
 
 
 if __name__ == "__main__":

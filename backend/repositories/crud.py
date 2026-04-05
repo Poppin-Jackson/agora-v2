@@ -779,7 +779,17 @@ async def get_task(task_id: str) -> Optional[Dict[str, Any]]:
     """获取单个任务"""
     async with get_connection() as conn:
         row = await conn.fetchrow("SELECT * FROM tasks WHERE task_id = $1", task_id)
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # 显式解码 JSONB 字段，防止 asyncpg 返回字符串
+        for field in ("blocked_by", "dependencies"):
+            if field in result and isinstance(result[field], str):
+                try:
+                    result[field] = json.loads(result[field])
+                except Exception:
+                    pass
+        return result
 
 
 async def list_tasks(plan_id: str, version: str) -> List[Dict[str, Any]]:
@@ -789,7 +799,18 @@ async def list_tasks(plan_id: str, version: str) -> List[Dict[str, Any]]:
             "SELECT * FROM tasks WHERE plan_id = $1 AND version = $2 ORDER BY task_number",
             plan_id, version
         )
-        return [dict(row) for row in rows]
+        results = []
+        for row in rows:
+            result = dict(row)
+            # 显式解码 JSONB 字段，防止 asyncpg 返回字符串
+            for field in ("blocked_by", "dependencies"):
+                if field in result and isinstance(result[field], str):
+                    try:
+                        result[field] = json.loads(result[field])
+                    except Exception:
+                        pass
+            results.append(result)
+        return results
 
 
 async def update_task(task_id: str, **fields) -> Optional[Dict[str, Any]]:
@@ -817,7 +838,17 @@ async def update_task(task_id: str, **fields) -> Optional[Dict[str, Any]]:
             f"WHERE task_id = ${len(values)} RETURNING *",
             *values
         )
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # 显式解码 JSONB 字段，防止 asyncpg 返回字符串
+        for field in ("blocked_by", "dependencies"):
+            if field in result and isinstance(result[field], str):
+                try:
+                    result[field] = json.loads(result[field])
+                except Exception:
+                    pass
+        return result
 
 
 async def update_task_progress(task_id: str, progress: float, status: Optional[str] = None) -> Optional[Dict[str, Any]]:

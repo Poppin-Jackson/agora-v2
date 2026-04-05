@@ -1782,6 +1782,13 @@ async def _on_task_completed(completed_task_id: str, plan_id: str, version: str)
         
         # 此任务依赖于完成的任务
         blocked_by = task.get("blocked_by", [])
+        # 兼容DB存储的JSON字符串格式
+        if isinstance(blocked_by, str):
+            import json as _json
+            try:
+                blocked_by = _json.loads(blocked_by)
+            except Exception:
+                blocked_by = []
         if completed_task_id in blocked_by:
             blocked_by.remove(completed_task_id)
             task["blocked_by"] = blocked_by
