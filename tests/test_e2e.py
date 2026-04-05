@@ -5996,5 +5996,183 @@ class TestTaskTimeEntries:
         assert resp.status_code == 404
 
 
+class TestDebateAPI:
+    """Step 90: Debate State API Tests — 辩论议题/立场/交锋/轮次"""
+
+    def _create_debate_room(self):
+        """创建计划+房间，并转换到DEBATE阶段，返回room_id和plan_id"""
+        plan_payload = {
+            "title": "辩论测试计划",
+            "topic": "测试辩论状态机",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        # 转换到DEBATE阶段
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "sharing"}, timeout=TIMEOUT)
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "debate"}, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"转换到debate失败: {resp.text}"
+        return plan_id, room_id
+
+    def test_create_debate_point(self):
+        """创建辩论议题点"""
+        _, room_id = self._create_debate_room()
+
+        payload = {"content": "我们是否应该采用微服务架构？", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"创建辩论议题失败: {resp.text}"
+        data = resp.json()
+        assert "point" in data
+        point = data["point"]
+        assert point["content"] == "我们是否应该采用微服务架构？"
+        assert point["created_by"] == "agent-001"
+        assert "point_id" in point
+        assert point["positions"] == {}
+
+    def test_create_multiple_debate_points(self):
+        """创建多个辩论议题点"""
+        _, room_id = self._create_debate_room()
+
+        for i, content in enumerate(["方案A更优", "方案B更优", "需要更多数据"]):
+            payload = {"content": content, "created_by": f"agent-{i:03d}"}
+            resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+            assert resp.status_code == 200, f"创建第{i+1}个议题失败: {resp.text}"
+
+        # 验证状态中有3个议题点
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/debate/state", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        state = resp.json()
+        assert len(state["all_points"]) == 3
+
+    def test_create_debate_point_wrong_phase(self):
+        """非DEBATE阶段创建议题点返回400"""
+        plan_payload = {"title": "测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 当前处于 SELECTING 阶段，尝试创建议题点
+        payload = {"content": "不该出现的议题", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"非DEBATE阶段应返回400，实际: {resp.status_code}"
+        assert "only DEBATE phase" in resp.text
+
+    def test_get_debate_state(self):
+        """获取辩论状态"""
+        _, room_id = self._create_debate_room()
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/debate/state", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"获取辩论状态失败: {resp.text}"
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert "round" in data
+        assert "consensus_score" in data
+        assert "consensus_level" in data
+        assert "all_points" in data
+        assert "converged_points" in data
+        assert "disputed_points" in data
+        assert "recent_exchanges" in data
+        assert "max_rounds" in data
+        # 初始轮次为0
+        assert data["round"] == 0
+
+    def test_submit_debate_position(self):
+        """提交辩论立场"""
+        _, room_id = self._create_debate_room()
+
+        # 创建议题点
+        payload = {"content": "应该上云", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        point_id = resp.json()["point"]["point_id"]
+
+        # 提交立场
+        position_payload = {
+            "point_id": point_id,
+            "agent_id": "agent-002",
+            "position": "agree",
+            "argument": "云服务弹性好，成本更低",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=position_payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"提交立场失败: {resp.text}"
+        data = resp.json()
+        assert "consensus_score" in data
+        assert data["point_id"] == point_id
+
+    def test_submit_debate_position_wrong_phase(self):
+        """非DEBATE阶段提交立场返回400"""
+        plan_payload = {"title": "测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        room_id = resp.json()["room"]["room_id"]
+
+        payload = {
+            "point_id": str(uuid.uuid4()),
+            "agent_id": "agent-001",
+            "position": "agree",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400
+        assert "only DEBATE phase" in resp.text
+
+    def test_submit_debate_exchange(self):
+        """记录辩论交锋"""
+        _, room_id = self._create_debate_room()
+
+        exchange_payload = {
+            "exchange_type": "challenge",
+            "from_agent": "agent-001",
+            "target_agent": "agent-002",
+            "content": "你的方案忽视了安全性要求",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/exchange", json=exchange_payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"记录交锋失败: {resp.text}"
+        data = resp.json()
+        assert "exchange" in data
+        exchange = data["exchange"]
+        assert exchange["type"] == "challenge"
+        assert exchange["from_agent"] == "agent-001"
+        assert exchange["target_agent"] == "agent-002"
+        assert exchange["content"] == "你的方案忽视了安全性要求"
+
+    def test_advance_debate_round(self):
+        """推进辩论轮次"""
+        _, room_id = self._create_debate_room()
+
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/round", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"推进轮次失败: {resp.text}"
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["new_round"] == 1
+        assert "max_rounds" in data
+        assert "at_max" in data
+
+    def test_debate_room_not_found(self):
+        """讨论室不存在返回404"""
+        fake_room_id = str(uuid.uuid4())
+
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_room_id}/debate/points",
+            json={"content": "测试", "created_by": "agent"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_room_id}/debate/state", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_debate_state_not_initialized(self):
+        """非DEBATE阶段获取辩论状态返回404"""
+        plan_payload = {"title": "测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        room_id = resp.json()["room"]["room_id"]
+
+        # 房间处于 SELECTING 阶段，未初始化辩论状态
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/debate/state", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

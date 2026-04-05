@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.40 | 日期：2026-04-05（Step 89 - Plan/Room Search API 测试覆盖）
+> 版本：v2.41 | 日期：2026-04-06（Step 90 - Debate State API 测试覆盖）
 > 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
 > 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
 > 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
@@ -2052,4 +2052,67 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 89
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 90 (2026-04-06)
+**版本**: v2.41 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Debate State API 添加完整测试覆盖
+
+背景：Debate State API（辩论议题/立场/交锋/轮次）是 DEBATE 阶段的核心功能，包含5个端点：
+- `POST /rooms/{room_id}/debate/points` — 创建辩论议题点
+- `GET /rooms/{room_id}/debate/state` — 获取辩论状态（round/consensus_score/points/exchanges）
+- `POST /rooms/{room_id}/debate/position` — 提交议题立场
+- `POST /rooms/{room_id}/debate/exchange` — 记录辩论交锋
+- `POST /rooms/{room_id}/debate/round` — 推进辩论轮次
+
+此前 DEBATE 阶段测试仅覆盖 phase transition（`test_sharing_to_debate`），辩论 API 本身完全没有测试。
+
+### Do
+新增 `TestDebateAPI` 测试类（10个测试用例）：
+
+1. **`test_create_debate_point`** — 创建辩论议题点
+   - 创建 DEBATE 阶段房间，提交议题内容，验证返回 point 结构
+
+2. **`test_create_multiple_debate_points`** — 创建多个辩论议题点
+   - 验证状态中 all_points 数量正确
+
+3. **`test_create_debate_point_wrong_phase`** — 非DEBATE阶段创建议题点返回400
+   - SELECTING 阶段调用返回 400 + "only DEBATE phase"
+
+4. **`test_get_debate_state`** — 获取辩论状态
+   - 验证 room_id/round/consensus_score/consensus_level/all_points/converged_points/disputed_points/recent_exchanges/max_rounds 字段完整
+   - 初始 round=0
+
+5. **`test_submit_debate_position`** — 提交辩论立场
+   - 先创建议题点，再提交 agree/oppose/abstain 立场
+   - 验证返回 consensus_score 和 point_id
+
+6. **`test_submit_debate_position_wrong_phase`** — 非DEBATE阶段提交立场返回400
+   - SELECTING 阶段调用返回 400
+
+7. **`test_submit_debate_exchange`** — 记录辩论交锋
+   - challenge 类型交锋，验证 type/from_agent/target_agent/content 字段
+   - 注：后端返回 `type` 字段（非 `exchange_type`）
+
+8. **`test_advance_debate_round`** — 推进辩论轮次
+   - 验证 new_round=1, max_rounds, at_max 字段
+
+9. **`test_debate_room_not_found`** — 讨论室不存在返回404
+   - 假 UUID 调用 debate/points 和 debate/state 均返回 404
+
+10. **`test_debate_state_not_initialized`** — 非DEBATE阶段获取辩论状态返回404
+    - SELECTING 阶段房间调用 debate/state 返回 404
+
+辅助函数 `_create_debate_room()`：创建计划+房间，自动转换 SELECTING→THINKING→SHARING→DEBATE。
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestDebateAPI 10/10 passed
+- ✅ pytest 244/244 passed（+10 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 90
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
