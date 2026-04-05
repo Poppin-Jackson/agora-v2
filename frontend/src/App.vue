@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import api, {
   wsUrl,
   createPlan,
+  copyPlan,
   getRoom,
   getPlan,
   listPlans,
@@ -52,6 +53,8 @@ import api, {
   listActivities,
   getActivityStats,
   getActivity,
+  listRoomActivities,
+  listVersionActivities,
   searchRoomMessages,
   listNotifications,
   markNotificationRead,
@@ -72,6 +75,9 @@ import api, {
   validateTaskDependencies,
   escalateRoom,
   getEscalationPath,
+  getPlanEscalations,
+  getEscalation,
+  updateEscalation,
   getProblems,
   getProblem,
   analyzeProblem,
@@ -116,7 +122,7 @@ const compareLoading = ref(false)
 const planRooms = ref<any[]>([])
 const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
-const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'analytics' | 'snapshots'>('overview')
+const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'analytics' | 'snapshots' | 'escalations'>('overview')
 const planDetailActiveVersion = ref<string>('')
 const exportLoading = ref(false)
 
@@ -231,10 +237,26 @@ const planActivities = ref<any[]>([])
 const activityStats = ref<any>(null)
 const selectedActivity = ref<any>(null)
 const activityFilterType = ref<string>('')
+type ActivityScope = 'plan' | 'room' | 'version'
+const activityScope = ref<ActivityScope>('plan')
+const activityScopeRoomId = ref<string>('')
+const activityScopeVersion = ref<string>('')
 
 // ─── Snapshots State ─────────────────────────────────────
 const planSnapshots = ref<any[]>([])
 const selectedSnapshot = ref<any>(null)
+
+// ─── Escalations State ──────────────────────────────────
+const planEscalations = ref<any[]>([])
+const selectedEscalation = ref<any>(null)
+const escalationActionLoading = ref(false)
+const escalationActionForm = reactive({
+  action: '',
+  actor_id: '',
+  actor_name: '',
+  comment: ''
+})
+const showEscalationAction = ref(false)
 
 // ─── Room State ─────────────────────────────────────────
 const currentRoom = ref<any>(null)
@@ -356,6 +378,15 @@ const isProblemPhase = computed(() => {
   const phase = currentPhase.value?.current_phase
   return phase && problemStates.includes(phase)
 })
+
+const isHierarchicalReviewPhase = computed(() => {
+  return currentPhase.value?.current_phase === 'HIERARCHICAL_REVIEW'
+})
+const isConvergingPhase = computed(() => {
+  return currentPhase.value?.current_phase === 'CONVERGING'
+})
+const hierarchicalReviewData = ref<any>(null)
+const reviewNotes = ref<Record<string, string>>({})
 
 // ─── Create Room State ──────────────────────────────────
 const showCreateRoom = ref(false)
@@ -584,6 +615,20 @@ async function handleCreatePlan() {
   }
 }
 
+async function handleCopyPlan(planId: string) {
+  try {
+    const res = await copyPlan(planId, { performed_by: currentUser.name || 'anonymous' })
+    const newPlan = res.data?.plan
+    if (newPlan) {
+      // Refresh plans list and navigate to the new copy
+      await loadPlans()
+      await openPlanDetail(newPlan.plan_id)
+    }
+  } catch (e) {
+    console.error('handleCopyPlan failed', e)
+  }
+}
+
 async function openPlanDetail(planId: string) {
   try {
     const [planRes, versionsRes, roomsRes, metricsRes] = await Promise.all([
@@ -652,13 +697,23 @@ async function switchPlanVersion(version: string) {
     planConstraints.value = constraintsRes.data?.constraints || []
     planStakeholders.value = stakeholdersRes.data?.stakeholders || []
     planRequirements.value = requirementsRes.data || []
-    // Activities are plan-level, reload on version switch
-    const [activitiesRes, statsRes] = await Promise.all([
-      listActivities(currentPlan.value.plan_id),
-      getActivityStats(currentPlan.value.plan_id),
-    ])
-    planActivities.value = activitiesRes.data?.activities || []
-    activityStats.value = statsRes.data
+    // If activities tab scope is version, update version and reload
+    if (activityScope.value === 'version') {
+      activityScopeVersion.value = version
+      const [activitiesRes] = await Promise.all([
+        listVersionActivities(currentPlan.value.plan_id, version),
+      ])
+      planActivities.value = activitiesRes.data?.activities || []
+      activityStats.value = null
+    } else {
+      // Activities are plan-level, reload on version switch
+      const [activitiesRes, statsRes] = await Promise.all([
+        listActivities(currentPlan.value.plan_id),
+        getActivityStats(currentPlan.value.plan_id),
+      ])
+      planActivities.value = activitiesRes.data?.activities || []
+      activityStats.value = statsRes.data
+    }
     // Snapshots are version-level, reload on version switch
     await loadPlanSnapshots()
   } catch (e) {
@@ -711,12 +766,22 @@ async function loadPlanDecisions() {
 async function loadPlanActivities() {
   if (!currentPlan.value) return
   try {
-    const [actsRes, statsRes] = await Promise.all([
-      listActivities(currentPlan.value.plan_id),
-      getActivityStats(currentPlan.value.plan_id),
-    ])
+    let actsRes: any
+    if (activityScope.value === 'room' && activityScopeRoomId.value) {
+      actsRes = await listRoomActivities(activityScopeRoomId.value)
+    } else if (activityScope.value === 'version' && activityScopeVersion.value) {
+      actsRes = await listVersionActivities(currentPlan.value.plan_id, activityScopeVersion.value)
+    } else {
+      actsRes = await listActivities(currentPlan.value.plan_id)
+    }
+    // Stats only available for plan scope
+    if (activityScope.value === 'plan') {
+      const statsRes = await getActivityStats(currentPlan.value.plan_id)
+      activityStats.value = statsRes.data
+    } else {
+      activityStats.value = null
+    }
     planActivities.value = actsRes.data?.activities || []
-    activityStats.value = statsRes.data
   } catch (e) {
     console.error('loadPlanActivities failed', e)
   }
@@ -729,6 +794,43 @@ async function loadPlanSnapshots() {
     planSnapshots.value = res.data?.snapshots || []
   } catch (e) {
     console.error('loadPlanSnapshots failed', e)
+  }
+}
+
+async function loadPlanEscalations() {
+  if (!currentPlan.value) return
+  try {
+    const res = await getPlanEscalations(currentPlan.value.plan_id)
+    planEscalations.value = res.data?.escalations || []
+  } catch (e) {
+    console.error('loadPlanEscalations failed', e)
+  }
+}
+
+async function openEscalationAction(esc: any) {
+  selectedEscalation.value = esc
+  escalationActionForm.action = ''
+  escalationActionForm.actor_name = currentUser.name
+  escalationActionForm.comment = ''
+  showEscalationAction.value = true
+}
+
+async function handleEscalationAction() {
+  if (!selectedEscalation.value || !escalationActionForm.action) return
+  escalationActionLoading.value = true
+  try {
+    await updateEscalation(selectedEscalation.value.escalation_id, {
+      action: escalationActionForm.action,
+      actor_id: currentUser.user_id,
+      actor_name: escalationActionForm.actor_name,
+      comment: escalationActionForm.comment
+    })
+    showEscalationAction.value = false
+    await loadPlanEscalations()
+  } catch (e) {
+    console.error('handleEscalationAction failed', e)
+  } finally {
+    escalationActionLoading.value = false
   }
 }
 
@@ -764,6 +866,16 @@ watch(activePlanTab, (newTab) => {
   }
   if (newTab === 'analytics') {
     loadAnalyticsData()
+  }
+  if (newTab === 'escalations') {
+    loadPlanEscalations()
+  }
+  if (newTab === 'activities') {
+    // Reset scope to plan and initialize version from current
+    activityScope.value = 'plan'
+    activityScopeVersion.value = planDetailActiveVersion.value || ''
+    activityScopeRoomId.value = ''
+    loadPlanActivities()
   }
 })
 
@@ -1738,6 +1850,12 @@ async function enterRoom(roomId: string) {
       await loadProblemState(roomId, planId)
     }
 
+    // Load hierarchical review / converging context for HIERARCHICAL_REVIEW or CONVERGING phase
+    const initPhase = phaseRes.data?.current_phase
+    if (initPhase === 'HIERARCHICAL_REVIEW' || initPhase === 'CONVERGING') {
+      await loadHierarchicalReviewData(roomId)
+    }
+
     connectWs(roomId)
     phasePollInterval = setInterval(async () => {
       try {
@@ -1755,6 +1873,10 @@ async function enterRoom(roomId: string) {
           try {
             await loadProblemState(roomId, currentRoom.value?.plan_id)
           } catch {}
+        }
+        // Refresh hierarchical review data when in HIERARCHICAL_REVIEW or CONVERGING phase
+        if (r.data?.current_phase === 'HIERARCHICAL_REVIEW' || r.data?.current_phase === 'CONVERGING') {
+          await loadHierarchicalReviewData(roomId)
         }
       } catch {}
     }, 3000)
@@ -1778,6 +1900,7 @@ function leaveRoom() {
   tasks.value = []
   taskMetrics.value = null
   debateState.value = null
+  hierarchicalReviewData.value = null
   showAddDebatePoint.value = false
   wsStatus.value = 'disconnected'
   // Clear message search
@@ -2114,6 +2237,17 @@ function getProblemPhaseFromStatus(status: string): string {
   return map[status] || status
 }
 
+async function loadHierarchicalReviewData(roomId: string) {
+  try {
+    // Fetch room context at L7 level (strategic overview)
+    const ctx = await api.get(`/rooms/${roomId}/context`, { params: { level: 7 } })
+    hierarchicalReviewData.value = ctx.data || null
+  } catch (e) {
+    console.error('loadHierarchicalReviewData failed', e)
+    hierarchicalReviewData.value = null
+  }
+}
+
 async function handleReportProblem() {
   if (!currentRoom.value || !currentPlan.value) return
   if (!reportProblemForm.title.trim()) {
@@ -2393,6 +2527,11 @@ onUnmounted(() => {
           <div class="plan-card-footer">
             <span class="meta-item">{{ new Date(plan.created_at).toLocaleDateString('zh-CN') }}</span>
             <span class="meta-item">{{ plan.current_version || plan.version || 'v1.0' }}</span>
+            <button
+              class="btn-copy-plan"
+              title="复制计划"
+              @click.stop="handleCopyPlan(plan.plan_id)"
+            >📋 复制</button>
           </div>
         </div>
 
@@ -2511,13 +2650,13 @@ onUnmounted(() => {
       <!-- Plan Tabs -->
       <div class="plan-tabs">
         <button
-          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'analytics', 'snapshots']"
+          v-for="tab in ['overview', 'rooms', 'tasks', 'decisions', 'edicts', 'approvals', 'versions', 'risks', 'constraints', 'stakeholders', 'requirements', 'activities', 'analytics', 'snapshots', 'escalations']"
           :key="tab"
           class="plan-tab"
           :class="{ active: activePlanTab === tab }"
           @click="activePlanTab = tab as any"
         >
-          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : '快照' }}
+          {{ tab === 'overview' ? '概览' : tab === 'rooms' ? '房间' : tab === 'tasks' ? '任务' : tab === 'decisions' ? '决策' : tab === 'edicts' ? '圣旨' : tab === 'approvals' ? '审批' : tab === 'versions' ? '版本' : tab === 'risks' ? '风险' : tab === 'constraints' ? '约束' : tab === 'stakeholders' ? '干系人' : tab === 'requirements' ? '需求' : tab === 'activities' ? '活动' : tab === 'analytics' ? '分析' : tab === 'snapshots' ? '快照' : '升级' }}
         </button>
       </div>
 
@@ -3888,7 +4027,50 @@ onUnmounted(() => {
 
       <!-- Activities Tab -->
       <div v-else-if="activePlanTab === 'activities'" class="plan-content">
-        <!-- Activity Stats Summary -->
+        <!-- Scope Selector -->
+        <div class="activity-scope-bar">
+          <div class="scope-tabs">
+            <button
+              class="scope-tab"
+              :class="{ active: activityScope === 'plan' }"
+              @click="activityScope = 'plan'; activityScopeRoomId = ''; activityScopeVersion = ''; loadPlanActivities()"
+            >📋 计划</button>
+            <button
+              class="scope-tab"
+              :class="{ active: activityScope === 'room' }"
+              @click="activityScope = 'room'; activityScopeVersion = ''; loadPlanActivities()"
+            >🏛️ 房间</button>
+            <button
+              class="scope-tab"
+              :class="{ active: activityScope === 'version' }"
+              @click="activityScope = 'version'; activityScopeRoomId = ''; activityScopeVersion = planDetailActiveVersion; loadPlanActivities()"
+            >📦 版本</button>
+          </div>
+          <!-- Room selector (when scope=room) -->
+          <select
+            v-if="activityScope === 'room'"
+            v-model="activityScopeRoomId"
+            class="input activity-scope-select"
+            @change="loadPlanActivities()"
+          >
+            <option value="">选择讨论室...</option>
+            <option v-for="room in planRooms" :key="room.room_id" :value="room.room_id">
+              {{ room.topic || room.title || '房间 ' + room.room_id.slice(0,8) }}
+            </option>
+          </select>
+          <!-- Version selector (when scope=version) -->
+          <select
+            v-if="activityScope === 'version'"
+            v-model="activityScopeVersion"
+            class="input activity-scope-select"
+            @change="loadPlanActivities()"
+          >
+            <option value="">选择版本...</option>
+            <option v-for="v in planVersions" :key="v" :value="v">{{ v }}</option>
+          </select>
+        </div>
+
+        <!-- Activity Stats Summary (plan scope only) -->
         <div v-if="activityStats" class="activity-stats">
           <div class="activity-stat-card">
             <div class="activity-stat-num">{{ activityStats.total || 0 }}</div>
@@ -4271,6 +4453,99 @@ onUnmounted(() => {
             </div>
             <div class="snapshot-card-summary">{{ snap.context_summary || '无摘要' }}</div>
             <div class="snapshot-card-id">ID: {{ snap.snapshot_id?.slice(0, 8) }}...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Escalations Tab -->
+      <div v-else-if="activePlanTab === 'escalations'" class="plan-content">
+        <div class="tab-header-row">
+          <div class="tab-title">升级记录</div>
+          <button class="btn-primary" @click="loadPlanEscalations">刷新</button>
+        </div>
+
+        <!-- Escalation Action Modal -->
+        <div v-if="showEscalationAction" class="modal-overlay" @click.self="showEscalationAction = false">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h3>🔺 处理升级</h3>
+              <button class="modal-close" @click="showEscalationAction = false">✕</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-row">
+                <label>操作 *</label>
+                <select v-model="escalationActionForm.action" class="input">
+                  <option value="">选择操作</option>
+                  <option value="approve">批准</option>
+                  <option value="reject">驳回</option>
+                  <option value="forward">转发</option>
+                  <option value="reassign">重新分配</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>操作人</label>
+                <input v-model="escalationActionForm.actor_name" class="input" placeholder="操作人姓名" />
+              </div>
+              <div class="form-row">
+                <label>意见</label>
+                <textarea v-model="escalationActionForm.comment" class="input" placeholder="处理意见..." rows="3"></textarea>
+              </div>
+              <div class="form-actions">
+                <button class="btn-secondary" @click="showEscalationAction = false">取消</button>
+                <button class="btn-primary" :disabled="escalationActionLoading || !escalationActionForm.action" @click="handleEscalationAction">
+                  {{ escalationActionLoading ? '处理中...' : '提交' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Escalations Summary -->
+        <div v-if="planEscalations.length > 0" class="summary-bar">
+          <span class="summary-item">总升级数：<strong>{{ planEscalations.length }}</strong></span>
+        </div>
+
+        <!-- Escalations List -->
+        <div v-if="planEscalations.length === 0" class="empty-state" style="padding: 60px 0">
+          <div class="empty-icon">🔺</div>
+          <div class="empty-text">暂无升级记录</div>
+          <div class="empty-sub">当讨论室需要上级决策时会创建升级记录</div>
+        </div>
+        <div v-else class="escalations-list">
+          <div
+            v-for="esc in planEscalations"
+            :key="esc.escalation_id"
+            class="escalation-card"
+            :class="{ 'escalation-pending': esc.status === 'pending' }"
+          >
+            <div class="escalation-card-header">
+              <div class="escalation-levels">
+                <span class="level-badge level-from">L{{ esc.from_level }}</span>
+                <span class="level-arrow">→</span>
+                <span class="level-badge level-to">L{{ esc.to_level }}</span>
+              </div>
+              <span class="escalation-status" :class="'status-' + esc.status">{{ esc.status || 'pending' }}</span>
+            </div>
+            <div class="escalation-card-body">
+              <div class="escalation-info">
+                <span class="info-label">模式：</span>
+                <span class="info-value">{{ esc.mode === 'level_by_level' ? '逐级汇报' : esc.mode === 'cross_level' ? '跨级汇报' : '紧急汇报' }}</span>
+              </div>
+              <div v-if="esc.escalation_path && esc.escalation_path.length > 0" class="escalation-info">
+                <span class="info-label">路径：</span>
+                <span class="info-value">{{ 'L' + esc.escalation_path.join(' → L') }}</span>
+              </div>
+              <div v-if="esc.room_id" class="escalation-info">
+                <span class="info-label">房间：</span>
+                <span class="info-value escalation-room-id">{{ esc.room_id.slice(0, 8) }}...</span>
+              </div>
+              <div v-if="esc.content?.reason" class="escalation-reason">{{ esc.content.reason }}</div>
+              <div v-if="esc.content?.notes" class="escalation-notes">{{ esc.content.notes }}</div>
+            </div>
+            <div class="escalation-card-footer">
+              <span class="escalation-time">{{ new Date(esc.created_at || Date.now()).toLocaleString() }}</span>
+              <button class="btn-edit btn-small" @click="openEscalationAction(esc)">处理</button>
+            </div>
           </div>
         </div>
       </div>
@@ -4933,6 +5208,92 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <!-- Hierarchical Review Panel (HIERARCHICAL_REVIEW phase) -->
+          <div v-if="currentPhase?.current_phase === 'HIERARCHICAL_REVIEW'" class="sidebar-section hierarchical-review-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">🏛️ 层级评审</div>
+              <div class="phase-badge-sm" style="background:#6366f1">评审中</div>
+            </div>
+
+            <!-- Consensus Summary from Convergence -->
+            <div v-if="hierarchicalReviewData?.consensus_points?.length" class="review-consensus-block">
+              <div class="review-section-label">📌 收敛共识点 ({{ hierarchicalReviewData.consensus_points.length }})</div>
+              <div v-for="(cp, idx) in hierarchicalReviewData.consensus_points" :key="idx" class="consensus-point-chip">
+                {{ cp.description || cp.point || JSON.stringify(cp) }}
+              </div>
+            </div>
+
+            <!-- Hierarchy Context / Approval Status -->
+            <div v-if="hierarchicalReviewData?.hierarchy_context" class="review-hierarchy-block">
+              <div class="review-section-label">📊 层级审批链</div>
+              <div class="approval-chain">
+                <div
+                  v-for="lvl in [7,6,5,4,3,2,1]"
+                  :key="lvl"
+                  class="approval-level-row"
+                  :class="{ 'is-current': hierarchicalReviewData.hierarchy_context?.current_level === lvl }"
+                >
+                  <span class="level-num">L{{ lvl }}</span>
+                  <span class="level-name">{{ hierarchicalReviewData.hierarchy_context?.approval_summary?.levels?.[lvl]?.level_label || '—' }}</span>
+                  <span
+                    class="approval-status-chip"
+                    :class="'status-' + (hierarchicalReviewData.hierarchy_context?.approval_summary?.levels?.[lvl]?.status || 'pending')"
+                  >
+                    {{
+                      hierarchicalReviewData.hierarchy_context?.approval_summary?.levels?.[lvl]?.status === 'approved' ? '✅' :
+                      hierarchicalReviewData.hierarchy_context?.approval_summary?.levels?.[lvl]?.status === 'rejected' ? '❌' :
+                      hierarchicalReviewData.hierarchy_context?.approval_summary?.levels?.[lvl]?.status === 'pending' ? '⏳' : '—'
+                    }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- No hierarchy context yet -->
+            <div v-else-if="!hierarchicalReviewData?.hierarchy_context" class="review-no-context">
+              <div class="review-hint">评审上下文加载中...</div>
+              <div class="review-hint-sub">层级审批链信息将在刷新后显示</div>
+            </div>
+
+            <!-- Review Notes -->
+            <div class="review-notes-block">
+              <div class="review-section-label">📝 评审备注</div>
+              <textarea
+                v-model="reviewNotes[currentPhase?.room_id || '']"
+                class="input sidebar-input review-textarea"
+                placeholder="填写评审意见..."
+                rows="3"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Converging Panel (CONVERGING phase) -->
+          <div v-if="currentPhase?.current_phase === 'CONVERGING'" class="sidebar-section converging-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">🔄 收敛阶段</div>
+              <div class="phase-badge-sm" style="background:#f59e0b">收敛中</div>
+            </div>
+
+            <!-- Consensus Points from DEBATE phase -->
+            <div v-if="hierarchicalReviewData?.consensus_points?.length" class="converging-points-block">
+              <div class="review-section-label">✅ 已收敛议题 ({{ hierarchicalReviewData.consensus_points.length }})</div>
+              <div v-for="(cp, idx) in hierarchicalReviewData.consensus_points" :key="idx" class="consensus-point-item">
+                <span class="point-check">✅</span>
+                <span class="point-desc">{{ cp.description || cp.point || JSON.stringify(cp) }}</span>
+              </div>
+            </div>
+            <div v-else class="converging-no-points">
+              <div class="review-hint">暂无收敛共识点</div>
+              <div class="review-hint-sub">辩论阶段的共识议题将在此处显示</div>
+            </div>
+
+            <!-- Converging hint -->
+            <div class="converging-hint-block">
+              <div class="review-section-label">💡 下一步</div>
+              <div class="review-hint">收敛完成后，议题将提交至层级评审 (HIERARCHICAL_REVIEW) 或直接进入决策 (DECISION) 阶段</div>
+            </div>
+          </div>
+
           <div class="sidebar-section">
             <div class="sidebar-title">房间信息</div>
             <div class="info-row">
@@ -5187,6 +5548,19 @@ body {
 }
 .btn-secondary:hover { border-color: #5b5bd6; color: #a0a0ff; }
 .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
+
+.btn-copy-plan {
+  background: transparent;
+  border: 1px solid #2d4a2d;
+  color: #6bcf6b;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: auto;
+}
+.btn-copy-plan:hover { border-color: #4ade80; color: #86efac; background: rgba(74, 222, 128, 0.1); }
 
 .btn-back {
   background: transparent;
@@ -6347,6 +6721,44 @@ body {
 .mode-select { width: auto; flex: 1; }
 
 /* ─── Activity Tab ─── */
+.activity-scope-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.scope-tabs {
+  display: flex;
+  gap: 4px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 4px;
+}
+.scope-tab {
+  background: transparent;
+  border: none;
+  color: #6a6a8a;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+.scope-tab:hover {
+  color: #e2e8f0;
+}
+.scope-tab.active {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+}
+.activity-scope-select {
+  width: auto;
+  flex: 0 0 auto;
+  min-width: 180px;
+}
 .activity-stats {
   display: flex;
   gap: 12px;
@@ -6656,6 +7068,122 @@ body {
 .btn-advance-round { font-size: 0.75rem; padding: 4px 10px; background: rgba(59,130,246,0.15); border: 1px solid #60a5fa; color: #60a5fa; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
 .btn-advance-round:hover:not(:disabled) { background: rgba(59,130,246,0.3); }
 .btn-advance-round:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── Hierarchical Review Section ─── */
+.hierarchical-review-section {
+  background: #13121f;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #6366f1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.review-section-label {
+  font-size: 0.75rem;
+  color: #8b8ba0;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+.review-consensus-block {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.consensus-point-chip {
+  display: inline-block;
+  background: rgba(99,102,241,0.15);
+  border: 1px solid rgba(99,102,241,0.3);
+  color: #a5b4fc;
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  margin: 2px 4px 2px 0;
+}
+.review-hierarchy-block {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.approval-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.approval-level-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #8b8ba0;
+}
+.approval-level-row.is-current {
+  background: rgba(99,102,241,0.2);
+  color: #c7d2fe;
+}
+.level-num { font-weight: 600; min-width: 20px; }
+.level-name { flex: 1; color: #a0a0c0; }
+.approval-status-chip { font-size: 0.7rem; }
+.approval-status-chip.status-approved { color: #4ade80; }
+.approval-status-chip.status-rejected { color: #f87171; }
+.approval-status-chip.status-pending { color: #fbbf24; }
+.review-no-context {
+  text-align: center;
+  padding: 12px;
+  background: #1a1a2e;
+  border-radius: 6px;
+}
+.review-hint { font-size: 0.8rem; color: #a0a0c0; }
+.review-hint-sub { font-size: 0.7rem; color: #6b7280; margin-top: 4px; }
+.review-notes-block { background: #1a1a2e; border-radius: 6px; padding: 8px 10px; }
+.review-textarea { resize: vertical; min-height: 48px; font-family: inherit; font-size: 0.8rem; }
+
+/* ─── Converging Section ─── */
+.converging-section {
+  background: #13121a;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #f59e0b;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.converging-points-block {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.consensus-point-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #1e1e2e;
+  font-size: 0.75rem;
+}
+.consensus-point-item:last-child { border-bottom: none; }
+.point-check { color: #4ade80; flex-shrink: 0; }
+.point-desc { color: #d1d5db; }
+.converging-no-points {
+  text-align: center;
+  padding: 12px;
+  background: #1a1a2e;
+  border-radius: 6px;
+}
+.converging-hint-block {
+  background: #1a1a2e;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.phase-badge-sm {
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: #fff;
+  font-weight: 600;
+}
 
 /* ─── Problem Section ─── */
 .problem-section {
@@ -7500,6 +8028,118 @@ body {
 .snapshot-card-id {
   font-size: 0.72rem;
   color: #4b5563;
+}
+
+/* ─── Escalations Tab ─── */
+.escalations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.escalation-card {
+  background: #1e2130;
+  border-radius: 8px;
+  padding: 14px;
+  border: 1px solid #2d3148;
+}
+.escalation-card.escalation-pending {
+  border-color: #f59e0b;
+}
+.escalation-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.escalation-levels {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.level-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.level-from {
+  background: #374151;
+  color: #d1d5db;
+}
+.level-to {
+  background: #1e40af;
+  color: #dbeafe;
+}
+.level-arrow {
+  color: #9ca3af;
+  font-size: 0.85rem;
+}
+.escalation-status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.escalation-status.status-pending {
+  background: #78350f;
+  color: #fef3c7;
+}
+.escalation-status.status-approved {
+  background: #14532d;
+  color: #dcfce7;
+}
+.escalation-status.status-rejected {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+.escalation-status.status-resolved {
+  background: #14532d;
+  color: #dcfce7;
+}
+.escalation-card-body {
+  margin-bottom: 10px;
+}
+.escalation-info {
+  display: flex;
+  gap: 6px;
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+.escalation-info .info-label {
+  color: #6b7280;
+}
+.escalation-info .info-value {
+  color: #d1d5db;
+}
+.escalation-room-id {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+.escalation-reason {
+  font-size: 0.85rem;
+  color: #e5e7eb;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #272a3a;
+  border-radius: 4px;
+}
+.escalation-notes {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  margin-top: 4px;
+  font-style: italic;
+}
+.escalation-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid #2d3148;
+}
+.escalation-time {
+  font-size: 0.72rem;
+  color: #6b7280;
 }
 
 /* ─── Task Detail Modal ─── */

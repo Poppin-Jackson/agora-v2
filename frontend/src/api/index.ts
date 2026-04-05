@@ -13,6 +13,9 @@ export default api
 export const createPlan = (data: { title: string; topic: string; requirements?: string[] }) =>
   api.post('/plans', data)
 
+export const copyPlan = (planId: string, data?: { performed_by?: string }) =>
+  api.post(`/plans/${planId}/copy`, data)
+
 export const getPlan = (planId: string) =>
   api.get(`/plans/${planId}`)
 
@@ -67,6 +70,12 @@ export const getActivityStats = (planId?: string) =>
 
 export const getActivity = (activityId: string) =>
   api.get(`/activities/${activityId}`)
+
+export const listRoomActivities = (roomId: string, limit = 100, offset = 0) =>
+  api.get(`/rooms/${roomId}/activities`, { params: { limit, offset } })
+
+export const listVersionActivities = (planId: string, version: string, limit = 100, offset = 0) =>
+  api.get(`/plans/${planId}/versions/${version}/activities`, { params: { limit, offset } })
 
 // ─── Decisions ────────────────────────────────────────────────────────────────
 export const listDecisions = (planId: string, version: string) =>
@@ -269,6 +278,12 @@ export const getRoomEscalations = (roomId: string) =>
 
 export const getPlanEscalations = (planId: string) =>
   api.get(`/plans/${planId}/escalations`)
+
+export const getEscalation = (escalationId: string) =>
+  api.get(`/escalations/${escalationId}`)
+
+export const updateEscalation = (escalationId: string, data: { action: string; actor_id?: string; actor_name?: string; comment?: string }) =>
+  api.patch(`/escalations/${escalationId}`, data)
 
 export const escalateRoom = (roomId: string, data: {
   from_level: number

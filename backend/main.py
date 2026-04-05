@@ -1190,7 +1190,7 @@ async def _load_number_counters():
                 SELECT plan_number FROM plans
                 WHERE plan_number IS NOT NULL
                   AND substring(plan_number from 6 for 4) = $1
-                ORDER BY CAST(substring(plan_number from 10) AS INTEGER) DESC LIMIT 1
+                ORDER BY CAST(substring(plan_number from 11) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1212,7 +1212,7 @@ async def _load_number_counters():
                 SELECT room_number FROM rooms
                 WHERE room_number IS NOT NULL
                   AND substring(room_number from 6 for 4) = $1
-                ORDER BY CAST(substring(room_number from 10) AS INTEGER) DESC LIMIT 1
+                ORDER BY CAST(substring(room_number from 11) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1273,7 +1273,7 @@ async def _sync_plan_counter_from_db() -> None:
                 SELECT plan_number FROM plans
                 WHERE plan_number IS NOT NULL
                   AND substring(plan_number from 6 for 4) = $1
-                ORDER BY CAST(substring(plan_number from 10) AS INTEGER) DESC LIMIT 1
+                ORDER BY CAST(substring(plan_number from 11) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -1301,7 +1301,7 @@ async def _sync_room_counter_from_db() -> None:
                 SELECT room_number FROM rooms
                 WHERE room_number IS NOT NULL
                   AND substring(room_number from 6 for 4) = $1
-                ORDER BY CAST(substring(room_number from 10) AS INTEGER) DESC LIMIT 1
+                ORDER BY CAST(substring(room_number from 11) AS INTEGER) DESC LIMIT 1
                 """,
                 str(current_year)
             )
@@ -2039,6 +2039,117 @@ async def create_plan(data: PlanCreate):
     except Exception as e:
         import logging
         logging.getLogger("agora").warning(f"Gateway注册失败（不影响核心流程）: {e}")
+
+    return {"plan": plan, "room": room}
+
+
+@app.post("/plans/{plan_id}/copy", status_code=201)
+async def copy_plan(plan_id: str, data: dict = None):
+    """
+    复制 Plan（不含版本级内容，仅复制 plan 级元数据 + constraints + stakeholders）
+    新计划创建 v1.0 配套 Room
+    来源: 08-Data-Models-Details.md §2.1 Plan 复制
+    """
+    original = await crud.get_plan(plan_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    new_plan_id = str(uuid.uuid4())
+    new_plan_number = _generate_plan_number()
+    copy_title = f"Copy of {original['title']}"
+
+    now = datetime.now().isoformat()
+    room_id = str(uuid.uuid4())
+    room_number = _generate_room_number()
+
+    # Create plan in memory first (for fast access)
+    plan = {
+        "plan_id": new_plan_id,
+        "plan_number": new_plan_number,
+        "title": copy_title,
+        "topic": original.get("topic", ""),
+        "requirements": original.get("requirements", []),
+        "status": PlanStatus.INITIATED,
+        "hierarchy_id": original.get("hierarchy_id", "default"),
+        "created_at": now,
+        "current_version": "v1.0",
+        "versions": ["v1.0"],
+    }
+    room = {
+        "room_id": room_id,
+        "room_number": room_number,
+        "plan_id": new_plan_id,
+        "topic": copy_title,
+        "phase": RoomPhase.SELECTING,
+        "coordinator_id": "coordinator",
+        "current_version": "v1.0",
+        "purpose": original.get("purpose", "initial_discussion"),
+        "mode": original.get("mode", "hierarchical"),
+        "created_at": now,
+    }
+    _plans[new_plan_id] = plan
+    _rooms[room_id] = room
+    _messages[room_id] = []
+    _participants[room_id] = []
+
+    # PostgreSQL 优先写入
+    if _db_active:
+        db_success = False
+        for attempt in range(10):
+            try:
+                await crud.copy_plan(
+                    original_plan_id=plan_id,
+                    new_plan_id=new_plan_id,
+                    new_plan_number=new_plan_number,
+                    new_title=copy_title,
+                )
+                await crud.create_room(
+                    room_id=room_id,
+                    room_number=room_number,
+                    plan_id=new_plan_id,
+                    topic=copy_title,
+                    coordinator_id="coordinator",
+                    phase=RoomPhase.SELECTING.value,
+                    current_version="v1.0",
+                    purpose=original.get("purpose", "initial_discussion"),
+                    mode=original.get("mode", "hierarchical"),
+                )
+                logger.info(f"[DB] copy_plan: {plan_id} -> {new_plan_id}({new_plan_number}), room={room_id}({room_number})")
+                db_success = True
+                break
+            except Exception as e:
+                if _is_duplicate_key_error(e, "plans_plan_number_key"):
+                    await _sync_plan_counter_from_db()
+                    new_plan_number = _generate_plan_number()
+                    plan["plan_number"] = new_plan_number
+                    room_number = _generate_room_number()
+                    room["room_number"] = room_number
+                    logger.warning(f"[DB] copy_plan number 冲突，重试 ({new_plan_number})，attempt {attempt + 1}")
+                    continue
+                elif _is_duplicate_key_error(e, "rooms_room_number_key"):
+                    await _sync_room_counter_from_db()
+                    room_number = _generate_room_number()
+                    room["room_number"] = room_number
+                    logger.warning(f"[DB] copy_plan room_number 冲突，重试 ({room_number})，attempt {attempt + 1}")
+                    continue
+                else:
+                    logger.error(f"[DB] copy_plan 失败: {e}")
+                    raise
+
+        if db_success:
+            # Log activity
+            try:
+                await crud.create_activity(
+                    activity_id=str(uuid.uuid4()),
+                    plan_id=new_plan_id,
+                    action_type="plan.copied",
+                    performed_by=data.get("performed_by", "system") if data else "system",
+                    description=f"从计划 {original.get('plan_number', plan_id)} 复制",
+                    entity_type="plan",
+                    entity_id=new_plan_id,
+                )
+            except Exception as e:
+                logger.warning(f"[DB] copy_plan activity 失败: {e}")
 
     return {"plan": plan, "room": room}
 

@@ -67,6 +67,66 @@ async def list_plans() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+async def copy_plan(
+    original_plan_id: str,
+    new_plan_id: str,
+    new_plan_number: str,
+    new_title: str,
+) -> Dict[str, Any]:
+    """
+    复制 Plan（不含 rooms/tasks/decisions 等版本级内容，仅复制 plan 级元数据）
+    复制内容：title, topic, requirements, hierarchy_id, purpose, mode, constraints, stakeholders
+    新计划创建 v1.0 配套 Room
+    """
+    orig = await get_plan(original_plan_id)
+    if not orig:
+        raise ValueError(f"Original plan not found: {original_plan_id}")
+
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO plans (plan_id, plan_number, title, topic, requirements, hierarchy_id,
+                               current_version, versions, purpose, mode, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+            RETURNING *
+            """,
+            new_plan_id, new_plan_number, new_title, orig["topic"],
+            orig.get("requirements"), orig.get("hierarchy_id", "default"),
+            "v1.0", json.dumps(["v1.0"]),
+            orig.get("purpose", "initial_discussion"),
+            orig.get("mode", "hierarchical"),
+        )
+
+    # 复制 constraints
+    constraints = await get_constraints(original_plan_id)
+    for c in constraints:
+        import uuid as _uuid
+        await create_constraint({
+            "constraint_id": str(_uuid.uuid4()),
+            "plan_id": new_plan_id,
+            "type": c.get("type"),
+            "value": c.get("value"),
+            "unit": c.get("unit"),
+            "description": c.get("description"),
+        })
+
+    # 复制 stakeholders
+    stakeholders = await get_stakeholders(original_plan_id)
+    for s in stakeholders:
+        import uuid as _uuid
+        await create_stakeholder({
+            "stakeholder_id": str(_uuid.uuid4()),
+            "plan_id": new_plan_id,
+            "name": s.get("name"),
+            "level": s.get("level"),
+            "interest": s.get("interest"),
+            "influence": s.get("influence"),
+            "description": s.get("description"),
+        })
+
+    return dict(row)
+
+
 async def list_rooms() -> List[Dict[str, Any]]:
     """List all rooms ordered by creation time descending."""
     async with get_connection() as conn:

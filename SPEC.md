@@ -1,6 +1,9 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.14 | 日期：2026-04-05（Step 60）
+> 版本：v2.11 | 日期：2026-04-05（Step 57）
 > 版本：v2.10 | 日期：2026-04-05（Step 56）
+> 版本：v2.9 | 日期：2026-04-05（Step 55）
 > 版本：v2.8 | 日期：2026-04-05（Step 54）
 > 版本：v2.7 | 日期：2026-04-05（Step 53）
 > 版本：v2.6 | 日期：2026-04-05（Step 52）
@@ -660,6 +663,70 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - Docker Web 镜像已重建并重启
 
 ## 迭代记录
+
+### v2.11 (2026-04-05 09:57)
+**Step 57: Plan/Room 计数器 SQL substring 修复（Plan/Activity/Analytics 回归正常）**
+- 问题：`_sync_plan_counter_from_db` 和 `_sync_room_counter_from_db` 的 SQL 使用 `substring(x from 10)` 提取序号，但位置10是连字符（`-`），导致提取到负数（如 `-9999`），ORDER BY DESC 时 `-1` > `-9999`，计数器错误同步到 1/2 而非 9999
+- 影响：计数器长期错误，新计划始终使用 PLAN-2026-0002（已存在），触发序号冲突，10次重试后降级内存模式，log_activity 不被调用（因为 `db_success=False`），导致 plan.created 等活动未记录到 DB，Activity API / Analytics API 返回空数据
+- 修复：所有 4 处 SQL 的 `substring(plan_number/room_number from 10)` 改为 `from 11`，正确提取纯数字部分
+  - `_sync_plan_counter_from_db()`（冲突重试时调用）
+  - `_sync_room_counter_from_db()`（冲突重试时调用）
+  - 启动初始化函数中 plan_number 加载
+  - 启动初始化函数中 room_number 加载
+- 验证：新建计划 `PLAN-2026-13129`（正确），`/activities/stats?plan_id=...` 返回 `{"total":1,"by_action_type":{"plan.created":1}}`，pytest 136/136 通过 ✅
+- Docker API 镜像已重建并重启
+
+### v2.12 (2026-04-05 10:09)
+**Step 58: Escalations Tab UI（升级管理 UI）**
+- 问题：后端 Escalations API 已完整实现（`getPlanEscalations`/`getEscalation`/`updateEscalation`），但 Plan Detail 无 UI，导致升级记录散落在各处无法集中管理
+- 修复1：前端 API 客户端新增 `getEscalation` / `updateEscalation` 函数（之前仅有 `getPlanEscalations`）
+- 修复2：App.vue 导入 `getPlanEscalations` / `getEscalation` / `newEscalation` / `updateEscalation`
+- 修复3：Plan Detail 新增第 15 个 Tab「升级」
+  - 升级列表：卡片式展示，含起始/目标层级（箭头连接）+ 状态标签（pending/approved/rejected/resolved）
+  - 升级摘要栏：显示总升级数
+  - 升级卡片详情：模式（逐级汇报/跨级汇报/紧急汇报）+ 路径 + 房间ID + 原因 + 备注
+  - 处理按钮：打开操作 Modal（批准/驳回/转发/重新分配）
+  - 状态颜色：pending=橙色边框 / approved=绿 / rejected=红
+- 修复4：`activePlanTab` 类型新增 `'escalations'`，Tab 列表新增 'escalations' 项（标签「升级」）
+- 修复5：watch(activePlanTab) 新增 `newTab === 'escalations'` 分支，自动调用 `loadPlanEscalations()`
+- CSS 样式：`.escalations-list` / `.escalation-card` / `.escalation-pending` / `.escalation-levels` / `.level-badge` / `.escalation-status` 等
+- 验证：`npm run build` 成功（78 modules, 259.37 kB），pytest 136/136 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.13 (2026-04-05 10:13)
+**Step 59: Hierarchical Review + Converging Panel UI**
+- 问题：DEBATE 阶段有完整辩论面板（debate-section），PROBLEM_DETECTED 等阶段有专门问题管理面板，但 HIERARCHICAL_REVIEW 和 CONVERGING 阶段没有任何专用侧边栏面板，只有通用阶段推进按钮
+- 修复1：新增状态变量 `isHierarchicalReviewPhase` / `isConvergingPhase` / `hierarchicalReviewData` / `reviewNotes`
+- 修复2：新增 `loadHierarchicalReviewData(roomId)` 函数 — 调用 `GET /rooms/{room_id}/context?level=7`，获取层级审批链（hierarchy_context）和共识点（consensus_points）
+- 修复3：`enterRoom` 增加 HIERARCHICAL_REVIEW/CONVERGING 阶段数据加载，轮询间隔中增加两类阶段刷新逻辑，`leaveRoom` 清空 `hierarchicalReviewData`
+- 修复4：Room 侧边栏新增「🏛️ 层级评审」面板（HIERARCHICAL_REVIEW 阶段）
+  - 收敛共识点展示（consensus_points 列表，紫色标签）
+  - L7-L1 审批链状态（层级/角色名/状态徽章：✅/❌/⏳）
+  - 当前层级高亮（当前审批层级行加亮）
+  - 评审备注输入框
+  - 审批状态芯片颜色：approved=绿/rejected=红/pending=黄
+- 修复5：Room 侧边栏新增「🔄 收敛阶段」面板（CONVERGING 阶段）
+  - 已收敛共识议题列表（描述 + ✅图标）
+  - 无共识点时的空状态提示
+  - 下一步说明（提交至层级评审或直接进入决策）
+- 修复6：新增 CSS 样式：`.hierarchical-review-section`（紫色边框）/ `.converging-section`（橙色边框）/ `.approval-chain` / `.consensus-point-chip` / `.approval-level-row` / `.phase-badge-sm`
+- 验证：`npm run build` 成功（78 modules, 263.87 kB），pytest 136/136 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.14 (2026-04-05 10:26)
+**Step 60: Activities Tab Scope Filter (Plan/Room/Version)**
+- 问题：Activities Tab 只显示计划级活动，无法按讨论室或版本筛选活动记录
+- 修复1：前端 API 新增 `listRoomActivities(roomId)` 和 `listVersionActivities(planId, version)`
+- 修复2：App.vue 新增状态 `activityScope`（'plan'|'room'|'version'）、`activityScopeRoomId`、`activityScopeVersion`
+- 修复3：Activities Tab 新增范围切换 Tab（📋计划 / 🏛️房间 / 📦版本）
+  - 选择「房间」时显示讨论室下拉列表，加载 `GET /rooms/{room_id}/activities`
+  - 选择「版本」时显示版本下拉列表，加载 `GET /plans/{plan_id}/versions/{version}/activities`
+  - 选择「计划」时恢复原有行为（显示统计卡片）
+- 修复4：`watch(activePlanTab === 'activities')` 初始化 scope 为 'plan' 并自动加载
+- 修复5：`switchPlanVersion` 更新 — 如果当前 scope='version'，同步更新 `activityScopeVersion` 并重新加载版本级活动
+- CSS 样式：`.activity-scope-bar` / `.scope-tabs` / `.scope-tab`（蓝色激活态）/ `.activity-scope-select`
+- 验证：`npm run build` 成功（79 modules, 267.88 kB），pytest 136/136 通过 ✅
+- Docker Web 镜像已重建并重启
 
 ### v2.10 (2026-04-05 08:26)
 **Step 56: Plan Markdown Export UI**
