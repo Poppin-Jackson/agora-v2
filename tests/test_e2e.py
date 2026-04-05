@@ -3764,5 +3764,141 @@ class TestNotificationAPI:
         assert resp.status_code == 404
 
 
+class TestRoomTemplates:
+    """Room Templates API 测试"""
+
+    def test_list_room_templates(self):
+        """列出房间模板（默认模板应该存在）"""
+        resp = httpx.get(f"{API_BASE}/room-templates", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert "templates" in result
+        assert isinstance(result["templates"], list)
+
+    def test_list_room_templates_filter_by_purpose(self):
+        """按用途筛选模板"""
+        resp = httpx.get(f"{API_BASE}/room-templates", params={"purpose": "problem_solving"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        for tmpl in result.get("templates", []):
+            if tmpl.get("purpose"):
+                assert tmpl["purpose"] == "problem_solving"
+
+    def test_create_room_template(self):
+        """创建房间模板"""
+        template_data = {
+            "name": "测试讨论室",
+            "description": "用于自动化测试的模板",
+            "purpose": "initial_discussion",
+            "mode": "flat",
+            "default_phase": "thinking",
+            "settings": {"allow_skip_thinking": True},
+            "is_shared": False,
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "template_id" in result
+        template_id = result["template_id"]
+
+        # 验证创建成功
+        resp = httpx.get(f"{API_BASE}/room-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "测试讨论室"
+        assert tmpl["purpose"] == "initial_discussion"
+        assert tmpl["mode"] == "flat"
+        assert tmpl["default_phase"] == "thinking"
+        assert tmpl["is_shared"] is False
+
+    def test_update_room_template(self):
+        """更新房间模板"""
+        # 先创建一个模板
+        template_data = {
+            "name": "待更新模板",
+            "purpose": "decision_making",
+            "mode": "hierarchical",
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 更新模板
+        resp = httpx.patch(f"{API_BASE}/room-templates/{template_id}", json={
+            "name": "已更新模板",
+            "mode": "flat",
+        }, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "已更新模板"
+        assert tmpl["mode"] == "flat"
+        assert tmpl["purpose"] == "decision_making"  # 未更新的字段保持不变
+
+    def test_delete_room_template(self):
+        """删除房间模板"""
+        template_data = {
+            "name": "待删除模板",
+            "purpose": "review",
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 删除模板
+        resp = httpx.delete(f"{API_BASE}/room-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+        # 验证已删除
+        resp = httpx.get(f"{API_BASE}/room-templates/{template_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_room_template_not_found(self):
+        """模板不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/room-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_room_from_template(self):
+        """从模板创建房间"""
+        # 先创建一个计划
+        plan_data = {
+            "title": "从模板创建房间测试",
+            "topic": "测试主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # 创建一个模板
+        template_data = {
+            "name": "房间创建模板",
+            "purpose": "problem_solving",
+            "mode": "hierarchical",
+            "default_phase": "selecting",
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 从模板创建房间
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/rooms/from-template/{template_id}",
+            json={"topic": "从模板创建的讨论室", "version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        result = resp.json()
+        assert "room_id" in result
+        assert result.get("template_applied") == "房间创建模板"
+        room_id = result["room_id"]
+
+        # 验证房间已创建
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        room = resp.json()
+        assert room["topic"] == "从模板创建的讨论室"
+        assert room["plan_id"] == plan_id
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

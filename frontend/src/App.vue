@@ -52,6 +52,7 @@ import api, {
   listActivities,
   getActivityStats,
   getActivity,
+  searchRoomMessages,
   listNotifications,
   markNotificationRead,
   markAllNotificationsRead,
@@ -81,6 +82,13 @@ import api, {
   createTaskComment,
   listTaskCheckpoints,
   createTaskCheckpoint,
+  exportPlanMarkdown,
+  exportVersionMarkdown,
+  listRoomTemplates,
+  createRoomTemplate,
+  updateRoomTemplate,
+  deleteRoomTemplate,
+  createRoomFromTemplate,
 } from './api'
 
 // ─── View State ──────────────────────────────────────────
@@ -110,6 +118,22 @@ const planMetrics = ref<any>(null)
 const planTasks = ref<any[]>([])
 const activePlanTab = ref<'overview' | 'rooms' | 'tasks' | 'decisions' | 'edicts' | 'approvals' | 'versions' | 'risks' | 'constraints' | 'stakeholders' | 'requirements' | 'activities' | 'analytics' | 'snapshots'>('overview')
 const planDetailActiveVersion = ref<string>('')
+const exportLoading = ref(false)
+
+// ─── Room Templates State ───────────────────────────────
+const roomTemplates = ref<any[]>([])
+const showRoomTemplates = ref(false)
+const showCreateTemplate = ref(false)
+const newTemplateForm = reactive({
+  name: '',
+  description: '',
+  purpose: 'initial_discussion',
+  mode: 'hierarchical',
+  default_phase: 'selecting',
+  settings: {} as Record<string, any>,
+  is_shared: false,
+})
+const editingTemplate = ref<any>(null)
 
 // ─── Decisions State ─────────────────────────────────────
 const planDecisions = ref<any[]>([])
@@ -221,6 +245,11 @@ const newMessage = reactive({ agent_id: 'user-1', content: '' })
 const agentInfo = reactive({ agent_id: 'user-1', name: '访客', level: 5, role: 'Member' })
 const showAddParticipant = ref(false)
 const newParticipant = reactive({ name: '', agent_id: '', role: 'Member', level: 5 })
+// Message search
+const messageSearchQuery = ref('')
+const messageSearchResults = ref<any[]>([])
+const messageSearchLoading = ref(false)
+const messageSearchActive = ref(false)
 
 // ─── Task State ─────────────────────────────────────────
 const tasks = ref<any[]>([])
@@ -259,6 +288,7 @@ const newExchange = reactive({
 })
 const exchangeLoading = ref(false)
 const roundAdvancing = ref(false)
+const wsStatus = ref<'connecting' | 'connected' | 'disconnected'>('disconnected')
 
 // ─── Escalation State ─────────────────────────────────────
 const showEscalationModal = ref(false)
@@ -449,6 +479,13 @@ function closeNotifications(e: MouseEvent) {
 let ws: WebSocket | null = null
 let phasePollInterval: ReturnType<typeof setInterval> | null = null
 let homePollInterval: ReturnType<typeof setInterval> | null = null
+// WebSocket auto-reconnect state
+let wsCurrentRoom: string | null = null
+let wsReconnectAttempt = 0
+const WS_MAX_RECONNECT = 5
+const WS_BASE_DELAY = 1000   // 1 second
+const WS_MAX_DELAY = 30000  // 30 seconds
+const wsReconnectTimers: ReturnType<typeof setTimeout>[] = []
 
 // ─── Computed ──────────────────────────────────────────
 const phaseColors: Record<string, string> = {
@@ -1371,6 +1408,134 @@ async function handleCreateRoom() {
   }
 }
 
+async function loadRoomTemplates() {
+  try {
+    const res = await listRoomTemplates()
+    roomTemplates.value = res.data?.templates || []
+  } catch (e) {
+    console.error('loadRoomTemplates failed', e)
+  }
+}
+
+async function openRoomTemplates() {
+  showRoomTemplates.value = true
+  showCreateTemplate.value = false
+  editingTemplate.value = null
+  await loadRoomTemplates()
+}
+
+async function handleSaveTemplate() {
+  if (!newTemplateForm.name.trim()) return
+  try {
+    if (editingTemplate.value) {
+      await updateRoomTemplate(editingTemplate.value.template_id, {
+        name: newTemplateForm.name,
+        description: newTemplateForm.description,
+        purpose: newTemplateForm.purpose,
+        mode: newTemplateForm.mode,
+        default_phase: newTemplateForm.default_phase,
+        settings: newTemplateForm.settings,
+        is_shared: newTemplateForm.is_shared,
+      })
+    } else {
+      await createRoomTemplate({
+        name: newTemplateForm.name,
+        description: newTemplateForm.description,
+        purpose: newTemplateForm.purpose,
+        mode: newTemplateForm.mode,
+        default_phase: newTemplateForm.default_phase,
+        settings: newTemplateForm.settings,
+        is_shared: newTemplateForm.is_shared,
+      })
+    }
+    showCreateTemplate.value = false
+    editingTemplate.value = null
+    await loadRoomTemplates()
+  } catch (e) {
+    console.error('handleSaveTemplate failed', e)
+  }
+}
+
+function startEditTemplate(tmpl: any) {
+  editingTemplate.value = tmpl
+  Object.assign(newTemplateForm, {
+    name: tmpl.name,
+    description: tmpl.description || '',
+    purpose: tmpl.purpose || 'initial_discussion',
+    mode: tmpl.mode || 'hierarchical',
+    default_phase: tmpl.default_phase || 'selecting',
+    settings: typeof tmpl.settings === 'object' ? tmpl.settings : {},
+    is_shared: tmpl.is_shared || false,
+  })
+  showCreateTemplate.value = true
+}
+
+async function handleDeleteTemplate(templateId: string) {
+  if (!confirm('确定删除此模板？')) return
+  try {
+    await deleteRoomTemplate(templateId)
+    await loadRoomTemplates()
+  } catch (e) {
+    console.error('handleDeleteTemplate failed', e)
+  }
+}
+
+async function handleCreateRoomFromTemplate(tmpl: any) {
+  if (!currentPlan.value) return
+  try {
+    const res = await createRoomFromTemplate(currentPlan.value.plan_id, tmpl.template_id, {
+      topic: tmpl.name,
+      version: planDetailActiveVersion.value,
+    })
+    showRoomTemplates.value = false
+    // Refresh rooms list
+    const roomsRes = await getRoomsByPlan(currentPlan.value.plan_id)
+    planRooms.value = roomsRes.data?.rooms || []
+    // Enter the room
+    await enterRoom(res.data.room_id)
+  } catch (e) {
+    console.error('handleCreateRoomFromTemplate failed', e)
+  }
+}
+
+async function handleExportPlan() {
+  if (!currentPlan.value || exportLoading.value) return
+  exportLoading.value = true
+  try {
+    const res = await exportPlanMarkdown(currentPlan.value.plan_id)
+    const blob = new Blob([res.data as string], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${currentPlan.value.plan_number || currentPlan.value.plan_id}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('exportPlan failed', e)
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+async function handleExportVersion() {
+  if (!currentPlan.value || !planDetailActiveVersion.value || exportLoading.value) return
+  exportLoading.value = true
+  try {
+    const res = await exportVersionMarkdown(currentPlan.value.plan_id, planDetailActiveVersion.value)
+    const blob = new Blob([res.data as string], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${currentPlan.value.plan_number || currentPlan.value.plan_id}-${planDetailActiveVersion.value}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error('exportVersion failed', e)
+  } finally {
+    exportLoading.value = false
+  }
+}
+
 async function openRoomHierarchy(room: any, event: Event) {
   event.stopPropagation()
   event.preventDefault()
@@ -1601,6 +1766,9 @@ async function enterRoom(roomId: string) {
 }
 
 function leaveRoom() {
+  wsCurrentRoom = null  // prevent auto-reconnect
+  wsReconnectTimers.forEach(t => clearTimeout(t))
+  wsReconnectTimers.length = 0
   if (ws) { ws.close(); ws = null }
   if (phasePollInterval) { clearInterval(phasePollInterval); phasePollInterval = null }
   currentRoom.value = null
@@ -1611,6 +1779,11 @@ function leaveRoom() {
   taskMetrics.value = null
   debateState.value = null
   showAddDebatePoint.value = false
+  wsStatus.value = 'disconnected'
+  // Clear message search
+  messageSearchQuery.value = ''
+  messageSearchResults.value = []
+  messageSearchActive.value = false
   view.value = 'plan_detail'
 }
 
@@ -1624,8 +1797,17 @@ function backToHome() {
 
 // ─── Room Actions ────────────────────────────────────────
 function connectWs(roomId: string) {
+  // Clear any pending reconnect timers
+  wsReconnectTimers.forEach(t => clearTimeout(t))
+  wsReconnectTimers.length = 0
+
   if (ws) ws.close()
+  wsCurrentRoom = roomId
+  wsReconnectAttempt = 0
+  wsStatus.value = 'connecting'
+
   ws = new WebSocket(wsUrl(roomId))
+
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data)
     if (msg.type === 'phase_change') {
@@ -1638,7 +1820,35 @@ function connectWs(roomId: string) {
       }
     }
   }
-  ws.onclose = () => console.log('WS disconnected')
+
+  ws.onopen = () => {
+    wsStatus.value = 'connected'
+    wsReconnectAttempt = 0
+    console.log('WS connected')
+  }
+
+  ws.onerror = (err) => {
+    console.error('WS error', err)
+  }
+
+  ws.onclose = () => {
+    wsStatus.value = 'disconnected'
+    if (!wsCurrentRoom) return  // was intentionally closed (leaveRoom)
+    // Auto-reconnect with exponential backoff
+    if (wsReconnectAttempt < WS_MAX_RECONNECT) {
+      const delay = Math.min(WS_BASE_DELAY * Math.pow(2, wsReconnectAttempt), WS_MAX_DELAY)
+      wsReconnectAttempt++
+      console.log(`WS reconnecting in ${delay}ms (attempt ${wsReconnectAttempt}/${WS_MAX_RECONNECT})`)
+      const timer = setTimeout(() => {
+        if (wsCurrentRoom && wsCurrentRoom === roomId) {
+          connectWs(roomId)
+        }
+      }, delay)
+      wsReconnectTimers.push(timer)
+    } else {
+      console.warn('WS max reconnect attempts reached')
+    }
+  }
 }
 
 async function sendMessage() {
@@ -1652,6 +1862,26 @@ async function sendMessage() {
   } catch (e) {
     console.error('sendMessage failed', e)
   }
+}
+
+async function searchMessages() {
+  if (!messageSearchQuery.value.trim() || !currentRoom.value) return
+  messageSearchLoading.value = true
+  messageSearchActive.value = true
+  try {
+    const res = await searchRoomMessages(currentRoom.value.room_id, messageSearchQuery.value)
+    messageSearchResults.value = res.data?.results || []
+  } catch (e) {
+    console.error('searchMessages failed', e)
+  } finally {
+    messageSearchLoading.value = false
+  }
+}
+
+function clearMessageSearch() {
+  messageSearchQuery.value = ''
+  messageSearchResults.value = []
+  messageSearchActive.value = false
 }
 
 async function addNewParticipant() {
@@ -2233,6 +2463,16 @@ onUnmounted(() => {
         </div>
         <button class="btn-primary" @click="showCreateRoom = !showCreateRoom">
           {{ showCreateRoom ? '取消' : '+ 新房间' }}
+        </button>
+        <button class="btn-secondary" @click="openRoomTemplates" title="从模板创建房间">
+          📋 模板
+        </button>
+        <!-- Export Buttons -->
+        <button class="btn-secondary" :disabled="exportLoading" @click="handleExportPlan" title="导出计划 Markdown">
+          📥 计划
+        </button>
+        <button class="btn-secondary" :disabled="exportLoading" @click="handleExportVersion" title="导出版本 Markdown">
+          📄 版本
         </button>
         <!-- Notification Bell -->
         <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
@@ -4035,6 +4275,107 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- Room Templates Modal -->
+      <div v-if="showRoomTemplates" class="modal-overlay" @click.self="showRoomTemplates = false">
+        <div class="modal-content room-templates-modal">
+          <div class="modal-header">
+            <h3>📋 房间模板</h3>
+            <div class="modal-header-actions">
+              <button class="btn-primary btn-small" @click="showCreateTemplate = true; editingTemplate = null; Object.assign(newTemplateForm, { name: '', description: '', purpose: 'initial_discussion', mode: 'hierarchical', default_phase: 'selecting', settings: {}, is_shared: false })">
+                + 新建模板
+              </button>
+              <button class="modal-close" @click="showRoomTemplates = false">✕</button>
+            </div>
+          </div>
+          <div class="modal-body">
+            <!-- Create Template Form -->
+            <div v-if="showCreateTemplate" class="template-create-form">
+              <div class="form-row">
+                <label>模板名称 *</label>
+                <input v-model="newTemplateForm.name" class="input" placeholder="例如：战略决策室" />
+              </div>
+              <div class="form-row">
+                <label>描述</label>
+                <textarea v-model="newTemplateForm.description" class="input" placeholder="模板用途说明..." rows="2"></textarea>
+              </div>
+              <div class="form-row-inline">
+                <div class="form-field">
+                  <label>用途</label>
+                  <select v-model="newTemplateForm.purpose" class="input">
+                    <option value="initial_discussion">初始讨论</option>
+                    <option value="problem_solving">问题解决</option>
+                    <option value="decision_making">决策制定</option>
+                    <option value="review">评审回顾</option>
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label>模式</label>
+                  <select v-model="newTemplateForm.mode" class="input">
+                    <option value="hierarchical">层级模式</option>
+                    <option value="flat">扁平模式</option>
+                    <option value="collaborative">协作模式</option>
+                    <option value="specialized">专业模式</option>
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label>默认阶段</label>
+                  <select v-model="newTemplateForm.default_phase" class="input">
+                    <option value="selecting">选择</option>
+                    <option value="thinking">思考</option>
+                    <option value="sharing">分享</option>
+                    <option value="debate">辩论</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <label class="checkbox-label">
+                  <input type="checkbox" v-model="newTemplateForm.is_shared" />
+                  共享模板（所有用户可见）
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="btn-primary" @click="handleSaveTemplate">保存模板</button>
+                <button class="btn-secondary" @click="showCreateTemplate = false">取消</button>
+              </div>
+            </div>
+
+            <!-- Templates List -->
+            <div v-if="!showCreateTemplate" class="templates-list">
+              <div v-if="roomTemplates.length === 0" class="empty-state" style="padding: 40px 0">
+                <div class="empty-icon">📋</div>
+                <div class="empty-text">暂无模板</div>
+                <div class="empty-sub">点击「新建模板」创建第一个房间模板</div>
+              </div>
+              <div
+                v-for="tmpl in roomTemplates"
+                :key="tmpl.template_id"
+                class="template-card"
+              >
+                <div class="template-card-header">
+                  <div class="template-card-title">{{ tmpl.name }}</div>
+                  <div class="template-card-actions">
+                    <button class="btn-edit" @click="startEditTemplate(tmpl)" title="编辑">✎</button>
+                    <button class="btn-edit" @click="handleDeleteTemplate(tmpl.template_id)" title="删除">🗑</button>
+                  </div>
+                </div>
+                <div class="template-card-desc">{{ tmpl.description || '无描述' }}</div>
+                <div class="template-card-meta">
+                  <span class="template-badge purpose">{{ tmpl.purpose }}</span>
+                  <span class="template-badge mode">{{ tmpl.mode }}</span>
+                  <span class="template-badge phase">{{ tmpl.default_phase }}</span>
+                </div>
+                <div class="template-card-footer">
+                  <span v-if="tmpl.is_shared" class="shared-badge">共享</span>
+                  <button class="btn-primary btn-small" @click="handleCreateRoomFromTemplate(tmpl)">
+                    使用此模板创建房间 →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ══════════════════════════════════════════════════════ -->
@@ -4057,6 +4398,11 @@ onUnmounted(() => {
         </div>
         <div class="room-meta-header">
           👥 {{ participants.length }}
+          <span
+            class="ws-status-dot"
+            :class="wsStatus"
+            :title="wsStatus === 'connected' ? '实时连接' : wsStatus === 'connecting' ? '连接中...' : '离线（自动重连中）'"
+          >{{ wsStatus === 'connected' ? '🟢' : wsStatus === 'connecting' ? '🟡' : '🔴' }}</span>
         </div>
         <!-- Notification Bell -->
         <button class="notification-bell" @click.stop="toggleNotifications" title="通知">
@@ -4088,11 +4434,39 @@ onUnmounted(() => {
 
           <!-- Messages -->
           <div class="messages-area">
-            <div v-if="messages.length === 0" class="messages-empty">
+            <!-- Message Search Bar -->
+            <div class="message-search-bar">
+              <input
+                v-model="messageSearchQuery"
+                class="input message-search-input"
+                placeholder="搜索消息内容..."
+                @keyup.enter="searchMessages"
+              />
+              <button
+                v-if="!messageSearchActive"
+                class="btn-primary btn-sm"
+                :disabled="!messageSearchQuery.trim()"
+                @click="searchMessages"
+              >搜索</button>
+              <button
+                v-else
+                class="btn-secondary btn-sm"
+                @click="clearMessageSearch"
+              >清除</button>
+            </div>
+            <!-- Search Results Indicator -->
+            <div v-if="messageSearchActive" class="search-results-indicator">
+              <span v-if="messageSearchLoading">搜索中...</span>
+              <span v-else>找到 {{ messageSearchResults.length }} 条结果</span>
+            </div>
+            <div v-if="!messageSearchActive && messages.length === 0" class="messages-empty">
               暂无发言记录
             </div>
+            <div v-if="messageSearchActive && messageSearchResults.length === 0 && !messageSearchLoading" class="messages-empty">
+              未找到匹配的消息
+            </div>
             <div
-              v-for="msg in messages"
+              v-for="msg in (messageSearchActive ? messageSearchResults : messages)"
               :key="msg.message_id"
               class="message-row"
             >
@@ -4812,6 +5186,7 @@ body {
   transition: all 0.15s;
 }
 .btn-secondary:hover { border-color: #5b5bd6; color: #a0a0ff; }
+.btn-sm { padding: 4px 12px; font-size: 0.8rem; }
 
 .btn-back {
   background: transparent;
@@ -6585,6 +6960,7 @@ body {
   white-space: nowrap;
 }
 .room-meta-header { color: #6a6a8a; font-size: 0.85rem; }
+.ws-status-dot { margin-left: 6px; cursor: default; font-size: 0.9rem; }
 
 .room-body {
   flex: 1;
@@ -6624,6 +7000,19 @@ body {
   transition: all 0.15s;
 }
 .phase-btn:hover { background: #2d2d4a; color: #fff; }
+
+.message-search-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  margin-bottom: 8px;
+}
+.message-search-input { flex: 1; }
+.search-results-indicator {
+  font-size: 0.8rem;
+  color: #a78bfa;
+  padding: 4px 0 8px;
+}
 
 .messages-area {
   flex: 1;
@@ -7750,4 +8139,130 @@ body {
 .other-stat-icon { font-size: 1.4rem; margin-bottom: 4px; }
 .other-stat-num { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; line-height: 1.1; }
 .other-stat-label { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+
+/* ─── Room Templates Modal ─────────────────────────────── */
+.room-templates-modal {
+  max-width: 640px;
+  width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.template-create-form {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.form-row label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.form-row-inline {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.form-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-field label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+.btn-small {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  border-radius: 6px;
+}
+.templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  max-height: 55vh;
+}
+.template-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 14px;
+}
+.template-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.template-card-title {
+  font-weight: 600;
+  color: #f1f5f9;
+  font-size: 0.95rem;
+}
+.template-card-actions {
+  display: flex;
+  gap: 4px;
+}
+.template-card-desc {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.template-card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.template-badge {
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+.template-badge.purpose { background: #1e3a5f; color: #93c5fd; }
+.template-badge.mode { background: #2d1f4f; color: #c4b5fd; }
+.template-badge.phase { background: #1f3830; color: #6ee7b7; }
+.template-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.shared-badge {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #14532d;
+  color: #86efac;
+}
 </style>

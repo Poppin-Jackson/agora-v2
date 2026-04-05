@@ -240,6 +240,22 @@ async def get_messages(room_id: str, limit: int = 0) -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+async def search_messages(room_id: str, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """搜索讨论室消息内容"""
+    async with get_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM messages
+            WHERE room_id = $1
+              AND content ILIKE $2
+            ORDER BY timestamp DESC
+            LIMIT $3
+            """,
+            room_id, f"%{query}%", limit
+        )
+        return [dict(r) for r in rows]
+
+
 # ========================
 # Approval Flows
 # ========================
@@ -1963,3 +1979,145 @@ async def count_notifications(
             *params
         )
         return row["cnt"] if row else 0
+
+
+# ========================
+# Room Templates
+# ========================
+
+async def create_room_template(
+    template_id: str,
+    name: str,
+    description: Optional[str] = None,
+    purpose: str = "initial_discussion",
+    mode: str = "hierarchical",
+    default_phase: str = "selecting",
+    settings: Optional[Dict[str, Any]] = None,
+    created_by: Optional[str] = None,
+    is_shared: bool = False,
+) -> Dict[str, Any]:
+    """创建房间模板"""
+    settings_json = json.dumps(settings or {})
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO room_templates (template_id, name, description, purpose, mode, default_phase, settings, created_by, is_shared, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            RETURNING *
+            """,
+            template_id, name, description, purpose, mode, default_phase, settings_json, created_by, is_shared,
+        )
+        return dict(row) if row else {}
+
+
+async def list_room_templates(
+    purpose: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+    created_by: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """列出房间模板"""
+    conditions = []
+    params = []
+    idx = 1
+
+    if purpose:
+        conditions.append(f"purpose = ${idx}")
+        params.append(purpose)
+        idx += 1
+    if is_shared is not None:
+        conditions.append(f"is_shared = ${idx}")
+        params.append(is_shared)
+        idx += 1
+    if created_by:
+        conditions.append(f"created_by = ${idx}")
+        params.append(created_by)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order = "ORDER BY created_at DESC"
+
+    async with get_connection() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM room_templates {where} {order}",
+            *params
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_room_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """获取单个房间模板"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM room_templates WHERE template_id = $1",
+            template_id,
+        )
+        return dict(row) if row else None
+
+
+async def update_room_template(
+    template_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    purpose: Optional[str] = None,
+    mode: Optional[str] = None,
+    default_phase: Optional[str] = None,
+    settings: Optional[Dict[str, Any]] = None,
+    is_shared: Optional[bool] = None,
+) -> Optional[Dict[str, Any]]:
+    """更新房间模板"""
+    fields = []
+    params = []
+    idx = 1
+
+    if name is not None:
+        fields.append(f"name = ${idx}")
+        params.append(name)
+        idx += 1
+    if description is not None:
+        fields.append(f"description = ${idx}")
+        params.append(description)
+        idx += 1
+    if purpose is not None:
+        fields.append(f"purpose = ${idx}")
+        params.append(purpose)
+        idx += 1
+    if mode is not None:
+        fields.append(f"mode = ${idx}")
+        params.append(mode)
+        idx += 1
+    if default_phase is not None:
+        fields.append(f"default_phase = ${idx}")
+        params.append(default_phase)
+        idx += 1
+    if settings is not None:
+        fields.append(f"settings = ${idx}")
+        params.append(json.dumps(settings))
+        idx += 1
+    if is_shared is not None:
+        fields.append(f"is_shared = ${idx}")
+        params.append(is_shared)
+        idx += 1
+
+    if not fields:
+        return await get_room_template(template_id)
+
+    fields.append("updated_at = NOW()")
+    params.append(template_id)
+
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE room_templates SET {', '.join(fields)} WHERE template_id = ${idx} RETURNING *",
+            *params
+        )
+        return dict(row) if row else None
+
+
+async def delete_room_template(template_id: str) -> bool:
+    """删除房间模板"""
+    async with get_connection() as conn:
+        result = await conn.execute(
+            "DELETE FROM room_templates WHERE template_id = $1",
+            template_id,
+        )
+        return result == "DELETE 1"
+

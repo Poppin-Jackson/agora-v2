@@ -3,6 +3,8 @@ PostgreSQL 数据库连接与初始化
 Agora-V2 使用 PostgreSQL 进行持久化存储
 """
 import os
+import uuid
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -595,6 +597,47 @@ async def _create_tables(pool: Pool):
                 logger.info("[DB] Step 34 表迁移完成: notifications table")
         except Exception as e:
             logger.warning(f"[DB] notifications 表迁移跳过（可能已存在）: {e}")
+
+        # Step 57: Room Templates
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS room_templates (
+                        template_id   UUID PRIMARY KEY,
+                        name          TEXT NOT NULL,
+                        description   TEXT,
+                        purpose       TEXT DEFAULT 'initial_discussion',
+                        mode          TEXT DEFAULT 'hierarchical',
+                        default_phase TEXT DEFAULT 'selecting',
+                        settings      JSONB DEFAULT '{}',
+                        created_by    TEXT,
+                        is_shared     BOOLEAN DEFAULT FALSE,
+                        created_at    TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at    TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_room_templates_name ON room_templates(name);
+                    CREATE INDEX IF NOT EXISTS idx_room_templates_purpose ON room_templates(purpose);
+                """)
+                # Insert default templates if none exist
+                row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM room_templates")
+                if row["cnt"] == 0:
+                    defaults = [
+                        (str(uuid.uuid4()), "问题诊断室", "用于深入诊断和解决问题，从 PROBLEM_DETECTED 到 RESUMING 的完整流程", "problem_solving", "hierarchical", "selecting", json.dumps({"auto_progression": True, "consensus_threshold": 0.7}), "system", True),
+                        (str(uuid.uuid4()), "战略决策室", "用于高层战略决策，侧重 DECISION 到 EXECUTING", "decision_making", "hierarchical", "selecting", json.dumps({"require_l7_approval": True, "min_debate_rounds": 3}), "system", True),
+                        (str(uuid.uuid4()), "初始讨论室", "用于团队初始讨论，自由发言和辩论", "initial_discussion", "flat", "selecting", json.dumps({"allow_skip_thinking": False}), "system", True),
+                        (str(uuid.uuid4()), "评审回顾室", "用于方案评审和回顾，包含 DEBATE 到 CONVERGING", "review", "collaborative", "selecting", json.dumps({"voting_enabled": True}), "system", True),
+                    ]
+                    for t in defaults:
+                        await conn.execute("""
+                            INSERT INTO room_templates (template_id, name, description, purpose, mode, default_phase, settings, created_by, is_shared)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """, *t)
+                    logger.info("[DB] Step 57: 默认 Room Templates 已插入")
+                logger.info("[DB] Step 57 表迁移完成: room_templates table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 57 表迁移跳过（可能已存在）: {e}")
     except Exception as e:
         logger.warning(f"[DB] 列迁移跳过（可能已存在）: {e}")
 

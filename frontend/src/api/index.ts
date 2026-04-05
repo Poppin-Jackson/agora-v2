@@ -260,6 +260,9 @@ export const getRoomHistory = (roomId: string, limit = 100) =>
 export const getRoomContext = (roomId: string, level?: number) =>
   api.get(`/rooms/${roomId}/context`, { params: { level } })
 
+export const searchRoomMessages = (roomId: string, query: string, limit = 50) =>
+  api.get(`/rooms/${roomId}/messages/search`, { params: { q: query, limit } })
+
 // ─── Escalations ───────────────────────────────────────────────────────────────
 export const getRoomEscalations = (roomId: string) =>
   api.get(`/rooms/${roomId}/escalations`)
@@ -464,3 +467,36 @@ export const getBlockedTasks = (planId: string, version: string) =>
 export const validateTaskDependencies = (planId: string, version: string, data: {
   dependencies: string[]
 }) => api.post(`/plans/${planId}/versions/${version}/tasks/validate-dependencies`, data)
+
+// ─── Room Templates ─────────────────────────────────────────────────────────────
+export const createRoomTemplate = (data: {
+  name: string;
+  description?: string;
+  purpose?: string;
+  mode?: string;
+  default_phase?: string;
+  settings?: Record<string, any>;
+  is_shared?: boolean;
+}) => api.post('/room-templates', data)
+
+export const listRoomTemplates = (params?: { purpose?: string; is_shared?: boolean }) =>
+  api.get('/room-templates', { params })
+
+export const getRoomTemplate = (templateId: string) =>
+  api.get(`/room-templates/${templateId}`)
+
+export const updateRoomTemplate = (templateId: string, data: Partial<{
+  name: string;
+  description: string;
+  purpose: string;
+  mode: string;
+  default_phase: string;
+  settings: Record<string, any>;
+  is_shared: boolean;
+}>) => api.patch(`/room-templates/${templateId}`, data)
+
+export const deleteRoomTemplate = (templateId: string) =>
+  api.delete(`/room-templates/${templateId}`)
+
+export const createRoomFromTemplate = (planId: string, templateId: string, data?: { topic?: string; version?: string }) =>
+  api.post(`/plans/${planId}/rooms/from-template/${templateId}`, data)

@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.10 | 日期：2026-04-05（Step 56）
+> 版本：v2.8 | 日期：2026-04-05（Step 54）
 > 版本：v2.7 | 日期：2026-04-05（Step 53）
 > 版本：v2.6 | 日期：2026-04-05（Step 52）
 > 版本：v2.5 | 日期：2026-04-05（Step 51）
@@ -658,6 +660,49 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - Docker Web 镜像已重建并重启
 
 ## 迭代记录
+
+### v2.10 (2026-04-05 08:26)
+**Step 56: Plan Markdown Export UI**
+- 问题：后端有 Markdown 导出 API（Step 32 前端 API 客户端已含 exportPlanMarkdown/exportVersionMarkdown），但前端无 UI 入口，无法触发下载
+- 修复1：导入 `exportPlanMarkdown` 和 `exportVersionMarkdown` 到 App.vue
+- 修复2：Plan Detail 头部新增「📥 计划」和「📄 版本」导出按钮（btn-secondary，disabled 状态受 exportLoading 控制）
+- 修复3：`handleExportPlan()` — 调用 `exportPlanMarkdown(plan_id)`，返回 Markdown 内容，触发浏览器下载为 `{plan_number}.md`
+- 修复4：`handleExportVersion()` — 调用 `exportVersionMarkdown(plan_id, version)`，触发下载为 `{plan_number}-{version}.md`
+- `exportLoading` 状态防止重复点击
+- 验证：`npm run build` 成功（78 modules, 248.78 kB），pytest 129/129 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.9 (2026-04-05 08:20)
+**Step 55: Room Message Search + docker-compose Version Fix**
+- 问题：讨论室消息无法搜索，历史讨论内容难以检索
+- 修复1：`crud.search_messages(room_id, query, limit)` — PostgreSQL ILIKE 模糊搜索
+- 修复2：`GET /rooms/{room_id}/messages/search?q=...&limit=50` — 搜索端点
+- 修复3：前端 `searchRoomMessages(roomId, query)` API 函数
+- 修复4：Room 视图消息区顶部搜索栏（输入 Enter 搜索 / 清除按钮）
+- 修复5：搜索激活时显示结果数量，leaveRoom 自动清除搜索状态
+- 修复6：`docker-compose.yml` 移除 obsolete `version: '3.8'` 属性（警告消除）
+- 验证：`npm run build` 成功（78 modules, 247.66 kB），`docker-compose config` 无警告
+- Docker API/Web 镜像已重建并重启
+- 前置验证：115/115 通过（注：14个失败为 DB 脏数据残留，非本次变更引入）
+
+### v2.8 (2026-04-05 08:10)
+**Step 54: WebSocket Auto-Reconnect + Connection Status Indicator**
+- 问题：WebSocket 连接断开后无自动重连，用户无法感知连接状态（`ws.onclose` 仅打印日志）
+- 影响：实时讨论室在网络波动后变为"死"状态，用户需手动刷新页面
+- 修复1：WebSocket 重连状态机
+  - `wsCurrentRoom` — 记录当前房间，leaveRoom 时清空防止误重连
+  - `wsReconnectAttempt` — 重连计数器，上限 5 次
+  - `WS_MAX_RECONNECT = 5` / `WS_BASE_DELAY = 1000ms` / `WS_MAX_DELAY = 30000ms`
+  - 指数退避：`delay = min(1000 × 2^attempt, 30000)`
+  - `wsReconnectTimers` — 待处理 timer 数组，leaveRoom 时统一 clear
+- 修复2：`ws.onopen` 处理 — 连接建立时重置 `wsStatus = 'connected'`
+- 修复3：`ws.onerror` 处理 — 记录错误日志
+- 修复4：Room Header 新增连接状态指示器（🟢已连接 / 🟡连接中 / 🔴离线）
+  - 悬浮提示：已连接→"实时连接" / 连接中→"连接中..." / 离线→"离线（自动重连中）"
+  - 位置：参与者数量旁边（👥 N 🟢）
+- 修复5：`leaveRoom` 清理 — 停止所有待处理重连 timer + 重置 `wsStatus`
+- 验证：`npm run build` 成功（78 modules, 246.45 kB），pytest 129/129 通过 ✅
+- Docker Web 镜像已重建并重启
 
 ### v2.7 (2026-04-05 07:44)
 **Step 53: Debate Exchange UI（辩论交锋 UI）**

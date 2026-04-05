@@ -285,6 +285,32 @@ class SpeechAdd(BaseModel):
 
 
 # ========================
+# Room Template 模型
+# ========================
+
+class RoomTemplateCreate(BaseModel):
+    """创建房间模板"""
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = ""
+    purpose: str = "initial_discussion"
+    mode: str = "hierarchical"
+    default_phase: str = "selecting"
+    settings: Optional[Dict[str, Any]] = {}
+    is_shared: bool = False
+
+
+class RoomTemplateUpdate(BaseModel):
+    """更新房间模板"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    purpose: Optional[str] = None
+    mode: Optional[str] = None
+    default_phase: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+    is_shared: Optional[bool] = None
+
+
+# ========================
 # L1-L7 层级审批模型
 # ========================
 
@@ -2305,6 +2331,159 @@ async def create_room(data: dict = None):
     return {"room_id": room_id, "room": room}
 
 
+# ========================
+# Room Templates API
+# ========================
+
+@app.post("/room-templates", status_code=201)
+async def create_room_template(data: RoomTemplateCreate):
+    """创建房间模板"""
+    template_id = str(uuid.uuid4())
+    try:
+        template = await crud.create_room_template(
+            template_id=template_id,
+            name=data.name,
+            description=data.description,
+            purpose=data.purpose,
+            mode=data.mode,
+            default_phase=data.default_phase,
+            settings=data.settings,
+            created_by=None,
+            is_shared=data.is_shared,
+        )
+        logger.info(f"[DB] create_room_template: {template_id}({data.name})")
+        return {"template_id": template_id, "template": template}
+    except Exception as e:
+        logger.warning(f"[DB] create_room_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/room-templates")
+async def list_room_templates(
+    purpose: Optional[str] = None,
+    is_shared: Optional[bool] = None,
+):
+    """列出房间模板"""
+    try:
+        templates = await crud.list_room_templates(
+            purpose=purpose,
+            is_shared=is_shared,
+        )
+        return {"templates": templates}
+    except Exception as e:
+        logger.warning(f"[DB] list_room_templates failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/room-templates/{template_id}")
+async def get_room_template(template_id: str):
+    """获取单个房间模板"""
+    try:
+        template = await crud.get_room_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] get_room_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/room-templates/{template_id}")
+async def update_room_template(template_id: str, data: RoomTemplateUpdate):
+    """更新房间模板"""
+    try:
+        template = await crud.update_room_template(
+            template_id=template_id,
+            name=data.name,
+            description=data.description,
+            purpose=data.purpose,
+            mode=data.mode,
+            default_phase=data.default_phase,
+            settings=data.settings,
+            is_shared=data.is_shared,
+        )
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] update_room_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/room-templates/{template_id}", status_code=204)
+async def delete_room_template(template_id: str):
+    """删除房间模板"""
+    try:
+        deleted = await crud.delete_room_template(template_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] delete_room_template failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/plans/{plan_id}/rooms/from-template/{template_id}", status_code=201)
+async def create_room_from_template(plan_id: str, template_id: str, data: dict = None):
+    """从模板创建房间"""
+    # 获取模板
+    template = await crud.get_room_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # 解析模板设置
+    settings = template.get("settings", {}) if isinstance(template.get("settings"), dict) else {}
+    topic = (data.get("topic") if data else None) or template.get("name", "讨论室")
+
+    room_id = str(uuid.uuid4())
+    now = datetime.now().isoformat()
+    room_number = _generate_room_number()
+
+    room = {
+        "room_id": room_id,
+        "room_number": room_number,
+        "plan_id": plan_id,
+        "topic": topic,
+        "phase": template.get("default_phase", "selecting"),
+        "coordinator_id": "coordinator",
+        "current_version": data.get("version", "v1.0") if data else "v1.0",
+        "purpose": template.get("purpose", "initial_discussion"),
+        "mode": template.get("mode", "hierarchical"),
+        "created_at": now,
+        "template_id": template_id,
+        "settings": settings,
+    }
+
+    if _db_active:
+        try:
+            await crud.create_room(
+                room_id=room_id,
+                room_number=room_number,
+                plan_id=plan_id,
+                topic=topic,
+                coordinator_id="coordinator",
+                phase=template.get("default_phase", "selecting"),
+            )
+            # Update purpose and mode if they exist in DB schema
+            try:
+                await crud.update_room(room_id, purpose=room["purpose"], mode=room["mode"])
+            except Exception:
+                pass
+            logger.info(f"[DB] create_room_from_template: {room_id}({room_number}) from template {template_id}")
+        except Exception as e:
+            logger.warning(f"[DB] create_room_from_template failed: {e}")
+
+    _rooms[room_id] = room
+    _room_summaries[room_id] = room.copy()
+    return {"room_id": room_id, "room": room, "template_applied": template.get("name")}
+
+
 @app.get("/rooms/{room_id}")
 async def get_room(room_id: str):
     """
@@ -2720,6 +2899,48 @@ async def get_room_history(room_id: str):
         "room_id": room_id,
         "total": len(messages),
         "history": messages,
+    }
+
+
+@app.get("/rooms/{room_id}/messages/search")
+async def search_room_messages(
+    room_id: str,
+    q: str,
+    limit: int = 50,
+):
+    """
+    搜索讨论室消息内容
+    支持关键词模糊匹配，按时间倒序返回
+    """
+    if room_id not in _rooms:
+        await _sync_room_to_memory(room_id)
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    # PostgreSQL 优先读取
+    if _db_active:
+        try:
+            rows = await crud.search_messages(room_id, q, limit)
+            messages = [_row_to_message(r) for r in rows]
+            return {
+                "room_id": room_id,
+                "query": q,
+                "total": len(messages),
+                "results": messages,
+            }
+        except Exception as e:
+            logger.warning(f"[DB] search_room_messages {room_id}: {e}")
+
+    # 内存回退：过滤当前内存中的消息
+    messages = [
+        m for m in _messages.get(room_id, [])
+        if q.lower() in m.get("content", "").lower()
+    ][:limit]
+    return {
+        "room_id": room_id,
+        "query": q,
+        "total": len(messages),
+        "results": messages,
     }
 
 
