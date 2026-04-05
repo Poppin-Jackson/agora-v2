@@ -1133,6 +1133,7 @@ _decisions: dict = {}  # (plan_id, version, decision_id) -> Decision
 _task_comments: dict = {}  # (plan_id, version, task_id) -> {comment_id -> Comment}
 _task_checkpoints: dict = {}  # (plan_id, version, task_id) -> {checkpoint_id -> Checkpoint}
 _sub_tasks: dict = {}  # (plan_id, version, task_id) -> {sub_task_id -> SubTask}
+_time_entries: dict = {}  # task_id -> {time_entry_id -> TimeEntry} (Step 65)
 _constraints: dict = {}  # plan_id -> [Constraint, ...]
 _stakeholders: dict = {}  # plan_id -> [Stakeholder, ...]
 _risks: dict = {}  # (plan_id, version) -> [Risk, ...]
@@ -2017,6 +2018,15 @@ async def create_plan(data: PlanCreate):
     _participants[room_id] = []
     _messages[room_id] = []
 
+    # Step 63: Record initial phase entry (room starts at SELECTING)
+    if _db_active and db_success:
+        try:
+            now = datetime.now()
+            await crud.create_phase_timeline_entry(room_id, "selecting", now)
+            logger.info(f"[DB] phase_timeline init: room={room_id} phase=selecting")
+        except Exception as e:
+            logger.warning(f"[DB] phase_timeline init 失败: {e}")
+
     # Step 31: Activity Log — 仅在 DB 写入成功时记录（避免 FK 约束冲突）
     if db_success:
         await log_activity(
@@ -2502,6 +2512,16 @@ async def create_room(data: dict = None):
     
     _rooms[room_id] = room
     _room_summaries[room_id] = room.copy()
+
+    # Step 63: Record initial phase entry (room starts at SELECTING)
+    if _db_active:
+        try:
+            now = datetime.now()
+            await crud.create_phase_timeline_entry(room_id, "selecting", now)
+            logger.info(f"[DB] phase_timeline init: room={room_id} phase=selecting")
+        except Exception as e:
+            logger.warning(f"[DB] phase_timeline init 失败: {e}")
+
     return {"room_id": room_id, "room": room}
 
 
@@ -2655,6 +2675,17 @@ async def create_room_from_template(plan_id: str, template_id: str, data: dict =
 
     _rooms[room_id] = room
     _room_summaries[room_id] = room.copy()
+
+    # Step 63: Record initial phase entry
+    initial_phase = template.get("default_phase", "selecting")
+    if _db_active:
+        try:
+            now = datetime.now()
+            await crud.create_phase_timeline_entry(room_id, initial_phase, now)
+            logger.info(f"[DB] phase_timeline init: room={room_id} phase={initial_phase}")
+        except Exception as e:
+            logger.warning(f"[DB] phase_timeline init 失败: {e}")
+
     return {"room_id": room_id, "room": room, "template_applied": template.get("name")}
 
 
@@ -2810,6 +2841,18 @@ async def transition_phase(room_id: str, to_phase: RoomPhase):
         except Exception as e:
             logger.warning(f"[DB] transition_phase 失败: {e}")
 
+    # Step 63: Record phase timeline exit/entry
+    now = datetime.now()
+    if _db_active:
+        try:
+            # Exit old phase
+            await crud.exit_phase_timeline_entry(room_id, old, now, exited_via=to_phase.value)
+            # Enter new phase
+            await crud.create_phase_timeline_entry(room_id, to_phase.value, now)
+            logger.info(f"[DB] phase_timeline: room={room_id} {old}→{to_phase.value}")
+        except Exception as e:
+            logger.warning(f"[DB] phase_timeline 记录失败: {e}")
+
     # DEBATE 阶段进入时：初始化辩论状态（07-State-Machine-Details.md §2.5）
     if to_phase == RoomPhase.DEBATE:
         debate_state = init_debate_state(room_id)
@@ -2891,6 +2934,58 @@ async def get_phase(room_id: str):
         "current_phase": current.value,
         "allowed_next": get_next_phases(current),
     }
+
+
+# ========================
+# Step 63: Room Phase Timeline API
+# ========================
+@app.get("/rooms/{room_id}/phase-timeline")
+async def get_phase_timeline(room_id: str):
+    """
+    获取房间的阶段时间线（Step 63）
+    返回每个阶段的进入时间、退出时间、持续时长
+    PostgreSQL 优先，内存兜底
+    """
+    timeline = []
+
+    # PostgreSQL 优先读取
+    if _db_active:
+        try:
+            rows = await crud.get_room_phase_timeline(room_id)
+            if rows:
+                timeline = [
+                    {
+                        "entry_id": str(r["entry_id"]),
+                        "room_id": str(r["room_id"]),
+                        "phase": r["phase"],
+                        "entered_at": r["entered_at"].isoformat() if r["entered_at"] else None,
+                        "exited_at": r["exited_at"].isoformat() if r["exited_at"] else None,
+                        "exited_via": r["exited_via"],
+                        "duration_secs": r["duration_secs"],
+                    }
+                    for r in rows
+                ]
+                return {"room_id": room_id, "timeline": timeline}
+        except Exception as e:
+            logger.warning(f"[DB] get_room_phase_timeline failed: {e}")
+
+    # 内存兜底：从消息历史中提取 phase_change 事件
+    if room_id in _messages:
+        phase_entries = {}
+        for msg in _messages.get(room_id, []):
+            if msg.get("type") == "phase_change":
+                from_p = msg.get("from_phase")
+                to_p = msg.get("to_phase")
+                ts = msg.get("timestamp")
+                # 记录进入
+                phase_entries[to_p] = {"phase": to_p, "entered_at": ts, "exited_at": None, "exited_via": None, "duration_secs": None}
+                # 前一个阶段退出
+                if from_p in phase_entries and phase_entries[from_p]["exited_at"] is None:
+                    phase_entries[from_p]["exited_at"] = ts
+                    phase_entries[from_p]["exited_via"] = to_p
+        timeline = list(phase_entries.values())
+
+    return {"room_id": room_id, "timeline": timeline}
 
 
 # ========================
@@ -6850,6 +6945,30 @@ class SubTaskUpdate(BaseModel):
     progress: Optional[float] = Field(default=None, ge=0, le=1)
 
 
+# ── Step 65: Task Time Entry 模型 ────────────────────────────────────────────
+class TimeEntryCreate(BaseModel):
+    """创建时间记录"""
+    user_name: str = Field(default="", max_length=100)
+    hours: float = Field(..., gt=0, le=24)
+    description: str = Field(default="")
+    notes: str = Field(default="")
+    logged_at: Optional[datetime] = None
+
+
+class TimeEntryResponse(BaseModel):
+    """时间记录响应"""
+    time_entry_id: str
+    task_id: str
+    plan_id: str
+    version: str
+    user_name: str
+    hours: float
+    description: str
+    notes: str
+    logged_at: datetime
+    created_at: datetime
+
+
 @app.post("/plans/{plan_id}/versions/{version}/tasks", status_code=201)
 async def create_task(plan_id: str, version: str, data: TaskCreate):
     """
@@ -8511,6 +8630,160 @@ async def delete_sub_task(plan_id: str, version: str, task_id: str, sub_task_id:
         return {"deleted": True}
 
     raise HTTPException(status_code=404, detail="SubTask not found")
+
+
+# ========================
+# Time Entries API (Step 65)
+# ========================
+
+@app.post("/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries", status_code=201)
+async def create_time_entry_endpoint(
+    plan_id: str,
+    version: str,
+    task_id: str,
+    data: TimeEntryCreate,
+):
+    """
+    为任务创建时间记录
+    来源: Step 65 - Task Time Tracking System
+    """
+    # 验证任务存在
+    task = await get_task(plan_id, version, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        entry = await crud.create_time_entry(
+            task_id=task_id,
+            plan_id=plan_id,
+            version=version,
+            user_name=data.user_name,
+            hours=data.hours,
+            description=data.description,
+            notes=data.notes,
+        )
+        # 回填内存 tasks 的 actual_hours
+        key = (plan_id, version)
+        if key in _tasks and task_id in _tasks[key]:
+            total = await crud.get_task_time_summary(task_id)
+            _tasks[key][task_id]["actual_hours"] = total["total_hours"]
+        await log_activity(
+            plan_id=plan_id,
+            action_type="task.time_entry_added",
+            description=f"任务 {task.get('title', task_id[:8])} 添加时间记录 {data.hours}h",
+            performed_by=data.user_name or "system",
+            related_id=task_id,
+            version=version,
+        )
+        return entry
+    except Exception as e:
+        logger.warning(f"[DB] create_time_entry failed: {e}")
+        # Memory fallback
+        entry_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        entry = {
+            "time_entry_id": entry_id,
+            "task_id": task_id,
+            "plan_id": plan_id,
+            "version": version,
+            "user_name": data.user_name,
+            "hours": data.hours,
+            "description": data.description,
+            "notes": data.notes,
+            "logged_at": data.logged_at or now,
+            "created_at": now,
+        }
+        _time_entries[task_id] = _time_entries.get(task_id, {})
+        _time_entries[task_id][entry_id] = entry
+        return entry
+
+
+@app.get("/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries")
+async def list_time_entries_endpoint(plan_id: str, version: str, task_id: str):
+    """
+    获取任务的所有时间记录
+    来源: Step 65 - Task Time Tracking System
+    """
+    task = await get_task(plan_id, version, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # DB 优先
+    try:
+        entries = await crud.list_time_entries(task_id)
+        # 回填内存
+        _time_entries[task_id] = {str(e["time_entry_id"]): e for e in entries}
+        return entries
+    except Exception as e:
+        logger.warning(f"[DB] list_time_entries failed: {e}")
+
+    # Memory fallback
+    return list(_time_entries.get(task_id, {}).values())
+
+
+@app.get("/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-summary")
+async def get_time_summary_endpoint(plan_id: str, version: str, task_id: str):
+    """
+    获取任务的时间汇总
+    来源: Step 65 - Task Time Tracking System
+    """
+    task = await get_task(plan_id, version, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        return await crud.get_task_time_summary(task_id)
+    except Exception as e:
+        logger.warning(f"[DB] get_task_time_summary failed: {e}")
+        # Memory fallback
+        entries = list(_time_entries.get(task_id, {}).values())
+        total = sum(e.get("hours", 0) for e in entries)
+        return {"total_hours": total, "entry_count": len(entries), "contributor_count": len(set(e.get("user_name", "") for e in entries))}
+
+
+@app.delete("/time-entries/{entry_id}")
+async def delete_time_entry_endpoint(entry_id: str):
+    """
+    删除时间记录
+    来源: Step 65 - Task Time Tracking System
+    """
+    try:
+        entry = await crud.get_time_entry(entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Time entry not found")
+        task_id = str(entry["task_id"])
+        plan_id = str(entry["plan_id"])
+        version = str(entry["version"])
+        ok = await crud.delete_time_entry(entry_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Time entry not found")
+        # 回填内存 tasks 的 actual_hours
+        key = (plan_id, version)
+        if key in _tasks and task_id in _tasks[key]:
+            total = await crud.get_task_time_summary(task_id)
+            _tasks[key][task_id]["actual_hours"] = total["total_hours"]
+        # 清理内存记录
+        if task_id in _time_entries and entry_id in _time_entries[task_id]:
+            del _time_entries[task_id][entry_id]
+        await log_activity(
+            plan_id=plan_id,
+            action_type="task.time_entry_deleted",
+            description=f"删除了时间记录 {entry_id[:8]}",
+            performed_by="system",
+            related_id=task_id,
+            version=version,
+        )
+        return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[DB] delete_time_entry failed: {e}")
+        # Memory fallback
+        for tid, entries in _time_entries.items():
+            if entry_id in entries:
+                del entries[entry_id]
+                return {"deleted": True}
+        raise HTTPException(status_code=404, detail="Time entry not found")
 
 
 # ========================

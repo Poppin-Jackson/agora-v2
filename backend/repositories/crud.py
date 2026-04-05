@@ -2181,3 +2181,153 @@ async def delete_room_template(template_id: str) -> bool:
         )
         return result == "DELETE 1"
 
+
+# Step 63: Room Phase Timeline CRUD
+async def create_phase_timeline_entry(room_id: str, phase: str, entered_at: datetime) -> dict:
+    """创建阶段进入记录"""
+    entry_id = str(uuid.uuid4())
+    async with get_connection() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO room_phase_timeline (entry_id, room_id, phase, entered_at)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+        """, entry_id, uuid.UUID(room_id) if isinstance(room_id, str) else room_id, phase, entered_at)
+        return dict(row) if row else None
+
+async def exit_phase_timeline_entry(room_id: str, phase: str, exited_at: datetime, exited_via: str = None) -> dict:
+    """退出阶段：更新最后一条未退出的指定阶段记录"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow("""
+            UPDATE room_phase_timeline
+            SET exited_at = $1, exited_via = $2,
+                duration_secs = EXTRACT(EPOCH FROM ($1 - entered_at))::INTEGER
+            WHERE entry_id = (
+                SELECT entry_id FROM room_phase_timeline
+                WHERE room_id = $3 AND phase = $4 AND exited_at IS NULL
+                ORDER BY entered_at DESC LIMIT 1
+            )
+            RETURNING *
+        """, exited_at, exited_via,
+            uuid.UUID(room_id) if isinstance(room_id, str) else room_id,
+            phase)
+        return dict(row) if row else None
+
+async def get_room_phase_timeline(room_id: str) -> list:
+    """获取房间的所有阶段时间线记录"""
+    async with get_connection() as conn:
+        rows = await conn.fetch("""
+            SELECT * FROM room_phase_timeline
+            WHERE room_id = $1
+            ORDER BY entered_at ASC
+        """, uuid.UUID(room_id) if isinstance(room_id, str) else room_id)
+        return [dict(row) for row in rows]
+
+
+# ── Step 65: Task Time Entries ───────────────────────────────────────────────
+
+async def create_time_entry(
+    task_id: str,
+    plan_id: str,
+    version: str,
+    user_name: str,
+    hours: float,
+    description: str = "",
+    notes: str = "",
+) -> dict:
+    """创建时间记录并累加到任务的 actual_hours"""
+    from ..db import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 插入时间记录
+            row = await conn.fetchrow("""
+                INSERT INTO task_time_entries
+                    (task_id, plan_id, version, user_name, hours, description, notes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING *
+            """,
+                uuid.UUID(task_id),
+                uuid.UUID(plan_id),
+                version,
+                user_name,
+                hours,
+                description,
+                notes,
+            )
+            entry = dict(row)
+
+            # 重新计算该任务的 actual_hours（所有时间记录的 sum）
+            total = await conn.fetchval("""
+                SELECT COALESCE(SUM(hours), 0) FROM task_time_entries
+                WHERE task_id = $1
+            """, uuid.UUID(task_id))
+
+            # 更新 tasks 表
+            await conn.execute("""
+                UPDATE tasks SET actual_hours = $1 WHERE task_id = $2
+            """, float(total), uuid.UUID(task_id))
+
+    return entry
+
+
+async def list_time_entries(task_id: str) -> list:
+    """列出任务的所有时间记录"""
+    async with get_connection() as conn:
+        rows = await conn.fetch("""
+            SELECT * FROM task_time_entries
+            WHERE task_id = $1
+            ORDER BY logged_at DESC
+        """, uuid.UUID(task_id) if isinstance(task_id, str) else task_id)
+        return [dict(row) for row in rows]
+
+
+async def get_time_entry(entry_id: str) -> Optional[dict]:
+    """获取单个时间记录"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM task_time_entries WHERE time_entry_id = $1
+        """, uuid.UUID(entry_id) if isinstance(entry_id, str) else entry_id)
+        return dict(row) if row else None
+
+
+async def delete_time_entry(entry_id: str) -> bool:
+    """删除时间记录并重新计算任务的 actual_hours"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # 获取关联的 task_id
+        row = await conn.fetchrow("""
+            SELECT task_id FROM task_time_entries WHERE time_entry_id = $1
+        """, uuid.UUID(entry_id) if isinstance(entry_id, str) else entry_id)
+        if not row:
+            return False
+        task_id = row["task_id"]
+
+        async with conn.transaction():
+            await conn.execute("""
+                DELETE FROM task_time_entries WHERE time_entry_id = $1
+            """, uuid.UUID(entry_id) if isinstance(entry_id, str) else entry_id)
+
+            # 重新计算该任务的 actual_hours
+            total = await conn.fetchval("""
+                SELECT COALESCE(SUM(hours), 0) FROM task_time_entries
+                WHERE task_id = $1
+            """, task_id)
+            await conn.execute("""
+                UPDATE tasks SET actual_hours = $1 WHERE task_id = $2
+            """, float(total), task_id)
+
+    return True
+
+
+async def get_task_time_summary(task_id: str) -> dict:
+    """获取任务的时间汇总（总工时 + 条目数）"""
+    async with get_connection() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COALESCE(SUM(hours), 0)    AS total_hours,
+                COUNT(*)                   AS entry_count,
+                COUNT(DISTINCT user_name)  AS contributor_count
+            FROM task_time_entries
+            WHERE task_id = $1
+        """, uuid.UUID(task_id) if isinstance(task_id, str) else task_id)
+        return dict(row) if row else {"total_hours": 0, "entry_count": 0, "contributor_count": 0}

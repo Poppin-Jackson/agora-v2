@@ -41,6 +41,9 @@ export const transitionPhase = (roomId: string, toPhase: string) =>
 export const addSpeech = (roomId: string, data: { agent_id: string; content: string }) =>
   api.post(`/rooms/${roomId}/speech`, data)
 
+export const getRoomPhaseTimeline = (roomId: string) =>
+  api.get(`/rooms/${roomId}/phase-timeline`)
+
 // Approval
 export const startApproval = (planId: string, data: { initiator_id: string; initiator_name: string; skip_levels?: number[] }) =>
   api.post(`/plans/${planId}/approval/start`, data)
@@ -515,3 +518,20 @@ export const deleteRoomTemplate = (templateId: string) =>
 
 export const createRoomFromTemplate = (planId: string, templateId: string, data?: { topic?: string; version?: string }) =>
   api.post(`/plans/${planId}/rooms/from-template/${templateId}`, data)
+
+// Step 65: Task Time Tracking API
+export const createTimeEntry = (planId: string, version: string, taskId: string, data: {
+  user_name?: string;
+  hours: number;
+  description?: string;
+  notes?: string;
+}) => api.post(`/plans/${planId}/versions/${version}/tasks/${taskId}/time-entries`, data)
+
+export const listTimeEntries = (planId: string, version: string, taskId: string) =>
+  api.get(`/plans/${planId}/versions/${version}/tasks/${taskId}/time-entries`)
+
+export const getTimeSummary = (planId: string, version: string, taskId: string) =>
+  api.get(`/plans/${planId}/versions/${version}/tasks/${taskId}/time-summary`)
+
+export const deleteTimeEntry = (entryId: string) =>
+  api.delete(`/time-entries/${entryId}`)

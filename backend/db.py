@@ -638,6 +638,56 @@ async def _create_tables(pool: Pool):
                 logger.info("[DB] Step 57 表迁移完成: room_templates table")
         except Exception as e:
             logger.warning(f"[DB] Step 57 表迁移跳过（可能已存在）: {e}")
+
+        # Step 63: Room Phase Timeline（阶段时间线）
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS room_phase_timeline (
+                        entry_id     UUID PRIMARY KEY,
+                        room_id      UUID REFERENCES rooms(room_id) ON DELETE CASCADE,
+                        phase        TEXT NOT NULL,
+                        entered_at    TIMESTAMPTZ NOT NULL,
+                        exited_at     TIMESTAMPTZ,
+                        exited_via    TEXT,
+                        duration_secs INTEGER
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_phase_timeline_room ON room_phase_timeline(room_id);
+                    CREATE INDEX IF NOT EXISTS idx_phase_timeline_entered ON room_phase_timeline(entered_at);
+                """)
+                logger.info("[DB] Step 63 表迁移完成: room_phase_timeline table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 63 表迁移跳过（可能已存在）: {e}")
+
+        # ── Step 65: task_time_entries 表 ─────────────────────────────────────────
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS task_time_entries (
+                        time_entry_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        task_id        UUID NOT NULL,
+                        plan_id        UUID NOT NULL,
+                        version        TEXT NOT NULL,
+                        user_name      TEXT NOT NULL DEFAULT '',
+                        hours          DECIMAL(10,2) NOT NULL DEFAULT 0,
+                        description    TEXT NOT NULL DEFAULT '',
+                        notes          TEXT NOT NULL DEFAULT '',
+                        logged_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_time_entries_task
+                        ON task_time_entries(task_id);
+                    CREATE INDEX IF NOT EXISTS idx_time_entries_plan_version
+                        ON task_time_entries(plan_id, version);
+                """)
+                logger.info("[DB] Step 65 表迁移完成: task_time_entries table")
+        except Exception as e:
+            logger.warning(f"[DB] Step 65 表迁移跳过（可能已存在）: {e}")
+
     except Exception as e:
         logger.warning(f"[DB] 列迁移跳过（可能已存在）: {e}")
 

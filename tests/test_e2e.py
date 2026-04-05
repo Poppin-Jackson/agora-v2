@@ -332,6 +332,75 @@ class TestPhaseTransitions:
         assert body["detail"]["error"] == "invalid_transition"
 
 
+class TestPhaseTimeline:
+    """Step 63: Room Phase Timeline API"""
+
+    def test_phase_timeline_after_room_creation(self, room_info):
+        """房间创建后，SELECTING阶段已记录到时间线"""
+        room_id = room_info["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert len(data["timeline"]) >= 1
+        # 初始阶段应该是 SELECTING
+        first = data["timeline"][0]
+        assert first["phase"] == "selecting"
+        assert first["entered_at"] is not None
+        # 仍在进行中（未退出）
+        assert first["exited_at"] is None
+
+    def test_phase_timeline_records_transitions(self, room_info):
+        """阶段转换时，时间线正确记录退出和进入"""
+        room_id = room_info["room_id"]
+
+        # 初始：SELECTING 在时间线中
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        timeline = resp.json()["timeline"]
+        assert timeline[0]["phase"] == "selecting"
+        assert timeline[0]["exited_at"] is None
+
+        # 转换到 THINKING
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline = resp.json()["timeline"]
+
+        # SELECTING 已退出
+        selecting_entry = next(e for e in timeline if e["phase"] == "selecting")
+        assert selecting_entry["exited_at"] is not None
+        assert selecting_entry["exited_via"] == "thinking"
+        assert selecting_entry["duration_secs"] is not None
+        assert selecting_entry["duration_secs"] >= 0
+
+        # THINKING 已进入
+        thinking_entry = next(e for e in timeline if e["phase"] == "thinking")
+        assert thinking_entry["entered_at"] is not None
+        assert thinking_entry["exited_at"] is None  # 仍在进行中
+
+    def test_phase_timeline_full_transition_chain(self, room_info):
+        """完整转换链：SELECTING→THINKING→SHARING，时间线有3条记录"""
+        room_id = room_info["room_id"]
+
+        # SELECTING → THINKING
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+        # THINKING → SHARING
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "sharing"}, timeout=TIMEOUT)
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline = resp.json()["timeline"]
+
+        # 至少3条记录：SELECTING, THINKING, SHARING
+        phases = [e["phase"] for e in timeline]
+        assert "selecting" in phases
+        assert "thinking" in phases
+        assert "sharing" in phases
+
+        # SHARING 仍在进行中
+        sharing_entry = next(e for e in timeline if e["phase"] == "sharing")
+        assert sharing_entry["exited_at"] is None
+
+
 class TestSpeech:
     """发言功能"""
 

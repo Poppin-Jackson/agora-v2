@@ -62,6 +62,7 @@ import api, {
   getUnreadNotificationCount,
   deleteNotification,
   getDebateState,
+  getRoomPhaseTimeline,
   createDebatePoint,
   submitDebatePosition,
   submitDebateExchange,
@@ -88,6 +89,10 @@ import api, {
   createTaskComment,
   listTaskCheckpoints,
   createTaskCheckpoint,
+  createTimeEntry,
+  listTimeEntries,
+  getTimeSummary,
+  deleteTimeEntry,
   exportPlanMarkdown,
   exportVersionMarkdown,
   listRoomTemplates,
@@ -277,6 +282,7 @@ const messageSearchActive = ref(false)
 const tasks = ref<any[]>([])
 const taskMetrics = ref<any>(null)
 const showAddTask = ref(false)
+const showGanttView = ref(false)
 const newTask = reactive<{ title: string; description: string; priority: 'low' | 'medium' | 'high' | 'critical'; assigned_to: string }>({ title: '', description: '', priority: 'medium', assigned_to: '' })
 const activeTaskTab = ref<'list' | 'add'>('list')
 
@@ -291,10 +297,14 @@ const showTaskDetail = ref(false)
 const selectedTaskForDetail = ref<any>(null)
 const taskDetailComments = ref<any[]>([])
 const taskDetailCheckpoints = ref<any[]>([])
-const taskDetailActiveTab = ref<'comments' | 'checkpoints'>('comments')
+const taskDetailActiveTab = ref<'comments' | 'checkpoints' | 'timetracking'>('comments')
 const newCommentForm = reactive({ author_name: '', content: '' })
 const newCheckpointForm = reactive({ name: '', status: 'pending' })
 const taskDetailLoading = ref(false)
+const taskTimeEntries = ref<any[]>([])
+const taskTimeSummary = ref<any>(null)
+const newTimeEntryForm = reactive({ user_name: '', hours: '', description: '' })
+const taskTimeLoading = ref(false)
 
 // ─── Debate State ───────────────────────────────────────
 const debateState = ref<any>(null)
@@ -310,6 +320,13 @@ const newExchange = reactive({
 })
 const exchangeLoading = ref(false)
 const roundAdvancing = ref(false)
+// ─── Phase Timeline (Step 63) ───────────────────────────
+const phaseTimeline = ref<any[]>([])
+
+// ─── Room Activity Stream (Step 64) ────────────────────
+const roomActivityStream = ref<any[]>([])
+const showActivityStream = ref(false)
+
 const wsStatus = ref<'connecting' | 'connected' | 'disconnected'>('disconnected')
 
 // ─── Escalation State ─────────────────────────────────────
@@ -586,6 +603,156 @@ const filteredActivities = computed(() => {
   )
 })
 
+// ─── Gantt Chart Computed ─────────────────────────────
+const ganttTodayStr = computed(() => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+})
+
+const ganttDateRange = computed(() => {
+  const tasks = planTasks.value
+  if (!tasks || tasks.length === 0) return []
+  const today = new Date()
+  today.setHours(0,0,0,0)
+  let earliest: Date | null = null
+  let latest: Date | null = null
+  for (const t of tasks) {
+    if (t.started_at) {
+      const s = new Date(t.started_at)
+      s.setHours(0,0,0,0)
+      if (!earliest || s < earliest) earliest = s
+      if (!latest || s > latest) latest = s
+    }
+    if (t.deadline) {
+      const dl = new Date(t.deadline)
+      dl.setHours(0,0,0,0)
+      if (!earliest || dl < earliest) earliest = dl
+      if (!latest || dl > latest) latest = dl
+    }
+  }
+  if (!earliest) earliest = today
+  if (!latest) latest = new Date(today.getTime() + 30*86400000)
+  // Ensure at least 7 days visible
+  const span = latest.getTime() - earliest.getTime()
+  if (span < 7*86400000) {
+    latest = new Date(earliest.getTime() + 7*86400000)
+  }
+  const days: string[] = []
+  const cur = new Date(earliest)
+  while (cur <= latest) {
+    days.push(`${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`)
+    cur.setDate(cur.getDate() + 1)
+  }
+  return days
+})
+
+const ganttTodayOffset = computed(() => {
+  const days = ganttDateRange.value
+  if (!days.length) return -1
+  const today = ganttTodayStr.value
+  const idx = days.indexOf(today)
+  return idx >= 0 ? (idx / (days.length - 1)) * 100 : -1
+})
+
+const ganttTasks = computed(() => {
+  const tasks = planTasks.value
+  const days = ganttDateRange.value
+  if (!tasks || !days.length) return []
+  const earliest = new Date(days[0])
+  const totalMs = new Date(days[days.length-1]).getTime() - earliest.getTime()
+  const taskIdxMap: Record<string, number> = {}
+  tasks.forEach((t, i) => { taskIdxMap[t.task_id] = i })
+
+  return tasks.map(task => {
+    let startDate: Date | null = null
+    let endDate: Date | null = null
+    if (task.started_at) {
+      startDate = new Date(task.started_at)
+      startDate.setHours(0,0,0,0)
+    }
+    if (task.deadline) {
+      endDate = new Date(task.deadline)
+      endDate.setHours(0,0,0,0)
+    }
+    // If no start but has end and estimated_hours, back-calculate start
+    if (!startDate && endDate && task.estimated_hours) {
+      // assume 8h/day
+      const daysBack = Math.ceil(task.estimated_hours / 8)
+      startDate = new Date(endDate.getTime() - daysBack * 86400000)
+    }
+    // Default: if no dates, use today for start, +7 days for end
+    if (!startDate) {
+      startDate = new Date()
+      startDate.setHours(0,0,0,0)
+    }
+    if (!endDate) {
+      endDate = new Date(startDate.getTime() + (task.estimated_hours ? (task.estimated_hours/8) * 86400000 : 7*86400000))
+    }
+
+    const startMs = Math.max(startDate.getTime(), earliest.getTime())
+    const endMs = endDate.getTime()
+    const left = totalMs > 0 ? ((startMs - earliest.getTime()) / totalMs) * 100 : 0
+    const width = totalMs > 0 ? Math.max(((endMs - startMs) / totalMs) * 100, 2) : 2
+
+    // Dependency arrows
+    const depArrows: {x1: number, x2: number, targetIdx: number, depId: string}[] = []
+    const deps = task.dependencies || []
+    const depList = Array.isArray(deps) ? deps : (deps ? [deps] : [])
+    for (const depId of depList) {
+      const depIdx = taskIdxMap[depId as string]
+      if (depIdx !== undefined) {
+        const depTask = tasks[depIdx]
+        let depEndDate: Date | null = null
+        if (depTask.deadline) {
+          depEndDate = new Date(depTask.deadline)
+          depEndDate.setHours(0,0,0,0)
+        } else if (depTask.started_at) {
+          const ds = new Date(depTask.started_at)
+          ds.setHours(0,0,0,0)
+          depEndDate = new Date(ds.getTime() + (depTask.estimated_hours ? (depTask.estimated_hours/8)*86400000 : 7*86400000))
+        }
+        if (depEndDate) {
+          const depEndMs = Math.min(depEndDate.getTime(), earliest.getTime() + totalMs)
+          const x1 = totalMs > 0 ? ((depEndMs - earliest.getTime()) / totalMs) * 100 : 0
+          const x2 = left
+          depArrows.push({ x1, x2, targetIdx: depIdx, depId: depId as string })
+        }
+      }
+    }
+
+    return { ...task, barLeft: left, barWidth: width, depArrows }
+  })
+})
+
+const tasksWithId = computed(() => {
+  const m: Record<string, any> = {}
+  for (const t of planTasks.value) {
+    m[t.task_id] = t
+  }
+  return m
+})
+
+const ganttAllArrows = computed(() => {
+  const arrows: {x1: number, y1: number, x2: number, y2: number}[] = []
+  const ROW_H = 48
+  const LABEL_W = 200 // px, approximate label column width in the SVG coordinate system (not used for x calcs)
+  for (let i = 0; i < ganttTasks.value.length; i++) {
+    const task = ganttTasks.value[i]
+    for (const arrow of task.depArrows) {
+      const targetIdx = arrow.targetIdx
+      // x positions as percentages of timeline width
+      const x1 = arrow.x1
+      const x2 = arrow.x2
+      // y positions: source task row (end of bar) to target task row (start of bar)
+      // We add ROW_H/2 to center on the row
+      const y1 = targetIdx * ROW_H + ROW_H / 2
+      const y2 = i * ROW_H + ROW_H / 2
+      arrows.push({ x1, y1, x2, y2 })
+    }
+  }
+  return arrows
+})
+
 // ─── Home/Dashboard Actions ─────────────────────────────
 async function loadPlans() {
   try {
@@ -751,6 +918,28 @@ function closeVersionCompare() {
   showVersionCompare.value = false
   compareDataA.value = null
   compareDataB.value = null
+}
+
+// ─── Phase Timeline Helpers (Step 63) ───────────────────────
+function formatTime(isoString: string | null | undefined): string {
+  if (!isoString) return '-'
+  try {
+    const d = new Date(isoString)
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  } catch {
+    return '-'
+  }
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '-'
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`
+  const h = Math.floor(m / 60)
+  const rem = m % 60
+  return rem > 0 ? `${h}h ${rem}m` : `${h}h`
 }
 
 async function loadPlanDecisions() {
@@ -1748,20 +1937,28 @@ async function openTaskDetail(task: any) {
   showTaskDetail.value = true
   taskDetailActiveTab.value = 'comments'
   taskDetailLoading.value = true
+  taskTimeLoading.value = true
   try {
     const version = planDetailActiveVersion.value || currentPlan.value.current_version
-    const [commentsRes, checkpointsRes] = await Promise.all([
+    const [commentsRes, checkpointsRes, timeEntriesRes, timeSummaryRes] = await Promise.all([
       listTaskComments(currentPlan.value.plan_id, version, task.task_id),
       listTaskCheckpoints(currentPlan.value.plan_id, version, task.task_id),
+      listTimeEntries(currentPlan.value.plan_id, version, task.task_id),
+      getTimeSummary(currentPlan.value.plan_id, version, task.task_id),
     ])
     taskDetailComments.value = commentsRes.data?.comments || commentsRes.data || []
     taskDetailCheckpoints.value = checkpointsRes.data?.checkpoints || checkpointsRes.data || []
+    taskTimeEntries.value = timeEntriesRes.data || []
+    taskTimeSummary.value = timeSummaryRes.data || null
   } catch (e) {
     console.error('load task detail failed', e)
     taskDetailComments.value = []
     taskDetailCheckpoints.value = []
+    taskTimeEntries.value = []
+    taskTimeSummary.value = null
   } finally {
     taskDetailLoading.value = false
+    taskTimeLoading.value = false
   }
 }
 
@@ -1800,6 +1997,55 @@ async function handleCreateCheckpoint() {
   }
 }
 
+async function handleCreateTimeEntry() {
+  if (!currentPlan.value || !selectedTaskForDetail.value || !newTimeEntryForm.hours) return
+  const hours = parseFloat(newTimeEntryForm.hours)
+  if (isNaN(hours) || hours <= 0) return
+  const version = planDetailActiveVersion.value || currentPlan.value.current_version
+  try {
+    await createTimeEntry(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id, {
+      user_name: newTimeEntryForm.user_name || 'Guest',
+      hours,
+      description: newTimeEntryForm.description,
+    })
+    newTimeEntryForm.user_name = ''
+    newTimeEntryForm.hours = ''
+    newTimeEntryForm.description = ''
+    // reload time entries and summary
+    const [entriesRes, summaryRes] = await Promise.all([
+      listTimeEntries(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id),
+      getTimeSummary(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id),
+    ])
+    taskTimeEntries.value = entriesRes.data || []
+    taskTimeSummary.value = summaryRes.data || null
+    // Also update the task's actual_hours in the task list
+    if (selectedTaskForDetail.value) {
+      selectedTaskForDetail.value.actual_hours = taskTimeSummary.value?.total_hours || 0
+    }
+  } catch (e) {
+    console.error('create time entry failed', e)
+  }
+}
+
+async function handleDeleteTimeEntry(entryId: string) {
+  if (!currentPlan.value || !selectedTaskForDetail.value) return
+  const version = planDetailActiveVersion.value || currentPlan.value.current_version
+  try {
+    await deleteTimeEntry(entryId)
+    const [entriesRes, summaryRes] = await Promise.all([
+      listTimeEntries(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id),
+      getTimeSummary(currentPlan.value.plan_id, version, selectedTaskForDetail.value.task_id),
+    ])
+    taskTimeEntries.value = entriesRes.data || []
+    taskTimeSummary.value = summaryRes.data || null
+    if (selectedTaskForDetail.value) {
+      selectedTaskForDetail.value.actual_hours = taskTimeSummary.value?.total_hours || 0
+    }
+  } catch (e) {
+    console.error('delete time entry failed', e)
+  }
+}
+
 async function enterRoom(roomId: string) {
   try {
     const [roomRes, phaseRes] = await Promise.all([
@@ -1810,6 +2056,8 @@ async function enterRoom(roomId: string) {
     currentPhase.value = phaseRes.data
     participants.value = roomRes.data.participants || []
     messages.value = []
+    // Step 64: Initialize activity stream when entering room
+    roomActivityStream.value = []
 
     // Load existing context/history
     try {
@@ -1843,6 +2091,14 @@ async function enterRoom(roomId: string) {
       debateState.value = ds.data
     } catch {
       debateState.value = null
+    }
+
+    // Step 63: Load phase timeline
+    try {
+      const tl = await getRoomPhaseTimeline(roomId)
+      phaseTimeline.value = tl.data?.timeline || []
+    } catch {
+      phaseTimeline.value = []
     }
 
     // Load problem state if room is in a problem phase
@@ -1900,6 +2156,8 @@ function leaveRoom() {
   tasks.value = []
   taskMetrics.value = null
   debateState.value = null
+  phaseTimeline.value = []
+  roomActivityStream.value = []
   hierarchicalReviewData.value = null
   showAddDebatePoint.value = false
   wsStatus.value = 'disconnected'
@@ -1933,14 +2191,52 @@ function connectWs(roomId: string) {
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data)
+    const now = new Date().toISOString()
     if (msg.type === 'phase_change') {
       if (currentPhase.value) currentPhase.value.current_phase = msg.to_phase
+      // Step 64: Push phase change to activity stream
+      roomActivityStream.value.unshift({
+        id: 'stream-' + Date.now(),
+        event_type: 'phase_change',
+        icon: '🔄',
+        actor: msg.actor_name || msg.actor_id || 'System',
+        detail: `${phaseLabel[msg.from_phase] || msg.from_phase} → ${phaseLabel[msg.to_phase] || msg.to_phase}`,
+        timestamp: now,
+      })
     } else if (msg.type === 'speech') {
       messages.value.push(msg)
+      // Step 64: Push speech to activity stream (throttle: only first message per sender in a batch)
+      roomActivityStream.value.unshift({
+        id: 'stream-' + Date.now(),
+        event_type: 'speech',
+        icon: '💬',
+        actor: msg.agent_id || 'Unknown',
+        detail: (msg.content || '').substring(0, 60) + ((msg.content || '').length > 60 ? '...' : ''),
+        timestamp: now,
+      })
     } else if (msg.type === 'participant_joined') {
       if (!participants.value.find(p => p.participant_id === msg.participant?.participant_id)) {
         participants.value.push(msg.participant)
       }
+      // Step 64: Push participant join to activity stream
+      roomActivityStream.value.unshift({
+        id: 'stream-' + Date.now(),
+        event_type: 'participant_joined',
+        icon: '👤',
+        actor: msg.participant?.name || msg.participant?.agent_id || 'Unknown',
+        detail: `以 L${msg.participant?.level || '?'} ${msg.participant?.role || 'Member'} 身份加入`,
+        timestamp: now,
+      })
+    } else if (msg.type === 'participant_left') {
+      // Step 64: Push participant leave to activity stream
+      roomActivityStream.value.unshift({
+        id: 'stream-' + Date.now(),
+        event_type: 'participant_left',
+        icon: '👋',
+        actor: msg.agent_id || 'Unknown',
+        detail: '离开了讨论室',
+        timestamp: now,
+      })
     }
   }
 
@@ -3081,6 +3377,9 @@ onUnmounted(() => {
           <button class="btn-secondary" @click="openTaskDependencies">
             🔗 依赖关系
           </button>
+          <button class="btn-secondary" @click="showGanttView = !showGanttView">
+            {{ showGanttView ? '📋 列表视图' : '📊 甘特图' }}
+          </button>
         </div>
 
         <!-- Add Task Form -->
@@ -3118,6 +3417,102 @@ onUnmounted(() => {
         <div v-if="planMetrics" class="tasks-metrics">
           <span>✅ 已完成 {{ planMetrics.completed_tasks || 0 }} / {{ planMetrics.total_tasks || planTasks.length || 0 }}</span>
           <span class="metric-rate">完成率 {{ planMetrics.completion_rate || 0 }}%</span>
+        </div>
+
+        <!-- Gantt Chart View -->
+        <div v-if="showGanttView && planTasks.length > 0" class="gantt-wrapper">
+          <div class="gantt-chart">
+            <!-- Timeline header -->
+            <div class="gantt-row gantt-header-row">
+              <div class="gantt-label-col">任务</div>
+              <div class="gantt-timeline-outer">
+                <div class="gantt-timeline-header">
+                  <span
+                    v-for="day in ganttDateRange"
+                    :key="day"
+                    class="gantt-day-label"
+                    :class="{'gantt-today': day === ganttTodayStr}"
+                    :style="{ left: (ganttDateRange.indexOf(day) / (ganttDateRange.length - 1)) * 100 + '%' }"
+                  >{{ day.substring(5) }}</span>
+                </div>
+              </div>
+            </div>
+            <!-- Task rows -->
+            <div class="gantt-rows-area">
+              <div v-for="(task, idx) in ganttTasks" :key="task.task_id" class="gantt-row gantt-data-row">
+                <div class="gantt-label-col">
+                  <div class="gantt-task-name" :title="task.title">{{ task.title }}</div>
+                  <div class="gantt-task-meta">
+                    <span class="gantt-priority-dot" :class="'gp-' + task.priority">{{ task.priority === 'critical' ? '🔴' : task.priority === 'high' ? '🟠' : task.priority === 'medium' ? '🟡' : '🟢' }}</span>
+                    <span class="gantt-status-chip" :class="'gs-' + task.status">{{ task.status === 'completed' ? '✅' : task.status === 'in_progress' ? '🔄' : '⏳' }}</span>
+                    <span v-if="(task.dependencies || []).length > 0" class="gantt-dep-badge" title="依赖任务">🔗{{ (task.dependencies || []).length }}</span>
+                  </div>
+                </div>
+                <div class="gantt-timeline-outer">
+                  <!-- Grid lines -->
+                  <div class="gantt-grid-lines">
+                    <div
+                      v-for="(day, di) in ganttDateRange"
+                      :key="di"
+                      class="gantt-grid-line"
+                      :class="{'gantt-today-col': day === ganttTodayStr}"
+                    ></div>
+                  </div>
+                  <!-- Today indicator -->
+                  <div v-if="ganttTodayOffset >= 0" class="gantt-today-vline" :style="{ left: ganttTodayOffset + '%' }"></div>
+                  <!-- Task bar -->
+                  <div
+                    v-if="task.barLeft !== null"
+                    class="gantt-bar"
+                    :class="'gantt-bar-' + task.status"
+                    :style="{ left: task.barLeft + '%', width: Math.max(task.barWidth, 2) + '%' }"
+                    :title="task.title + ' | 进度: ' + task.progress + '%' + (task.deadline ? ' | 截止: ' + task.deadline : '')"
+                    @click="openTaskDetail(task)"
+                  >
+                    <div
+                      class="gantt-bar-fill"
+                      :class="'gbf-' + task.status"
+                      :style="{ width: task.progress + '%' }"
+                    ></div>
+                    <span v-if="task.barWidth > 6" class="gantt-bar-label">{{ task.progress }}%</span>
+                  </div>
+                  <!-- Dependency connector dot -->
+                  <div
+                    v-for="(arrow, ai) in task.depArrows"
+                    :key="'dep-' + ai"
+                    class="gantt-dep-connector"
+                    :style="{ left: arrow.x1 + '%', top: '50%' }"
+                    :title="'依赖: ' + (tasksWithId[arrow.depId]?.title || arrow.depId)"
+                  ></div>
+                </div>
+              </div>
+              <!-- SVG overlay for dependency arrows -->
+              <svg class="gantt-svg-overlay" :style="{ width: '100%', height: (ganttTasks.length * 48) + 'px' }">
+                <defs>
+                  <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <polygon points="0 0, 6 3, 0 6" fill="#60a5fa"/>
+                  </marker>
+                </defs>
+                <line
+                  v-for="(arrow, ai) in ganttAllArrows"
+                  :key="'arr-' + ai"
+                  :x1="arrow.x1 + '%'"
+                  :y1="arrow.y1 + 'px'"
+                  :x2="arrow.x2 + '%'"
+                  :y2="arrow.y2 + 'px'"
+                  stroke="#60a5fa"
+                  stroke-width="1.5"
+                  stroke-dasharray="4,2"
+                  marker-end="url(#gantt-arrow)"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="showGanttView && planTasks.length === 0" class="gantt-empty">
+          <div class="empty-icon">📊</div>
+          <div class="empty-text">暂无任务</div>
+          <div class="empty-sub">添加任务后即可在甘特图中查看时间线</div>
         </div>
 
         <!-- Task List -->
@@ -5294,6 +5689,89 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <!-- Step 63: Phase Timeline -->
+          <div v-if="phaseTimeline.length > 0" class="sidebar-section phase-timeline-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">⏱ 阶段时间线</div>
+              <span class="phase-timeline-count">{{ phaseTimeline.length }} 个阶段</span>
+            </div>
+            <div class="phase-timeline-list">
+              <div
+                v-for="(entry, idx) in phaseTimeline"
+                :key="entry.entry_id || idx"
+                class="timeline-entry"
+                :class="{
+                  'timeline-current': idx === phaseTimeline.length - 1 && !entry.exited_at,
+                  'timeline-completed': entry.exited_at,
+                }"
+              >
+                <div class="timeline-phase-dot"></div>
+                <div class="timeline-content">
+                  <div class="timeline-phase-name">
+                    {{ phaseLabel[entry.phase] || entry.phase }}
+                  </div>
+                  <div class="timeline-time">
+                    <span class="timeline-enter">进 {{ formatTime(entry.entered_at) }}</span>
+                    <span v-if="entry.exited_at" class="timeline-exit">
+                      出 {{ formatTime(entry.exited_at) }}
+                    </span>
+                    <span v-else class="timeline-running">进行中</span>
+                  </div>
+                  <div v-if="entry.duration_secs !== null" class="timeline-duration">
+                    ⏱ {{ formatDuration(entry.duration_secs) }}
+                  </div>
+                  <div v-if="entry.exited_via" class="timeline-via">
+                    → {{ phaseLabel[entry.exited_via] || entry.exited_via }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 64: Room Activity Stream -->
+          <div class="sidebar-section activity-stream-section">
+            <div class="sidebar-title-row">
+              <div class="sidebar-title">📋 活动流 ({{ roomActivityStream.length }})</div>
+              <button
+                class="btn-add-participant"
+                :style="{ fontSize: '0.7rem', padding: '2px 8px' }"
+                @click="showActivityStream = !showActivityStream"
+              >
+                {{ showActivityStream ? '收起' : '展开' }}
+              </button>
+            </div>
+            <div v-if="showActivityStream" class="activity-stream-list">
+              <div v-if="roomActivityStream.length === 0" class="sidebar-empty">暂无活动记录</div>
+              <div
+                v-for="evt in roomActivityStream"
+                :key="evt.id"
+                class="stream-entry"
+                :class="'stream-' + evt.event_type"
+              >
+                <span class="stream-icon">{{ evt.icon }}</span>
+                <div class="stream-body">
+                  <div class="stream-actor">{{ evt.actor }}</div>
+                  <div class="stream-detail">{{ evt.detail }}</div>
+                  <div class="stream-time">{{ new Date(evt.timestamp).toLocaleTimeString() }}</div>
+                </div>
+              </div>
+            </div>
+            <!-- Compact preview when collapsed -->
+            <div v-else class="activity-stream-preview">
+              <div
+                v-for="evt in roomActivityStream.slice(0, 3)"
+                :key="evt.id"
+                class="stream-preview-row"
+              >
+                <span class="stream-icon-sm">{{ evt.icon }}</span>
+                <span class="stream-preview-text">{{ evt.actor }}: {{ evt.detail }}</span>
+              </div>
+              <div v-if="roomActivityStream.length > 3" class="stream-preview-more">
+                还有 {{ roomActivityStream.length - 3 }} 条活动
+              </div>
+            </div>
+          </div>
+
           <div class="sidebar-section">
             <div class="sidebar-title">房间信息</div>
             <div class="info-row">
@@ -5387,7 +5865,7 @@ onUnmounted(() => {
             <p>{{ selectedTaskForDetail?.description }}</p>
           </div>
 
-          <!-- Tabs: Comments / Checkpoints -->
+          <!-- Tabs: Comments / Checkpoints / Time Tracking -->
           <div class="task-detail-tabs">
             <button
               :class="{ active: taskDetailActiveTab === 'comments' }"
@@ -5400,6 +5878,12 @@ onUnmounted(() => {
               @click="taskDetailActiveTab = 'checkpoints'"
             >
               🏁 检查点 ({{ taskDetailCheckpoints.length }})
+            </button>
+            <button
+              :class="{ active: taskDetailActiveTab === 'timetracking' }"
+              @click="taskDetailActiveTab = 'timetracking'"
+            >
+              ⏱ 工时 ({{ taskTimeEntries.length }})
             </button>
           </div>
 
@@ -5464,6 +5948,78 @@ onUnmounted(() => {
               </select>
               <button class="btn-primary" @click="handleCreateCheckpoint" :disabled="!newCheckpointForm.name.trim()">
                 添加
+              </button>
+            </div>
+          </div>
+
+          <!-- Time Tracking Tab (Step 65) -->
+          <div v-if="taskDetailActiveTab === 'timetracking'" class="task-detail-tab-content">
+            <!-- Time Summary -->
+            <div v-if="taskTimeSummary" class="time-summary-bar">
+              <div class="time-summary-item">
+                <div class="time-summary-val">{{ taskTimeSummary.total_hours || 0 }}h</div>
+                <div class="time-summary-label">总工时</div>
+              </div>
+              <div class="time-summary-item">
+                <div class="time-summary-val">{{ taskTimeSummary.entry_count || 0 }}</div>
+                <div class="time-summary-label">记录数</div>
+              </div>
+              <div class="time-summary-item">
+                <div class="time-summary-val">{{ taskTimeSummary.contributor_count || 0 }}</div>
+                <div class="time-summary-label">贡献者</div>
+              </div>
+              <div class="time-summary-item" v-if="selectedTaskForDetail?.estimated_hours">
+                <div class="time-summary-val">{{ ((taskTimeSummary.total_hours / selectedTaskForDetail.estimated_hours) * 100).toFixed(0) }}%</div>
+                <div class="time-summary-label">预估比例</div>
+              </div>
+            </div>
+
+            <!-- Time Entries List -->
+            <div v-if="taskTimeLoading" class="loading-state">加载中...</div>
+            <div v-else-if="taskTimeEntries.length === 0" class="empty-mini">暂无工时记录</div>
+            <div v-else class="time-entry-list">
+              <div v-for="entry in taskTimeEntries" :key="entry.time_entry_id" class="time-entry-item">
+                <div class="time-entry-header">
+                  <span class="time-entry-user">{{ entry.user_name || 'Guest' }}</span>
+                  <span class="time-entry-hours">{{ entry.hours }}h</span>
+                  <button class="btn-delete-sm" @click="handleDeleteTimeEntry(entry.time_entry_id)" title="删除">✕</button>
+                </div>
+                <div class="time-entry-desc">{{ entry.description || '无描述' }}</div>
+                <div class="time-entry-date">{{ new Date(entry.logged_at || entry.created_at || Date.now()).toLocaleString() }}</div>
+              </div>
+            </div>
+
+            <!-- Add Time Entry Form -->
+            <div class="time-entry-form">
+              <div class="time-entry-form-row">
+                <input
+                  v-model="newTimeEntryForm.user_name"
+                  class="input"
+                  placeholder="姓名（可选）"
+                />
+                <input
+                  v-model="newTimeEntryForm.hours"
+                  class="input"
+                  type="number"
+                  min="0.1"
+                  max="24"
+                  step="0.1"
+                  placeholder="工时 *"
+                  @keyup.enter.exact.prevent="handleCreateTimeEntry"
+                />
+              </div>
+              <input
+                v-model="newTimeEntryForm.description"
+                class="input"
+                placeholder="工作描述"
+                @keyup.enter.exact.prevent="handleCreateTimeEntry"
+              />
+              <button
+                class="btn-primary"
+                @click="handleCreateTimeEntry"
+                :disabled="!newTimeEntryForm.hours || parseFloat(newTimeEntryForm.hours) <= 0"
+              >
+                记录工时
               </button>
             </div>
           </div>
@@ -7604,6 +8160,50 @@ body {
 .sidebar-title-row { display: flex; align-items: center; justify-content: space-between; }
 .sidebar-title { color: #4a4a6a; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .sidebar-empty { color: #3a3a5a; font-size: 0.85rem; padding: 8px 0; }
+
+/* Step 63: Phase Timeline */
+.phase-timeline-count { color: #5a5a8a; font-size: 0.72rem; }
+.phase-timeline-list { display: flex; flex-direction: column; gap: 0; }
+.timeline-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  position: relative;
+  padding-bottom: 12px;
+}
+.timeline-entry:last-child { padding-bottom: 0; }
+.timeline-entry:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: #2d2d4a;
+}
+.timeline-phase-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 2px;
+  background: #2d2d4a;
+  border: 2px solid #3d3d5a;
+}
+.timeline-current .timeline-phase-dot {
+  background: #5b5bd6;
+  border-color: #7b7bff;
+  box-shadow: 0 0 6px rgba(91, 91, 214, 0.6);
+}
+.timeline-completed .timeline-phase-dot { background: #2d8a4e; border-color: #3aaa6a; }
+.timeline-content { flex: 1; min-width: 0; }
+.timeline-phase-name { color: #a0a0c0; font-size: 0.8rem; font-weight: 500; }
+.timeline-time { color: #4a4a6a; font-size: 0.72rem; margin-top: 2px; display: flex; gap: 6px; }
+.timeline-enter { color: #6a6a8a; }
+.timeline-exit { color: #4a4a6a; }
+.timeline-running { color: #7b7bff; }
+.timeline-duration { color: #5a5a8a; font-size: 0.72rem; margin-top: 2px; }
+.timeline-via { color: #4a4a6a; font-size: 0.72rem; margin-top: 1px; }
 .sidebar-input {
   background: #13131f;
   border: 1px solid #2d2d4a;
@@ -7621,6 +8221,31 @@ body {
 .level-row { display: flex; align-items: center; gap: 6px; }
 .level-label { color: #4a4a6a; font-size: 0.8rem; }
 .level-input { width: 60px !important; }
+
+/* Step 64: Room Activity Stream */
+.activity-stream-section { border-left: 2px solid #1e1e32; padding-left: 6px; }
+.activity-stream-list { display: flex; flex-direction: column; gap: 0; max-height: 320px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #2d2d4a transparent; }
+.stream-entry {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1a2e;
+}
+.stream-entry:last-child { border-bottom: none; }
+.stream-icon { font-size: 0.9rem; flex-shrink: 0; margin-top: 1px; }
+.stream-body { flex: 1; min-width: 0; }
+.stream-actor { color: #a0a0c0; font-size: 0.78rem; font-weight: 500; }
+.stream-detail { color: #c0c0d8; font-size: 0.75rem; margin-top: 1px; line-height: 1.3; }
+.stream-time { color: #4a4a6a; font-size: 0.68rem; margin-top: 2px; }
+.stream-phase_change .stream-icon { color: #8b5cf6; }
+.stream-speech .stream-icon { color: #3b82f6; }
+.stream-participant_joined .stream-icon { color: #22c55e; }
+.stream-participant_left .stream-icon { color: #ef4444; }
+.activity-stream-preview { display: flex; flex-direction: column; gap: 4px; }
+.stream-preview-row { display: flex; align-items: center; gap: 6px; }
+.stream-icon-sm { font-size: 0.75rem; }
+.stream-preview-text { color: #6a6a8a; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-preview-more { color: #4a4a6a; font-size: 0.68rem; margin-top: 2px; }
 
 .participant-row {
   display: flex;
@@ -8300,6 +8925,94 @@ body {
   flex: 1;
 }
 
+/* Step 65: Time Tracking Tab */
+.time-summary-bar {
+  display: flex;
+  gap: 12px;
+  background: #1a1f2e;
+  border: 1px solid #2d3748;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.time-summary-item {
+  flex: 1;
+  text-align: center;
+}
+.time-summary-val {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #34d399;
+}
+.time-summary-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.time-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.time-entry-item {
+  background: #111827;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.time-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.time-entry-user {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  flex: 1;
+}
+.time-entry-hours {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #34d399;
+}
+.time-entry-desc {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+.time-entry-date {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+.btn-delete-sm {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+}
+.btn-delete-sm:hover {
+  color: #f87171;
+}
+.time-entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.time-entry-form-row {
+  display: flex;
+  gap: 6px;
+}
+.time-entry-form .input[type="number"] {
+  width: 90px;
+  flex: none;
+}
+
 /* Approvals Tab */
 .start-approval-form {
   background: #1a1f2e;
@@ -8905,4 +9618,169 @@ body {
   background: #14532d;
   color: #86efac;
 }
+
+/* ─── Gantt Chart ─────────────────────────────────── */
+.gantt-wrapper {
+  margin: 16px 0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+}
+.gantt-chart {
+  position: relative;
+}
+.gantt-header-row {
+  display: flex;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.gantt-data-row {
+  display: flex;
+  border-bottom: 1px solid #1e293b;
+  position: relative;
+}
+.gantt-rows-area {
+  position: relative;
+}
+.gantt-label-col {
+  width: 200px;
+  min-width: 200px;
+  padding: 8px 12px;
+  border-right: 1px solid #334155;
+  flex-shrink: 0;
+  background: #0f172a;
+}
+.gantt-timeline-outer {
+  flex: 1;
+  position: relative;
+  height: 48px;
+}
+.gantt-timeline-header {
+  position: relative;
+  height: 28px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+.gantt-day-label {
+  position: absolute;
+  font-size: 0.65rem;
+  color: #64748b;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding-top: 4px;
+}
+.gantt-day-label.gantt-today {
+  color: #f97316;
+  font-weight: 600;
+}
+.gantt-grid-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+}
+.gantt-grid-line {
+  flex: 1;
+  border-right: 1px solid #1e293b;
+}
+.gantt-grid-line.gantt-today-col {
+  background: rgba(249, 115, 22, 0.05);
+}
+.gantt-today-vline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #f97316;
+  opacity: 0.6;
+  z-index: 5;
+}
+.gantt-bar {
+  position: absolute;
+  top: 10px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  transition: opacity 0.15s;
+}
+.gantt-bar:hover { opacity: 0.85; }
+.gantt-bar-pending { background: #334155; border: 1px solid #475569; }
+.gantt-bar-in_progress { background: #1e3a5f; border: 1px solid #3b82f6; }
+.gantt-bar-completed { background: #14532d; border: 1px solid #22c55e; }
+.gantt-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px 0 0 3px;
+}
+.gbf-pending { background: #475569; }
+.gbf-in_progress { background: #3b82f6; }
+.gbf-completed { background: #22c55e; }
+.gantt-bar-label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.65rem;
+  color: #fff;
+  padding: 0 4px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.gantt-task-name {
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+.gantt-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.gantt-priority-dot, .gantt-status-chip {
+  font-size: 0.6rem;
+}
+.gantt-dep-badge {
+  font-size: 0.6rem;
+  background: #1e3a5f;
+  color: #60a5fa;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.gantt-dep-connector {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: #60a5fa;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+}
+.gantt-svg-overlay {
+  position: absolute;
+  top: 28px;
+  left: 200px;
+  right: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.gantt-empty {
+  padding: 40px 0;
+  text-align: center;
+}
+.gantt-empty .empty-icon { font-size: 2rem; margin-bottom: 8px; }
+.gantt-empty .empty-text { font-size: 1rem; color: #94a3b8; margin-bottom: 4px; }
+.gantt-empty .empty-sub { font-size: 0.8rem; color: #64748b; }
 </style>

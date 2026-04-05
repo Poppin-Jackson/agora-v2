@@ -1,5 +1,8 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.18 | 日期：2026-04-05（Step 65 - Task Time Tracking System）
+> 版本：v2.16 | 日期：2026-04-05（Step 62 - 甘特图视图）
+> 版本：v2.15 | 日期：2026-04-05（Step 61 - 迭代验证）
 > 版本：v2.14 | 日期：2026-04-05（Step 60）
 > 版本：v2.11 | 日期：2026-04-05（Step 57）
 > 版本：v2.10 | 日期：2026-04-05（Step 56）
@@ -663,6 +666,124 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - Docker Web 镜像已重建并重启
 
 ## 迭代记录
+
+### v2.18 (2026-04-05 11:26)
+**Step 64: Room Activity Stream（房间活动流）**
+- 类型：新功能
+- 时间：2026-04-05 11:26 北京时间
+- 解决的问题：房间内的事件（发言、阶段转换、参与者进出）分散在各处，缺乏统一的实时活动流视图
+- 实现内容：
+  - **前端状态**：`roomActivityStream` ref — 存储房间活动流事件；`showActivityStream` 控制展开/收起
+  - **WebSocket 事件捕获**：`ws.onmessage` 中新增对 `phase_change`、`speech`、`participant_joined`、`participant_left` 四类事件监听，事件自动 unshift 到 activityStream
+  - **数据结构**：每个事件包含 `{ id, event_type, icon, actor, detail, timestamp }`
+  - **Room 生命周期**：`loadRoomData()` 时清空并初始化 activityStream；`leaveRoom()` 时清空
+  - **UI 侧边栏**：Room View 侧边栏新增「📋 活动流」面板（位于 Room Info 之前），支持展开/收起两种模式
+    - 展开模式：显示完整事件列表（图标、参与者、时间），最多显示 320px 高，可滚动
+    - 收起模式：预览最近 3 条事件，显示"还有 N 条活动"
+  - **事件类型颜色**：phase_change=紫 / speech=蓝 / participant_joined=绿 / participant_left=红
+- 验证：pytest 139/139 通过 ✅，docker-compose build 成功，npm run build 成功
+- Docker 镜像：agora-v2-web 已重建并重启
+
+**Step 65: Task Time Tracking System（任务工时追踪）**
+- 类型：新功能
+- 时间：2026-04-05 11:39 北京时间
+- 解决的问题：任务虽有 `actual_hours` 字段但无法记录工时明细，无法追踪谁在什么时间做了多少工作
+- 实现内容：
+  - **数据库**：`task_time_entries` 表（time_entry_id, task_id, plan_id, version, user_name, hours, description, notes, logged_at, created_at）
+  - **Backend CRUD**：`repositories/crud.py` 新增 `create_time_entry`（创建并自动更新 tasks.actual_hours）、`list_time_entries`、`delete_time_entry`（删除并重算 tasks.actual_hours）、`get_task_time_summary`
+  - **API Endpoints**：
+    - `POST /plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries` — 记录工时
+    - `GET /plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries` — 列出工时记录
+    - `GET /plans/{plan_id}/versions/{version}/tasks/{task_id}/time-summary` — 工时汇总
+    - `DELETE /time-entries/{entry_id}` — 删除工时记录
+  - **Frontend API**：`api/index.ts` 新增 `createTimeEntry`、`listTimeEntries`、`getTimeSummary`、`deleteTimeEntry`
+  - **State**：`taskTimeEntries` ref、`taskTimeSummary` ref、`newTimeEntryForm` reactive
+  - **Task Detail Modal** 新增「⏱ 工时」Tab：
+    - 顶部：工时汇总栏（总工时、记录数、贡献者、预估比例）
+    - 列表：每条记录显示用户、工时数、描述、时间，支持删除
+    - 表单：姓名（可选）、工时（必填，0.1-24h）、工作描述
+  - **自动联动**：创建/删除工时后自动更新 `tasks.actual_hours`，Task Detail Modal 实时刷新
+- 验证：pytest 139/139 通过 ✅，docker-compose build 成功，npm run build 成功
+- Docker 镜像：agora-v2-api、agora-v2-web 已重建并重启
+
+### v2.17 (2026-04-05 11:22)
+**Step 63: Room Phase Timeline（阶段时间线）**
+- 类型：新功能 + 数据库迁移
+- 时间：2026-04-05 11:22 北京时间
+- 解决的问题：房间的阶段转换历史无法可视化查看，用户无法了解每个阶段停留了多长时间
+- 实现内容：
+  - **数据库**：`room_phase_timeline` 表，记录 entry_id/room_id/phase/entered_at/exited_at/exited_via/duration_secs
+  - **CRUD**：`create_phase_timeline_entry()` / `exit_phase_timeline_entry()` / `get_room_phase_timeline()`
+  - **API**：`GET /rooms/{room_id}/phase-timeline` — 返回阶段时间线（PostgreSQL 优先，内存兜底）
+  - **Phase 记录时机**：
+    - 房间创建时（create_plan / create_room / create_room_from_template）自动记录初始阶段（SELECTING）
+    - 每次 transition_phase 时：退出旧阶段（更新 exited_at/exited_via/duration_secs）并进入新阶段
+  - **前端**：
+    - `getRoomPhaseTimeline` API 函数
+    - Room View 侧边栏新增「⏱ 阶段时间线」面板，显示所有阶段的进入时间、退出时间、持续时长
+    - 当前进行中阶段用紫色高亮点标记，已完成阶段用绿色点标记
+    - 支持 formatTime() / formatDuration() 辅助函数
+- 验证：pytest 139/139 通过 ✅（+3 个新测试），docker-compose build 成功，API health OK
+- Docker 镜像：agora-v2-api + agora-v2-web 已重建并重启
+
+### v2.16 (2026-04-05 11:00)
+**Step 62: Gantt Chart View（甘特图视图）**
+- 问题：Tasks Tab 只有任务列表和进度条，缺少时间线可视化
+- 修复：
+  - Tasks Tab 工具栏新增「📊 甘特图」切换按钮（点击在列表视图和甘特图之间切换）
+  - 甘特图显示：
+    - 日期时间轴头部（显示 MM-DD 格式，今日橙色高亮）
+    - 任务条形图（按 started_at → deadline 定位，颜色区分状态：待处理=灰/进行中=蓝/已完成=绿）
+    - 进度填充（条形图内蓝色/绿色填充表示完成百分比）
+    - 今日垂直红线（橙色虚线标记当前日期）
+    - 依赖连线（SVG 虚线箭头，从前置任务结束指向后继任务开始）
+    - 依赖徽章（任务名称旁显示 🔗N 表示依赖数量）
+    - 日期计算：deadline 存在时从 deadline 往前推 estimated_hours/8 天；无日期任务默认 7 天跨度
+  - 新增 computed 属性：
+    - `ganttTodayStr` — 今日日期字符串（YYYY-MM-DD）
+    - `ganttDateRange` — 日期范围数组（最早开始日期 → 最晚截止日期，至少 7 天）
+    - `ganttTodayOffset` — 今日在时间轴上的百分比位置
+    - `ganttTasks` — 带 barLeft/barWidth/depArrows 的任务列表
+    - `tasksWithId` — task_id → task 映射
+    - `ganttAllArrows` — 所有依赖关系的 SVG 坐标
+  - 无任务时显示空状态提示
+- 来源：08-Data-Models-Details.md §3.1 Task.deadline/started_at/dependencies + 任务管理 UX 最佳实践
+- 验证：`npm run build` 成功（78 modules, 271.82 kB），pytest 136/136 通过 ✅
+- Docker Web 镜像已重建并重启
+
+### v2.15 (2026-04-05 10:52)
+**Step 61: 迭代状态验证**
+- 类型：例行验证（非功能迭代）
+- 时间：2026-04-05 10:52 北京时间
+- 版本：v2.15
+
+**CI/CD 验证结果：**
+| 验证项 | 结果 |
+|--------|------|
+| docker-compose config | ✅ 通过 |
+| python3 -m py_compile backend/main.py | ✅ 语法正确 |
+| python3 -m py_compile backend/db.py | ✅ 语法正确 |
+| python3 -m py_compile backend/gateway_client.py | ✅ 语法正确 |
+| pytest tests/ | ✅ 136/136 passed |
+| curl http://localhost:8000/health | ✅ healthy |
+
+**当前实现状态：**
+- Steps 1-60 全部完成 ✅
+- 状态机：INITIATED → SELECTING → THINKING → SHARING → DEBATE → CONVERGING → HIERARCHICAL_REVIEW → DECISION → EXECUTING + 问题处理子状态
+- L1-L7 层级角色 + 审批流 + 圣旨系统
+- PostgreSQL 持久化（17张表）
+- WebSocket 实时通信 + Gateway 集成
+- Vue3 前端（15个 Tab：概览/房间/任务/决策/审批/圣旨/约束/干系人/风险/需求/审批/升级/快照/分析/活动）
+- Message Sequence + Debate Exchange + Hierarchical Review + Converging Panel
+- WebSocket Auto-Reconnect + 连接状态指示器
+- Room Message Search + Plan Markdown Export
+- Activities Tab Scope Filter (Plan/Room/Version)
+- 任务依赖关系 UI + 版本对比 UI
+- 问题管理面板 + 升级路径预览
+
+**设计文档说明：**
+- `/Users/mac/Documents/opencode-zl/agora/` 设计文档目录不存在
+- 迭代基于现有代码库继续，下一步功能开发待定义
 
 ### v2.11 (2026-04-05 09:57)
 **Step 57: Plan/Room 计数器 SQL substring 修复（Plan/Activity/Analytics 回归正常）**
