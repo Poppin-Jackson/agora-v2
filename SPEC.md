@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
 > 版本：v2.59 | 日期：2026-04-06（Step 109 - Room/Task Templates 边界测试）
@@ -3066,4 +3067,78 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 113（版本 v2.63）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 114 (2026-04-06)
+**版本**: v2.64 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Phase Transitions API 添加边界测试覆盖
+
+背景：Phase Transitions API 包含 3 个端点（GET /rooms/{room_id}/phase、POST /rooms/{room_id}/phase、GET /rooms/{room_id}/phase-timeline），此前 TestPhaseTimeline 只有 8 个基础测试（聚焦在时间线记录逻辑），缺少对阶段转换端点本身的边界测试。TestPhaseTimeline 的 phase 转换调用散落在时间线测试中，没有独立测试 POST /rooms/{room_id}/phase 端点的边界行为。与 Step 84-113 的补全模式对齐。
+
+### Do
+新增 `TestPhaseTransitions` 类（9个边界测试用例）：
+
+1. **`test_get_phase_invalid_uuid`** — GET /rooms/{invalid_uuid}/phase → 404
+2. **`test_get_phase_room_not_found`** — GET /rooms/{valid_uuid_not_exists}/phase → 404
+3. **`test_transition_phase_room_not_found`** — POST 房间不存在 → 404
+4. **`test_transition_phase_missing_to_phase`** — POST 缺少 to_phase 参数 → 422
+5. **`test_transition_phase_invalid_phase_value`** — POST 无效 phase 枚举值 → 422
+6. **`test_transition_phase_invalid_transition`** — POST 非法转换 SELECTING→DECISION → 400，含 error/invalid_transition 结构
+7. **`test_transition_phase_from_completed`** — POST 从 COMPLETED 转换（无允许下一阶段）→ 400
+8. **`test_transition_phase_invalid_uuid`** — POST 无效 UUID → 404
+9. **`test_transition_phase_problem_detected_to_analysis`** — POST 问题检测流程 PROBLEM_DETECTED→PROBLEM_ANALYSIS 合法 → 200
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法通过
+- ✅ pytest TestPhaseTransitions 9/9 passed
+- ✅ pytest tests/ 460/460 passed（原有451 + 新增9）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 114（版本 v2.64）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 115 (2026-04-06)
+**版本**: v2.65 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 ProblemHandling API 添加边界测试覆盖
+
+背景：ProblemHandling API（问题处理流程 PROBLEM_DETECTED→PROBLEM_ANALYSIS→PROBLEM_DISCUSSION→PLAN_UPDATE→RESUMING）是讨论室问题追踪的核心功能，包含10个端点（report/get/list/analyze/discuss/update-plan/resume/get-analysis/get-discussion）。此前仅有12个基础测试（覆盖全流程），缺少枚举验证/404场景/空列表等边界测试。与 Step 84-114 的补全模式对齐。
+
+### Do
+新增14个 ProblemHandling 边界测试用例（TestProblemHandling 类从12→26个）：
+
+1. **`test_report_problem_empty_title`** — 报告问题时 title="" — 当前backend接受空字符串（无min_length验证）
+2. **`test_report_problem_invalid_type`** — 无效 type="invalid_type_xyz" → 422（enum验证）
+3. **`test_report_problem_invalid_severity`** — 无效 severity="super_critical" → 422（enum验证）
+4. **`test_report_problem_plan_not_found`** — plan不存在 — 当前backend无plan存在性验证，接受任意plan_id
+5. **`test_analyze_problem_not_found`** — 分析不存在问题 → 404
+6. **`test_discuss_problem_not_found`** — 讨论不存在问题 → 404
+7. **`test_update_plan_not_found`** — 更新不存在问题的方案 → 404
+8. **`test_resume_not_found`** — 恢复不存在问题 → 404
+9. **`test_get_problem_not_found`** — 获取不存在问题 → 404
+10. **`test_get_plan_problems_empty`** — 无问题时返回空列表
+11. **`test_get_plan_update_plan_not_found`** — 获取不存在plan的plan-update → 200空列表或404
+12. **`test_get_resuming_plan_not_found`** — 获取不存在plan的resuming → 200空列表或404
+13. **`test_get_problem_analysis_not_found`** — 获取不存在问题的分析 → 404
+14. **`test_get_problem_discussion_not_found`** — 获取不存在问题的讨论记录 → 404
+
+**发现的行为**：
+- `report_problem` 当前无 title min_length 验证，空字符串被接受
+- `report_problem` 当前无 plan_id 存在性验证，接受任意 plan_id
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestProblemHandling 26/26 passed（+14 new tests）
+- ✅ pytest tests/ 451/451 passed（原有437 + 新增14）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 115（版本 v2.65）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

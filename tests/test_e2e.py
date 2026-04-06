@@ -740,6 +740,133 @@ class TestPhaseTimeline:
         assert timeline2[1]["exited_at"] is None
 
 
+class TestPhaseTransitions:
+    """Step 114: Phase Transitions API 边界测试"""
+
+    # ========================
+    # GET /rooms/{room_id}/phase
+    # ========================
+
+    def test_get_phase_invalid_uuid(self, ensure_api):
+        """获取当前阶段：无效UUID格式返回404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-valid-uuid/phase", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_phase_room_not_found(self, ensure_api):
+        """获取当前阶段：房间不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/phase", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    # ========================
+    # POST /rooms/{room_id}/phase
+    # ========================
+
+    def test_transition_phase_room_not_found(self, ensure_api):
+        """阶段转换：房间不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_id}/phase",
+            params={"to_phase": "thinking"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_transition_phase_missing_to_phase(self, ensure_api):
+        """阶段转换：缺少to_phase参数返回422"""
+        room_id = str(uuid.uuid4())
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/phase", timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_transition_phase_invalid_phase_value(self, ensure_api):
+        """阶段转换：无效phase枚举值返回422"""
+        room_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/phase",
+            params={"to_phase": "not_a_valid_phase"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_transition_phase_invalid_transition(self, room_info):
+        """阶段转换：非法转换路径返回400"""
+        room_id = room_info["room_id"]
+        # 初始阶段是 SELECTING，只能转换到 THINKING
+        # 尝试直接转换到 DECISION（无效）
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/phase",
+            params={"to_phase": "decision"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["detail"]["error"] == "invalid_transition"
+        assert body["detail"]["current_phase"] == "selecting"
+        assert body["detail"]["requested_phase"] == "decision"
+        assert "allowed_phases" in body["detail"]
+
+    def test_transition_phase_from_completed(self, room_info):
+        """阶段转换：从COMPLETED阶段无法转换（无允许的下一阶段）"""
+        room_id = room_info["room_id"]
+
+        # 快速推进到 COMPLETED: SELECTING→THINKING→SHARING→DEBATE→CONVERGING→DECISION→EXECUTING→COMPLETED
+        for phase in ["thinking", "sharing", "debate", "converging", "decision", "executing", "completed"]:
+            httpx.post(
+                f"{API_BASE}/rooms/{room_id}/phase",
+                params={"to_phase": phase},
+                timeout=TIMEOUT,
+            )
+
+        # 尝试从 COMPLETED 转换（应该失败，COMPLETED没有允许的下一阶段）
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/phase",
+            params={"to_phase": "executing"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["detail"]["error"] == "invalid_transition"
+        assert body["detail"]["current_phase"] == "completed"
+        assert body["detail"]["requested_phase"] == "executing"
+
+    def test_transition_phase_invalid_uuid(self, ensure_api):
+        """阶段转换：无效UUID格式返回404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/invalid-uuid-format/phase",
+            params={"to_phase": "thinking"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_transition_phase_problem_detected_to_analysis(self, room_info):
+        """阶段转换：问题检测流程 PROBLEM_DETECTED→PROBLEM_ANALYSIS 合法"""
+        room_id = room_info["room_id"]
+
+        # 推进到 EXECUTING（PROBLEM_DETECTED 的前置）
+        for phase in ["thinking", "sharing", "debate", "converging", "decision", "executing"]:
+            httpx.post(
+                f"{API_BASE}/rooms/{room_id}/phase",
+                params={"to_phase": phase},
+                timeout=TIMEOUT,
+            )
+
+        # EXECUTING→PROBLEM_DETECTED 合法
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/phase",
+            params={"to_phase": "problem_detected"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        # PROBLEM_DETECTED→PROBLEM_ANALYSIS 合法
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/phase",
+            params={"to_phase": "problem_analysis"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+
 class TestSpeech:
     """发言功能"""
 
@@ -2174,6 +2301,188 @@ class TestProblemHandling:
         records = resp.json()
         assert isinstance(records, list)
         assert len(records) >= 1
+
+    def test_report_problem_empty_title(self, ensure_api):
+        """边界: 报告问题 title="" — 当前backend接受空字符串(无min_length验证)"""
+        ctx = self._create_executing_plan(ensure_api)
+        problem_payload = {
+            "plan_id": ctx["plan_id"],
+            "room_id": ctx["room_id"],
+            "type": "blocking",
+            "title": "",
+            "description": "测试空标题",
+            "severity": "high",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{API_BASE}/problems/report", json=problem_payload, timeout=TIMEOUT)
+        # Backend当前无min_length=1验证，接受空标题
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+        problem = resp.json()
+        assert problem["title"] == ""  # 空字符串被接受
+
+    def test_report_problem_invalid_type(self, ensure_api):
+        """边界: 无效 type 返回 422 (enum验证)"""
+        ctx = self._create_executing_plan(ensure_api)
+        problem_payload = {
+            "plan_id": ctx["plan_id"],
+            "room_id": ctx["room_id"],
+            "type": "invalid_type_xyz",
+            "title": "测试问题",
+            "description": "测试",
+            "severity": "high",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{API_BASE}/problems/report", json=problem_payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_invalid_severity(self, ensure_api):
+        """边界: 无效 severity 返回 422 (enum验证)"""
+        ctx = self._create_executing_plan(ensure_api)
+        problem_payload = {
+            "plan_id": ctx["plan_id"],
+            "room_id": ctx["room_id"],
+            "type": "blocking",
+            "title": "测试问题",
+            "description": "测试",
+            "severity": "super_critical",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{API_BASE}/problems/report", json=problem_payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_plan_not_found(self, ensure_api):
+        """边界: plan不存在 — 当前backend无plan存在性验证，接受任意plan_id"""
+        fake_uuid = str(uuid.uuid4())
+        problem_payload = {
+            "plan_id": fake_uuid,
+            "room_id": fake_uuid,
+            "type": "blocking",
+            "title": "测试问题",
+            "description": "测试",
+            "severity": "high",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{API_BASE}/problems/report", json=problem_payload, timeout=TIMEOUT)
+        # Backend当前无plan存在性验证，接受任意plan_id
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+        problem = resp.json()
+        assert problem["plan_id"] == fake_uuid
+
+    def test_analyze_problem_not_found(self, ensure_api):
+        """边界: 分析不存在的问题返回404"""
+        ctx = self._create_executing_plan(ensure_api)
+        fake_uuid = str(uuid.uuid4())
+        analysis_payload = {
+            "root_cause": "根因",
+            "root_cause_confidence": 0.8,
+            "impact_scope": "局部",
+            "progress_impact": "轻微",
+            "severity_reassessment": "low",
+            "solution_options": [{"id": 0, "description": "方案A"}],
+            "recommended_option": 0,
+            "requires_discussion": False,
+        }
+        resp = httpx.post(
+            f"{API_BASE}/problems/{fake_uuid}/analyze",
+            json=analysis_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_discuss_problem_not_found(self, ensure_api):
+        """边界: 讨论不存在的问题返回404"""
+        ctx = self._create_executing_plan(ensure_api)
+        fake_uuid = str(uuid.uuid4())
+        discuss_payload = {
+            "participants": [{"agent_id": "a1", "name": "专家", "level": 5}],
+            "discussion_focus": [{"aspect": "方案", "concerns": ["成本"]}],
+            "proposed_solutions": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/problems/{fake_uuid}/discuss",
+            json=discuss_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_update_plan_not_found(self, ensure_api):
+        """边界: 更新不存在的问题的方案返回404"""
+        ctx = self._create_executing_plan(ensure_api)
+        fake_uuid = str(uuid.uuid4())
+        update_payload = {
+            "new_version": "v1.1",
+            "parent_version": "v1.0",
+            "update_type": "fix",
+            "description": "测试",
+            "changes": {},
+            "task_updates": [],
+            "new_tasks": [],
+            "cancelled_tasks": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/problems/{fake_uuid}/update-plan",
+            json=update_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_resume_not_found(self, ensure_api):
+        """边界: 恢复不存在的问题返回404"""
+        ctx = self._create_executing_plan(ensure_api)
+        fake_uuid = str(uuid.uuid4())
+        resume_payload = {
+            "new_version": "v1.1",
+            "resuming_from_task": 1,
+            "checkpoint": "测试",
+            "resume_instructions": {},
+        }
+        resp = httpx.post(
+            f"{API_BASE}/problems/{fake_uuid}/resume",
+            json=resume_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_get_problem_not_found(self, ensure_api):
+        """边界: 获取不存在的问题返回404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/problems/{fake_uuid}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_get_plan_problems_empty(self, ensure_api):
+        """边界: 无问题时返回空列表"""
+        ctx = self._create_executing_plan(ensure_api)
+        plan_id = ctx["plan_id"]
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/problems", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+        problems = resp.json()
+        assert isinstance(problems, list)
+        assert len(problems) == 0, f"新计划应有0个问题，实际 {len(problems)}"
+
+    def test_get_plan_update_plan_not_found(self, ensure_api):
+        """边界: 获取不存在plan的plan-update返回空列表或404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_uuid}/plan-update", timeout=TIMEOUT)
+        # 可能返回200空列表或404，取决于DB是否有该plan
+        assert resp.status_code in (200, 404), f"期望200或404，实际 {resp.status_code}"
+
+    def test_get_resuming_plan_not_found(self, ensure_api):
+        """边界: 获取不存在plan的resuming返回空列表或404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_uuid}/resuming", timeout=TIMEOUT)
+        assert resp.status_code in (200, 404), f"期望200或404，实际 {resp.status_code}"
+
+    def test_get_problem_analysis_not_found(self, ensure_api):
+        """边界: 获取不存在问题的分析返回404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/problems/{fake_uuid}/analysis", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_get_problem_discussion_not_found(self, ensure_api):
+        """边界: 获取不存在问题的讨论记录返回404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/problems/{fake_uuid}/discussion", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
 
 
 # ========================
