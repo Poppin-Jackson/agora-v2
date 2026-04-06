@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.83 | 日期：2026-04-06（Step 134 - Room Search API 边界测试）
+> 版本：v2.91 | 日期：2026-04-06（Step 142 - API 输入验证强化完成）
 > 版本：v2.82 | 日期：2026-04-06（Step 133 - Speech API 边界测试）
 > 版本：v2.81 | 日期：2026-04-06（Step 132 - Task Comments/Checkpoints 边界测试）
 > 版本：v2.75 | 日期：2026-04-06（Step 125 - Export API 边界测试）
@@ -4192,4 +4192,217 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 139（版本 v2.88）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+
+## Step 140 (2026-04-06)
+**版本**: v2.89 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Plan CRUD API 添加边界测试覆盖
+
+背景：Plan CRUD API（`POST /plans`、`GET /plans/{plan_id}`、`DELETE /plans/{plan_id}`、`GET /plans`）是系统的核心入口，只有基本测试，缺少边界测试覆盖。与 Step 84-139 的补全模式对齐。
+
+### Do
+新增 `TestPlanCRUDBoundary` 测试类（16个边界测试用例）：
+
+1. **`test_create_plan_empty_title`** — 创建计划时 title="" 返回 422（min_length=1 验证）
+2. **`test_create_plan_missing_title`** — 创建计划时缺少必填字段 title 返回 422
+3. **`test_create_plan_empty_topic`** — 创建计划时 topic="" 返回 422（min_length=1 验证）
+4. **`test_create_plan_missing_topic`** — 创建计划时缺少必填字段 topic 返回 422
+5. **`test_create_plan_title_at_max_length`** — 创建计划时 title=200字符（边界值）返回 201
+6. **`test_create_plan_title_exceeds_max_length`** — 创建计划时 title=201字符返回 422（max_length=200 验证）
+7. **`test_create_plan_only_required_fields`** — 仅提供必填字段（title + topic）返回 201，验证默认值正确（status=initiated、current_version=v1.0、requirements=[]、tags=[]、hierarchy_id=default）
+8. **`test_create_plan_with_all_optional_fields`** — 提供所有字段返回 201，各字段值正确（requirements/hierarchy_id/tags）
+9. **`test_create_plan_auto_creates_room`** — 创建计划自动创建配套 Room，响应含 plan 和 room 对象，Room phase 为 selecting
+10. **`test_get_plan_invalid_uuid_format`** — 获取计划时 plan_id 为无效 UUID 格式返回 404 或 500
+11. **`test_get_plan_not_found`** — 获取计划时 plan_id 有效但不存在返回 404
+12. **`test_delete_plan_invalid_uuid_format`** — 删除计划时 plan_id 为无效 UUID 格式返回 404 或 500
+13. **`test_delete_plan_not_found`** — 删除计划时 plan_id 有效但不存在返回 404
+14. **`test_delete_plan_success`** — 正常删除计划返回 204，再次 GET 返回 404
+15. **`test_list_plans_returns_list`** — 列出计划返回 list 类型
+16. **`test_create_plan_duplicate_title_allowed`** — 允许重复标题，同一标题创建两个计划 plan_id 不同
+
+**发现的行为**：
+- `create_plan` 响应格式为 `{"plan": {...}, "room": {...}}`
+- `title` 有 min_length=1 和 max_length=200 验证
+- `topic` 有 min_length=1 验证
+- Plan 创建时自动创建配套 Room，room_id 在响应中返回
+- `GET /plans/{plan_id}` 和 `DELETE /plans/{plan_id}` 不做 UUID 格式校验，无效格式返回 404 或 500
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestPlanCRUDBoundary 16/16 passed（+16 new tests）
+- ✅ pytest tests/ 879/879 passed（原有863 + 新增16 = 879）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 140（版本 v2.89）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 141 (2026-04-06)
+**版本**: v2.90 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Snapshot API 添加边界测试覆盖
+
+背景：Snapshot API（上下文快照管理）包含 4 个端点（create/list/get snapshot），只有基本测试，缺少边界测试覆盖。与 Step 84-140 的补全模式对齐。
+
+### Do
+新增 `TestSnapshotAPIBoundary` 测试类（17个边界测试用例）：
+
+1. **`test_create_snapshot_missing_context_summary`** — 创建快照: 缺少必填字段 context_summary → 422
+2. **`test_create_snapshot_context_summary_empty_string`** — 创建快照: context_summary="" → 422 (min_length=1)
+3. **`test_create_snapshot_context_summary_single_char`** — 创建快照: context_summary 恰好1字符 → 200 (边界值)
+4. **`test_create_snapshot_missing_room_id`** — 创建快照: 缺少必填字段 room_id → 422
+5. **`test_create_snapshot_missing_phase`** — 创建快照: 缺少必填字段 phase → 422
+6. **`test_create_snapshot_invalid_plan_uuid`** — 创建快照: plan_id 为无效 UUID 格式 → 404 或 422
+7. **`test_create_snapshot_plan_not_found`** — 创建快照: plan 不存在 → 404
+8. **`test_create_snapshot_version_not_found`** — 创建快照: version 不存在 → 404
+9. **`test_create_snapshot_empty_participants`** — 创建快照: participants=[] → 200 (空列表有效)
+10. **`test_create_snapshot_invalid_participants_type`** — 创建快照: participants 类型无效（非列表）→ 422
+11. **`test_create_snapshot_empty_messages_summary`** — 创建快照: messages_summary=[] → 200 (空列表有效)
+12. **`test_create_snapshot_only_required_fields`** — 创建快照: 仅提供必填字段 → 200
+13. **`test_get_snapshot_invalid_snapshot_id`** — 获取快照: snapshot_id 为无效 UUID 格式 → 404 或 500
+14. **`test_get_snapshot_not_found`** — 获取快照: snapshot 不存在 → 404
+15. **`test_get_snapshot_plan_not_found`** — 获取快照: plan 不存在 → 404
+16. **`test_list_snapshots_empty`** — 列出快照: 无快照时返回空列表 → 200
+17. **`test_list_snapshots_multiple`** — 列出快照: 创建多个快照后列出 → 200，包含所有快照
+
+**发现的行为**：
+- `create_snapshot` 响应格式为 `{"snapshot_id": "...", "snapshot": {...}}`
+- `context_summary` 有 min_length=1 验证，空字符串返回 422
+- `list_snapshots` 响应格式为 `{"snapshots": [...]}`
+- `phase` 为必填字段，缺失返回 422
+- `participants` 和 `messages_summary` 默认为空列表 `[]`，空列表有效
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestSnapshotAPIBoundary 17/17 passed（+17 new tests）
+- ✅ pytest tests/test_e2e.py 873/873 passed（原有856 + 新增17 = 873）
+- ✅ pytest tests/ 896/896 passed（原有879 + 新增17 = 896）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 141（版本 v2.90）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 142 (2026-04-06)
+**版本**: v2.91 | **迭代周期**: 13分钟自动触发
+
+### Plan
+API 输入验证强化 — 修复 ActionItems 和 Notifications 的枚举验证缺失
+
+背景：边界测试（Step 84-141）发现多个 API 缺少输入验证，导致数据质量下降：
+- ActionItem `priority` 字段无枚举验证，任意字符串（如 "super_urgent"）均可创建
+- ActionItem `status` 字段无枚举验证，任意字符串均可写入
+- Notification `type` 字段无枚举验证，任意字符串均可创建
+
+### Do
+**修复 1：ActionItemCreate.priority 枚举验证**
+- 文件：`backend/main.py` 第 340 行
+- 修复前：`priority: str = "medium"`
+- 修复后：`priority: str = Field(default="medium", pattern="^(critical|high|medium|low)$")`
+
+**修复 2：ActionItemUpdate.status 枚举验证**
+- 文件：`backend/main.py` 第 350 行
+- 修复前：`status: Optional[str] = None`
+- 修复后：`status: Optional[str] = Field(default=None, pattern="^(open|in_progress|completed|cancelled)$")`
+
+**修复 3：ActionItemUpdate.priority 枚举验证**
+- 文件：`backend/main.py` 第 351 行
+- 修复前：`priority: Optional[str] = None`
+- 修复后：`priority: Optional[str] = Field(default=None, pattern="^(critical|high|medium|low)$")`
+
+**修复 4：NotificationCreate.type 枚举验证**
+- 文件：`backend/main.py` 第 7638 行
+- 修复前：`type: str`（无验证）
+- 修复后：`type: Literal["task_assigned","task_completed","task_blocked","problem_reported","problem_resolved","approval_requested","approval_completed","edict_published","escalation_received"]`
+
+**修复 5：NotificationCreate.recipient_level 范围验证**
+- 文件：`backend/main.py` 第 7647 行
+- 修复前：`recipient_level: Optional[int] = None`
+- 修复后：`recipient_level: Optional[int] = Field(default=None, ge=1, le=7)`
+
+**修复 6：更新测试用例反映新行为**
+- 文件：`tests/test_e2e.py`
+- `test_create_notification_arbitrary_type_accepted` → `test_create_notification_arbitrary_type_rejected`：期望 422（拒绝无效 type）
+- `test_create_action_item_invalid_priority_accepted` → `test_create_action_item_invalid_priority_rejected`：期望 422（拒绝无效 priority）
+- `test_create_action_item_invalid_status_rejected`：修正说明（ActionItemCreate 无 status 字段，创建时被忽略）
+- `test_update_action_item_invalid_status_accepted` → `test_update_action_item_invalid_status_rejected`：期望 422
+- `test_update_action_item_invalid_priority_accepted` → `test_update_action_item_invalid_priority_rejected`：期望 422
+
+### Check
+- ✅ python3 -m py_compile backend/main.py 语法检查通过
+- ✅ docker-compose build api 成功
+- ✅ docker-compose up -d api 成功
+- ✅ pytest tests/ 896/896 passed
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 142（版本 v2.91）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+
+## Step 143 (2026-04-06)
+**版本**: v2.92 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Task CRUD API 添加边界测试覆盖
+
+背景：Task CRUD API（创建/列表/获取/更新/删除任务）是任务管理的核心功能，包含5个端点（create/list/get/update/delete）。此前仅有零散的 Task 相关测试（TaskProgress/TaskComments/TaskCheckpoints/TaskDependency/TaskTemplates/SubTasks），没有专门的 Task CRUD 边界测试类。发现行为与 Step 142 的补全模式对齐。
+
+### Do
+新增 `TestTaskCRUDBoundary` 测试类（26个边界测试用例）：
+
+1. **`test_create_task_empty_title`** — 创建任务: title="" → 422（min_length=1 验证）
+2. **`test_create_task_missing_title`** — 创建任务: 缺少必填字段 title → 422
+3. **`test_create_task_title_at_max_length`** — 创建任务: title=200字符（边界值）→ 201
+4. **`test_create_task_title_exceeds_max_length`** — 创建任务: title=201字符 → 422（max_length=200 验证）
+5. **`test_create_task_invalid_priority`** — 创建任务: priority="urgent"（无效枚举）→ 422
+6. **`test_create_task_all_valid_priorities`** — 创建任务: 验证全部3种 priority 枚举值（high/medium/low）均可创建成功
+7. **`test_create_task_invalid_difficulty`** — 创建任务: difficulty="impossible"（无效枚举）→ 422
+8. **`test_create_task_all_valid_difficulties`** — 创建任务: 验证全部3种 difficulty 枚举值（easy/medium/hard）均可创建成功
+9. **`test_create_task_owner_level_zero`** — 创建任务: owner_level=0 → 422（ge=1 验证）
+10. **`test_create_task_owner_level_out_of_bounds`** — 创建任务: owner_level=8 → 422（le=7 验证）
+11. **`test_create_task_owner_level_at_boundaries`** — 创建任务: owner_level=1 和 7（边界值）→ 201
+12. **`test_create_task_estimated_hours_negative`** — 创建任务: estimated_hours=-1 → 422（ge=0 验证）
+13. **`test_create_task_estimated_hours_at_boundary`** — 创建任务: estimated_hours=0（边界值）→ 201
+14. **`test_create_task_plan_not_found`** — 创建任务: plan 不存在 → 404
+15. **`test_create_task_version_not_found`** — 创建任务: version 不存在 → 404
+16. **`test_get_task_not_found`** — 获取任务: task 不存在 → 404
+17. **`test_patch_task_update_priority_invalid`** — 更新任务: priority="urgent"（无效枚举）→ 422
+18. **`test_patch_task_update_progress_invalid_exceeds_one`** — 更新任务: progress=1.1 → 422（le=1 验证）
+19. **`test_patch_task_update_progress_negative`** — 更新任务: progress=-0.1 → 422（ge=0 验证）
+20. **`test_patch_task_update_progress_at_boundaries`** — 更新任务: progress=0 和 1（边界值）→ 200
+21. **`test_patch_task_update_invalid_status`** — 更新任务: status="invalid_status"（无效枚举）→ 422
+22. **`test_patch_task_update_all_valid_statuses`** — 更新任务: 验证全部5种 status 枚举值（pending/in_progress/completed/blocked/cancelled）均可接受
+23. **`test_list_tasks_plan_not_found`** — 列出任务: plan 不存在 → 404
+24. **`test_list_tasks_version_not_found`** — 列出任务: version 不存在 → 404
+25. **`test_create_task_plan_invalid_uuid`** — 创建任务: plan_id 为无效 UUID 格式 → 404
+26. **`test_get_task_plan_invalid_uuid`** — 获取任务: plan_id 为无效 UUID 格式 → 404
+
+**发现的行为**：
+- TaskCreate.title 有 min_length=1 和 max_length=200 验证
+- TaskCreate.priority/difficulty 有正则验证（high/medium/low 和 easy/medium/hard）
+- TaskCreate.owner_level 有 ge=1 和 le=7 验证
+- TaskCreate.estimated_hours 有 ge=0 验证
+- TaskUpdate.status 有正则验证（pending/in_progress/completed/blocked/cancelled）
+- TaskUpdate.progress 有 ge=0 和 le=1 验证
+- DELETE /plans/{plan_id}/versions/{version}/tasks/{task_id} 端点不存在（返回 405）
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestTaskCRUDBoundary 26/26 passed（+26 new tests）
+- ✅ pytest tests/ 922/922 passed（原有896 + 新增26 = 922）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 143（版本 v2.92）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

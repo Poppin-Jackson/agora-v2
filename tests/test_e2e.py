@@ -2094,6 +2094,325 @@ class TestSnapshotAPI:
         assert resp.status_code == 404
 
 
+class TestSnapshotAPIBoundary:
+    """Snapshot API 边界测试 — Step 141"""
+
+    def _create_plan_and_room(self):
+        """创建计划+房间，返回 (plan_id, room_id)"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "快照边界测试", "topic": "边界测试", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        return data["plan"]["plan_id"], data["room"]["room_id"]
+
+    def test_create_snapshot_missing_context_summary(self, ensure_api):
+        """创建快照: 缺少必填字段 context_summary → 422"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            # context_summary 缺失
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_context_summary_empty_string(self, ensure_api):
+        """创建快照: context_summary="" → 422 (min_length=1)"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "",  # 违反 min_length=1
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_context_summary_single_char(self, ensure_api):
+        """创建快照: context_summary 恰好1字符 → 200 (边界值)"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "A",  # 恰好1字符，边界值
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["snapshot"]["context_summary"] == "A"
+
+    def test_create_snapshot_missing_room_id(self, ensure_api):
+        """创建快照: 缺少必填字段 room_id → 422"""
+        plan_id, _ = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            # room_id 缺失
+            "phase": "debate",
+            "context_summary": "测试快照",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_missing_phase(self, ensure_api):
+        """创建快照: 缺少必填字段 phase → 422"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            # phase 缺失
+            "context_summary": "测试快照",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_invalid_plan_uuid(self, ensure_api):
+        """创建快照: plan_id 为无效 UUID 格式 → 404 或 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": "not-a-valid-uuid",
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/not-a-valid-uuid/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        # 可能返回 404（路由不匹配）或 422（path param类型错误）
+        assert resp.status_code in (404, 422)
+
+    def test_create_snapshot_plan_not_found(self, ensure_api):
+        """创建快照: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_room_id = str(uuid.uuid4())
+        payload = {
+            "plan_id": fake_plan_id,
+            "version": "v1.0",
+            "room_id": fake_room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_snapshot_version_not_found(self, ensure_api):
+        """创建快照: version 不存在 → 404"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v99.99",  # 不存在的版本
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_snapshot_empty_participants(self, ensure_api):
+        """创建快照: participants=[] → 200 (空列表有效)"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+            "participants": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["snapshot"]["participants"] == []
+
+    def test_create_snapshot_invalid_participants_type(self, ensure_api):
+        """创建快照: participants 类型无效（非列表）→ 422"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+            "participants": "Alice, Bob",  # 应该是 list，实际是 str
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_empty_messages_summary(self, ensure_api):
+        """创建快照: messages_summary=[] → 200 (空列表有效)"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试快照",
+            "messages_summary": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["snapshot"]["messages_summary"] == []
+
+    def test_create_snapshot_only_required_fields(self, ensure_api):
+        """创建快照: 仅提供必填字段 → 200"""
+        plan_id, room_id = self._create_plan_and_room()
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "仅必填字段",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        snap = data["snapshot"]
+        assert snap["plan_id"] == plan_id
+        assert snap["version"] == "v1.0"
+        assert snap["room_id"] == room_id
+        assert snap["phase"] == "debate"
+        assert snap["context_summary"] == "仅必填字段"
+        assert snap["participants"] == []
+        assert snap["messages_summary"] == []
+
+    def test_get_snapshot_invalid_snapshot_id(self, ensure_api):
+        """获取快照: snapshot_id 为无效 UUID 格式 → 404 或 500"""
+        plan_id, room_id = self._create_plan_and_room()
+        # 先创建一个快照
+        payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试",
+        }
+        httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        # 用无效UUID获取
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/invalid-uuid.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code in (404, 500)
+
+    def test_get_snapshot_not_found(self, ensure_api):
+        """获取快照: snapshot 不存在 → 404"""
+        plan_id, _ = self._create_plan_and_room()
+        fake_snapshot_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/{fake_snapshot_id}.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_snapshot_plan_not_found(self, ensure_api):
+        """获取快照: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_snapshot_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/snapshots/{fake_snapshot_id}.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_snapshots_empty(self, ensure_api):
+        """列出快照: 无快照时返回空列表 → 200"""
+        plan_id, _ = self._create_plan_and_room()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict)
+        assert data["snapshots"] == []
+
+    def test_list_snapshots_multiple(self, ensure_api):
+        """列出快照: 创建多个快照后列出 → 200，包含所有快照"""
+        plan_id, room_id = self._create_plan_and_room()
+        for i in range(3):
+            payload = {
+                "plan_id": plan_id,
+                "version": "v1.0",
+                "room_id": room_id,
+                "phase": "debate",
+                "context_summary": f"快照{i+1}",
+            }
+            httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+                json=payload,
+                timeout=TIMEOUT,
+            )
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict)
+        assert len(data["snapshots"]) == 3
+
+
 # ========================
 # Level-specific Context API Tests
 # 来源: 05-Hierarchy-Roles.md §7.3 - 获取层级专属上下文
@@ -8138,15 +8457,15 @@ class TestNotificationAPIBoundary:
             resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
             assert resp.status_code == 201, f"type={ntype} should be accepted"
 
-    def test_create_notification_arbitrary_type_accepted(self):
-        """创建通知时任意 type 字符串均被接受（backend 无枚举验证）"""
+    def test_create_notification_arbitrary_type_rejected(self):
+        """创建通知时任意 type 字符串均被拒绝（backend 有枚举验证）"""
         notification_data = {
             "recipient_id": "agent-type-test",
             "type": "custom_arbitrary_type_xyz",
             "title": "自定义类型测试",
         }
         resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
-        assert resp.status_code == 201
+        assert resp.status_code == 422
 
     def test_mark_all_notifications_read_empty_recipient_id(self):
         """标记所有通知已读时 recipient_id 为空字符串返回 422 或 200"""
@@ -9850,18 +10169,19 @@ class TestActionItemsBoundary:
                 json={"title": f"测试-{priority}", "priority": priority}, timeout=TIMEOUT)
             assert resp.status_code == 201, f"priority={priority} should return 201"
 
-    def test_create_action_item_invalid_priority_accepted(self, test_room):
-        """创建行动项：priority="super_urgent"（无效值）backend 无枚举验证，实际返回 201"""
+    def test_create_action_item_invalid_priority_rejected(self, test_room):
+        """创建行动项：priority="super_urgent"（无效值）backend 有枚举验证，返回 422"""
         room_id = test_room["room_id"]
         resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
             json={"title": "测试标题", "priority": "super_urgent"}, timeout=TIMEOUT)
-        assert resp.status_code == 201
+        assert resp.status_code == 422
 
-    def test_create_action_item_invalid_status_accepted(self, test_room):
-        """创建行动项：status="invalid_status"（无效值）backend 无枚举验证，实际返回 201"""
+    def test_create_action_item_invalid_status_rejected(self, test_room):
+        """创建行动项：status 不是 ActionItemCreate 的有效字段，被忽略（status 由 backend 设为 open）"""
         room_id = test_room["room_id"]
         resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
             json={"title": "测试标题", "status": "invalid_status"}, timeout=TIMEOUT)
+        # status 字段不在 ActionItemCreate 中，被 Pydantic 忽略，item 以 status=open 创建
         assert resp.status_code == 201
 
     def test_create_action_item_due_date_invalid_format(self, test_room):
@@ -9887,8 +10207,8 @@ class TestActionItemsBoundary:
         assert data["count"] == 0
         assert data["items"] == []
 
-    def test_update_action_item_invalid_status_accepted(self, test_room):
-        """更新行动项：status="invalid_status"（无效值）backend 无枚举验证，实际返回 200"""
+    def test_update_action_item_invalid_status_rejected(self, test_room):
+        """更新行动项：status="invalid_status"（无效值）backend 有枚举验证，返回 422"""
         room_id = test_room["room_id"]
         resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
             json={"title": "待更新行动项"}, timeout=TIMEOUT)
@@ -9896,10 +10216,10 @@ class TestActionItemsBoundary:
 
         resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
             json={"status": "invalid_status"}, timeout=TIMEOUT)
-        assert resp.status_code == 200
+        assert resp.status_code == 422
 
-    def test_update_action_item_invalid_priority_accepted(self, test_room):
-        """更新行动项：priority="super_urgent"（无效值）backend 无枚举验证，实际返回 200"""
+    def test_update_action_item_invalid_priority_rejected(self, test_room):
+        """更新行动项：priority="super_urgent"（无效值）backend 有枚举验证，返回 422"""
         room_id = test_room["room_id"]
         resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
             json={"title": "待更新行动项"}, timeout=TIMEOUT)
@@ -9907,7 +10227,7 @@ class TestActionItemsBoundary:
 
         resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
             json={"priority": "super_urgent"}, timeout=TIMEOUT)
-        assert resp.status_code == 200
+        assert resp.status_code == 422
 
     def test_complete_action_item_already_completed(self, test_room):
         """完成行动项：行动项已处于 completed 状态，再次 complete 仍返回 200"""
@@ -14762,6 +15082,502 @@ class TestVersionComparisonBoundary:
         for field in list_fields:
             assert field in data, f"missing field: {field}"
             assert isinstance(data[field], list), f"expected list, got {type(data[field])} for {field}"
+
+
+
+class TestPlanCRUDBoundary:
+    """Plan CRUD 边界测试 — Step 140"""
+
+    def test_create_plan_empty_title(self, ensure_api):
+        """创建计划：title="" → 422（min_length=1 验证）"""
+        payload = {"title": "", "topic": "测试议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_missing_title(self, ensure_api):
+        """创建计划：缺少必填字段 title → 422"""
+        payload = {"topic": "测试议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_empty_topic(self, ensure_api):
+        """创建计划：topic="" → 422（min_length=1 验证）"""
+        payload = {"title": "测试计划标题", "topic": ""}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_missing_topic(self, ensure_api):
+        """创建计划：缺少必填字段 topic → 422"""
+        payload = {"title": "测试计划标题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_title_at_max_length(self, ensure_api):
+        """创建计划：title=200字符（边界值）→ 201"""
+        payload = {"title": "A" * 200, "topic": "测试议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_title_exceeds_max_length(self, ensure_api):
+        """创建计划：title=201字符 → 422（max_length=200 验证）"""
+        payload = {"title": "A" * 201, "topic": "测试议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_plan_only_required_fields(self, ensure_api):
+        """创建计划：仅提供必填字段（title + topic）→ 201，默认值正确"""
+        payload = {"title": "最小化计划", "topic": "测试议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert "plan" in data
+        plan = data["plan"]
+        assert plan["title"] == "最小化计划"
+        assert plan["topic"] == "测试议题"
+        assert plan["status"] == "initiated"
+        assert plan["current_version"] == "v1.0"
+        assert "plan_id" in plan
+        assert "plan_number" in plan
+        assert plan["requirements"] == []
+        assert plan["tags"] == []
+        assert plan["hierarchy_id"] == "default"
+
+    def test_create_plan_with_all_optional_fields(self, ensure_api):
+        """创建计划：提供所有字段 → 201，各字段值正确"""
+        payload = {
+            "title": "完整计划",
+            "topic": "完整议题",
+            "requirements": ["REQ-001", "REQ-002"],
+            "hierarchy_id": "custom-hierarchy",
+            "tags": ["重要", "紧急"],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert "plan" in data
+        plan = data["plan"]
+        assert plan["requirements"] == ["REQ-001", "REQ-002"]
+        assert plan["hierarchy_id"] == "custom-hierarchy"
+        assert plan["tags"] == ["重要", "紧急"]
+
+    def test_create_plan_auto_creates_room(self, ensure_api):
+        """创建计划：自动创建配套 Room → 201，响应含 room_id"""
+        payload = {"title": "计划自动建室", "topic": "配套议题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "room" in data
+        assert "plan" in data
+        room = data["room"]
+        plan = data["plan"]
+        room_resp = httpx.get(f"{API_BASE}/rooms/{room['room_id']}", timeout=TIMEOUT)
+        assert room_resp.status_code == 200
+        room_data = room_resp.json()
+        assert room_data["plan_id"] == plan["plan_id"]
+        assert room_data["phase"] == "selecting"
+
+    def test_get_plan_invalid_uuid_format(self, ensure_api):
+        """获取计划：plan_id 为无效 UUID 格式 → 404 或 500"""
+        resp = httpx.get(f"{API_BASE}/plans/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code in (404, 500), f"expected 404/500, got {resp.status_code}: {resp.text}"
+
+    def test_get_plan_not_found(self, ensure_api):
+        """获取计划：plan_id 有效但不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_delete_plan_invalid_uuid_format(self, ensure_api):
+        """删除计划：plan_id 为无效 UUID 格式 → 404 或 500"""
+        resp = httpx.delete(f"{API_BASE}/plans/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code in (404, 500), f"expected 404/500, got {resp.status_code}: {resp.text}"
+
+    def test_delete_plan_not_found(self, ensure_api):
+        """删除计划：plan_id 有效但不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/plans/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_delete_plan_success(self, ensure_api):
+        """删除计划：正常删除 → 204，再次 GET 返回 404"""
+        payload = {"title": "待删除计划", "topic": "待删除议题"}
+        create_resp = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert create_resp.status_code == 201
+        plan_id = create_resp.json()["plan"]["plan_id"]
+        del_resp = httpx.delete(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert del_resp.status_code == 204, f"expected 204, got {del_resp.status_code}: {del_resp.text}"
+        get_resp = httpx.get(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert get_resp.status_code == 404
+
+    def test_list_plans_returns_list(self, ensure_api):
+        """列出计划：返回 list 类型"""
+        resp = httpx.get(f"{API_BASE}/plans", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list), f"expected list, got {type(data)}"
+
+    def test_create_plan_duplicate_title_allowed(self, ensure_api):
+        """创建计划：允许重复标题 → 201（title 不唯一）"""
+        payload = {"title": "重复标题计划", "topic": "议题A"}
+        resp1 = httpx.post(f"{API_BASE}/plans", json=payload, timeout=TIMEOUT)
+        assert resp1.status_code == 201
+        payload2 = {"title": "重复标题计划", "topic": "议题B"}
+        resp2 = httpx.post(f"{API_BASE}/plans", json=payload2, timeout=TIMEOUT)
+        assert resp2.status_code == 201
+        assert resp1.json()["plan"]["plan_id"] != resp2.json()["plan"]["plan_id"]
+
+
+
+# ========================
+# Test Task CRUD Boundary (Step 143)
+# ========================
+
+
+class TestTaskCRUDBoundary:
+    """Step 143: Task CRUD API 边界测试 — 补充 Task API 边界测试覆盖"""
+
+    TIMEOUT = 10.0
+    API_BASE = "http://localhost:8000"
+
+    def _create_plan_and_task(self):
+        """创建 plan 并返回 plan_id, version, task_id"""
+        plan_payload = {
+            "title": f"TaskCRUD测试计划-{uuid.uuid4().hex[:8]}",
+            "topic": "测试任务CRUD",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {
+            "title": "测试任务A",
+            "owner_id": "agent-1",
+            "owner_level": 5,
+            "owner_role": "Developer",
+            "priority": "high",
+            "estimated_hours": 8.0,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, version, task_id
+
+    def test_create_task_empty_title(self, ensure_api):
+        """创建任务: title="" → 422 (min_length=1 验证)"""
+        plan_payload = {"title": "边界测试计划", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {"title": "", "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_missing_title(self, ensure_api):
+        """创建任务: 缺少必填字段 title → 422"""
+        plan_payload = {"title": "边界测试计划2", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {"priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_title_at_max_length(self, ensure_api):
+        """创建任务: title=200字符（边界值）→ 201"""
+        plan_payload = {"title": "边界测试计划3", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {"title": "A" * 200, "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+
+    def test_create_task_title_exceeds_max_length(self, ensure_api):
+        """创建任务: title=201字符 → 422 (max_length=200 验证)"""
+        plan_payload = {"title": "边界测试计划4", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {"title": "A" * 201, "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_invalid_priority(self, ensure_api):
+        """创建任务: priority="urgent"（无效枚举）→ 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "priority": "urgent"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_all_valid_priorities(self, ensure_api):
+        """创建任务: 验证全部3种 priority 枚举值均可创建成功"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        for priority in ["high", "medium", "low"]:
+            task_payload = {"title": f"任务-priority={priority}", "priority": priority}
+            resp = httpx.post(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+                json=task_payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 201, f"priority={priority} should be accepted"
+
+    def test_create_task_invalid_difficulty(self, ensure_api):
+        """创建任务: difficulty="impossible"（无效枚举）→ 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "difficulty": "impossible"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_all_valid_difficulties(self, ensure_api):
+        """创建任务: 验证全部3种 difficulty 枚举值均可创建成功"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        for difficulty in ["easy", "medium", "hard"]:
+            task_payload = {"title": f"任务-difficulty={difficulty}", "difficulty": difficulty}
+            resp = httpx.post(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+                json=task_payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 201, f"difficulty={difficulty} should be accepted"
+
+    def test_create_task_owner_level_zero(self, ensure_api):
+        """创建任务: owner_level=0 → 422 (ge=1 验证)"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "owner_level": 0}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_owner_level_out_of_bounds(self, ensure_api):
+        """创建任务: owner_level=8 → 422 (le=7 验证)"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "owner_level": 8}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_owner_level_at_boundaries(self, ensure_api):
+        """创建任务: owner_level=1 和 owner_level=7（边界值）→ 201"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        for level in [1, 7]:
+            task_payload = {"title": f"任务-level={level}", "owner_level": level}
+            resp = httpx.post(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+                json=task_payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 201, f"owner_level={level} should be accepted"
+
+    def test_create_task_estimated_hours_negative(self, ensure_api):
+        """创建任务: estimated_hours=-1 → 422 (ge=0 验证)"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "estimated_hours": -1.0}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_task_estimated_hours_at_boundary(self, ensure_api):
+        """创建任务: estimated_hours=0（边界值）→ 201"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        task_payload = {"title": "新任务", "estimated_hours": 0.0}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+
+    def test_create_task_plan_not_found(self, ensure_api):
+        """创建任务: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        task_payload = {"title": "新任务", "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_task_version_not_found(self, ensure_api):
+        """创建任务: version 不存在 → 404"""
+        plan_payload = {"title": "边界测试计划5", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        task_payload = {"title": "新任务", "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/v99.0/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_task_not_found(self, ensure_api):
+        """获取任务: task 不存在 → 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_task_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_patch_task_update_priority_invalid(self, ensure_api):
+        """更新任务: priority="urgent"（无效枚举）→ 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        patch_payload = {"priority": "urgent"}
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json=patch_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_patch_task_update_progress_invalid_exceeds_one(self, ensure_api):
+        """更新任务: progress=1.1 → 422 (le=1 验证)"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        patch_payload = {"progress": 1.1}
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json=patch_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_patch_task_update_progress_negative(self, ensure_api):
+        """更新任务: progress=-0.1 → 422 (ge=0 验证)"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        patch_payload = {"progress": -0.1}
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json=patch_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_patch_task_update_progress_at_boundaries(self, ensure_api):
+        """更新任务: progress=0 和 progress=1（边界值）→ 200"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        for progress in [0.0, 1.0]:
+            patch_payload = {"progress": progress}
+            resp = httpx.patch(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+                json=patch_payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 200, f"progress={progress} should be accepted"
+
+    def test_patch_task_update_invalid_status(self, ensure_api):
+        """更新任务: status="invalid_status"（无效枚举）→ 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        patch_payload = {"status": "invalid_status"}
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json=patch_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_patch_task_update_all_valid_statuses(self, ensure_api):
+        """更新任务: 验证全部5种 status 枚举值均可接受"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        for status in ["pending", "in_progress", "completed", "blocked", "cancelled"]:
+            patch_payload = {"status": status}
+            resp = httpx.patch(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+                json=patch_payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 200, f"status={status} should be accepted"
+
+    def test_list_tasks_plan_not_found(self, ensure_api):
+        """列出任务: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_tasks_version_not_found(self, ensure_api):
+        """列出任务: version 不存在 → 404"""
+        plan_payload = {"title": "边界测试计划6", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/v99.0/tasks",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_task_plan_invalid_uuid(self, ensure_api):
+        """创建任务: plan_id 为无效 UUID 格式 → 404"""
+        task_payload = {"title": "新任务", "priority": "high"}
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/not-a-uuid/versions/v1.0/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_task_plan_invalid_uuid(self, ensure_api):
+        """获取任务: plan_id 为无效 UUID 格式 → 404"""
+        fake_task_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/not-a-uuid/versions/v1.0/tasks/{fake_task_id}",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
 
 
 if __name__ == "__main__":

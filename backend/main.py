@@ -22,7 +22,7 @@ import json
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect, Query
@@ -337,7 +337,7 @@ class ActionItemCreate(BaseModel):
     description: str = ""
     assignee: Optional[str] = None
     assignee_level: Optional[int] = Field(None, ge=1, le=7)
-    priority: str = "medium"
+    priority: str = Field(default="medium", pattern="^(critical|high|medium|low)$")
     due_date: Optional[datetime] = None
     created_by: Optional[str] = None
 
@@ -348,8 +348,8 @@ class ActionItemUpdate(BaseModel):
     description: Optional[str] = None
     assignee: Optional[str] = None
     assignee_level: Optional[int] = Field(None, ge=1, le=7)
-    status: Optional[str] = None
-    priority: Optional[str] = None
+    status: Optional[str] = Field(default=None, pattern="^(open|in_progress|completed|cancelled)$")
+    priority: Optional[str] = Field(default=None, pattern="^(critical|high|medium|low)$")
     due_date: Optional[datetime] = None
 
 
@@ -7641,8 +7641,18 @@ class NotificationCreate(BaseModel):
     room_id: Optional[str] = None
     task_id: Optional[str] = None
     recipient_id: str
-    recipient_level: Optional[int] = None
-    type: str  # task_assigned | task_completed | task_blocked | problem_reported | problem_resolved | approval_requested | approval_completed | edict_published | escalation_received
+    recipient_level: Optional[int] = Field(default=None, ge=1, le=7)
+    type: Literal[
+        "task_assigned",
+        "task_completed",
+        "task_blocked",
+        "problem_reported",
+        "problem_resolved",
+        "approval_requested",
+        "approval_completed",
+        "edict_published",
+        "escalation_received",
+    ]
     title: str
     message: Optional[str] = None
 
