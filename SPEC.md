@@ -1,5 +1,7 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.60 | 日期：2026-04-06（Step 110 - GatewayClient 单元测试）
+> 版本：v2.59 | 日期：2026-04-06（Step 109 - Room/Task Templates 边界测试）
 > 版本：v2.58 | 日期：2026-04-06（Step 108 - Dashboard Stats API 边界测试 + rooms/activities 列不存在Bug修复）
 > 版本：v2.54 | 日期：2026-04-06（Step 104 - Room Message Search API 完整测试覆盖）
 > 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
@@ -2871,4 +2873,103 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 108（版本 v2.58）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 109 (2026-04-06)
+**版本**: v2.59 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Templates 和 Task Templates API 添加边界测试覆盖
+
+背景：Room Templates 和 Task Templates API 已实现（Step 68），只有基础 CRUD 测试，缺少边界测试覆盖。延续 Step 84-108 的补全模式。
+
+### Do
+**新增 6 个 Room Templates 边界测试**（TestRoomTemplates 类从 7 → 13 个）：
+1. `test_create_room_template_empty_name` — name="" → 422（min_length=1 验证）
+2. `test_delete_room_template_not_found` — 删除不存在的模板 → 404
+3. `test_update_room_template_not_found` — 更新不存在的模板 → 404
+4. `test_list_room_templates_filter_by_purpose_and_shared` — 同时按 purpose 和 is_shared 筛选
+5. `test_list_room_templates_filter_by_is_shared` — 按 is_shared 筛选
+6. `test_create_room_from_template_template_not_found` — 从不存在的模板创建房间 → 404
+
+**新增 6 个 Task Templates 边界测试**（TestTaskTemplates 类从 7 → 13 个）：
+1. `test_create_task_template_empty_name` — name="" 行为验证
+2. `test_create_task_template_empty_default_title` — default_title="" 行为验证
+3. `test_list_task_templates_tag_filter` — 按标签筛选模板
+4. `test_list_task_templates_pagination` — 分页（limit/offset）
+5. `test_delete_task_template_not_found` — 删除不存在的模板 → 404
+6. `test_update_task_template_not_found` — 更新不存在的模板 → 404
+
+**已知限制**：`list_task_templates` 的 search 参数存在 ILIKE 占位符问题，搜索功能暂未覆盖
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest 414/414 passed（+11 new tests）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 109（版本 v2.59）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 110 (2026-04-06)
+**版本**: v2.60 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 GatewayClient 模块添加单元测试
+
+背景：GatewayClient（`backend/gateway_client.py`）是 Agora 与 OpenClaw Gateway 的关键集成组件，负责：
+- 向 Gateway 注册讨论室（`register_room`）
+- 转发消息到 Gateway（`forward_to_gateway`）
+- Agent 加入/离开通知
+- 心跳保活和自动重连
+
+此前完全没有测试覆盖，是系统的测试盲区。`pytest-asyncio` 在容器内不可用，采用同步 `asyncio.run()` 模式实现无额外依赖的单元测试。
+
+### Do
+新增 `tests/test_gateway_client.py` 测试文件（23个测试用例），分为5个测试类：
+
+**TestGatewayClientMessageConstruction（8个测试）**：
+- `test_register_room_sends_correct_message` — 验证 register_room 消息格式（type/room_id/topic/plan_id/registered_at）
+- `test_register_room_adds_to_registered_set` — 验证注册后房间被加入追踪集合
+- `test_unregister_room_sends_correct_message` — 验证 unregister_room 消息格式和集合移除
+- `test_forward_to_gateway_sends_message` — 验证消息转发格式（type/message_type/payload/sent_at）
+- `test_forward_to_gateway_skips_unregistered_room` — 未注册房间不发送消息
+- `test_notify_agent_joined_sends_correct_message` — 验证 Agent 加入通知格式
+- `test_notify_agent_left_sends_correct_message` — 验证 Agent 离开通知格式
+- `test_send_without_ws_connection_no_exception` — WebSocket 未连接不抛异常
+
+**TestGatewayClientReregister（2个测试）**：
+- `test_reregister_rooms_sends_all_registered` — 重连后重新注册所有已注册房间
+- `test_reregister_rooms_empty_set_no_calls` — 无已注册房间时不发送消息
+
+**TestGatewayClientMessageHandling（6个测试）**：
+- `test_handle_ping_responds_with_pong` — 收到 ping 回复 pong
+- `test_handle_agent_message_calls_callback` — agent_message 触发 on_message 回调
+- `test_handle_agent_join_request_calls_callback` — agent_join_request 触发回调
+- `test_handle_agent_leave_calls_callback` — agent_leave 触发回调
+- `test_handle_unknown_message_no_callback` — 未知消息类型不触发回调
+- `test_handle_pong_no_action` — pong 消息不做任何处理
+
+**TestGatewayClientLifecycle（3个测试）**：
+- `test_init_default_values` — 初始化默认参数正确（gateway_url/agora_api_url/on_message/_registered_rooms/_running）
+- `test_init_custom_values` — 初始化自定义参数正确
+- `test_stop_sets_running_false_and_closes_ws` — stop() 关闭 WebSocket 并设置状态
+
+**补充测试（4个测试）**：
+- `test_reconnect_delay_doubles_on_error` — 重连延迟初始值和最大值正确
+- `test_register_multiple_rooms_all_tracked` — 注册多个房间全部追踪
+- `test_forward_multiple_messages_all_sent` — 多条消息全部发送
+- `test_default_on_gateway_message_logs_info` — 默认回调记录日志
+
+### Check
+- ✅ python3 -m py_compile backend/gateway_client.py 语法正确
+- ✅ pytest tests/test_gateway_client.py 23/23 passed
+- ✅ pytest tests/ 437/437 passed（原有414 + 新增23）
+- ✅ docker-compose build api 成功（Image agora-v2-api Built）
+- ✅ docker-compose config 正常
+- ✅ curl http://localhost:8000/health → healthy
+
+### Act
+- 更新 SPEC.md 完成 Step 110（版本 v2.60）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

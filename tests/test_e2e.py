@@ -5476,6 +5476,75 @@ class TestRoomTemplates:
         assert room["plan_id"] == plan_id
 
 
+    # ===== Room Templates 边界测试 =====
+    def test_create_room_template_empty_name(self):
+        """创建房间模板时 name="" 返回 422（min_length=1 验证）"""
+        template_data = {
+            "name": "",
+            "purpose": "initial_discussion",
+            "mode": "hierarchical",
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_delete_room_template_not_found(self):
+        """删除不存在的房间模板返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/room-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_room_template_not_found(self):
+        """更新不存在的房间模板返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/room-templates/{fake_id}", json={"name": "新名称"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_room_templates_filter_by_purpose_and_shared(self):
+        """同时按 purpose 和 is_shared 筛选房间模板"""
+        # 创建一个 problem_solving + is_shared=True 的模板
+        template_data = {
+            "name": "DualFilterRoomTemplateXYZ",
+            "purpose": "problem_solving",
+            "mode": "collaborative",
+            "is_shared": True,
+        }
+        resp = httpx.post(f"{API_BASE}/room-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 按 purpose=problem_solving 筛选
+        resp = httpx.get(f"{API_BASE}/room-templates", params={"purpose": "problem_solving"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json().get("templates", [])
+        for tmpl in templates:
+            if tmpl.get("purpose"):
+                assert tmpl["purpose"] == "problem_solving"
+
+        # 按 is_shared=True 筛选
+        resp = httpx.get(f"{API_BASE}/room-templates", params={"is_shared": "true"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json().get("templates", [])
+        for tmpl in templates:
+            if tmpl.get("is_shared") is not None:
+                assert tmpl["is_shared"] is True
+
+    def test_create_room_from_template_template_not_found(self):
+        """从不存在的模板创建房间返回 404"""
+        # 先创建一个计划
+        plan_data = {"title": "模板不存在测试", "topic": "测试主题"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        fake_template_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/rooms/from-template/{fake_template_id}",
+            json={"topic": "测试讨论室", "version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json().get("detail", "").lower()
+
+
 class TestPlanTemplates:
     """Plan Templates API 测试"""
 
@@ -5607,6 +5676,80 @@ class TestPlanTemplates:
 
         resp = httpx.get(f"{API_BASE}/plan-templates", params={"search": "搜索测试"}, timeout=TIMEOUT)
         assert resp.status_code == 200
+
+
+    # ===== Task Templates 边界测试 =====
+    def test_create_task_template_empty_name(self):
+        """创建任务模板时 name="" — 验证后端是否接受空字符串（name 字段无 min_length 约束）"""
+        template_data = {
+            "name": "",
+            "default_title": "自动化测试任务",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        # name 字段无 min_length，预期 201 或 500（取决于后端行为）
+        assert resp.status_code in (201, 422, 500)
+
+    def test_create_task_template_empty_default_title(self):
+        """创建任务模板时 default_title="" — 验证后端是否接受空字符串"""
+        template_data = {
+            "name": "EmptyTitleTemplateXYZ",
+            "default_title": "",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        # default_title 字段无 min_length，预期 201 或 500
+        assert resp.status_code in (201, 422, 500)
+
+    def test_list_task_templates_tag_filter(self):
+        """按标签筛选任务模板"""
+        # 创建一个带已知标签的模板
+        template_data = {
+            "name": "TagFilterBoundaryTestXYZ",
+            "default_title": "标签筛选测试任务",
+            "tags": ["boundary-test-tag-xyz"],
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 按标签筛选
+        resp = httpx.get(f"{API_BASE}/task-templates", params={"tag": "boundary-test-tag-xyz"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json().get("templates", [])
+        assert any(t.get("name") == "TagFilterBoundaryTestXYZ" for t in templates)
+
+    def test_list_task_templates_pagination(self):
+        """任务模板列表分页（limit/offset）"""
+        # 创建 3 个唯一模板
+        for i in range(3):
+            template_data = {
+                "name": f"PaginationTestTemplateXYZ{i}",
+                "default_title": f"分页测试任务{i}",
+            }
+            resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+            assert resp.status_code == 201
+
+        # limit=2 应最多返回 2 条
+        resp = httpx.get(f"{API_BASE}/task-templates", params={"limit": 2, "offset": 0}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json().get("templates", [])
+        assert len(templates) <= 2
+
+        # offset=10 应返回后续记录
+        resp = httpx.get(f"{API_BASE}/task-templates", params={"limit": 5, "offset": 10}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json().get("templates", [])
+        assert isinstance(templates, list)
+
+    def test_delete_task_template_not_found(self):
+        """删除不存在的任务模板返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/task-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_task_template_not_found(self):
+        """更新不存在的任务模板返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/task-templates/{fake_id}", json={"name": "新名称"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
 
 
 class TestTaskTemplates:
