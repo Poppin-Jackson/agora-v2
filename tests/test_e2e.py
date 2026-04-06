@@ -4638,6 +4638,222 @@ class TestSubTasks:
         assert resp.status_code == 404
 
 
+class TestSubTasksBoundary:
+    """Step 119: SubTasks API 边界测试"""
+
+    def _create_plan_and_task(self):
+        """辅助：创建 plan + task，返回 (plan_id, task_id)"""
+        plan_payload = {
+            "title": "测试-子任务边界",
+            "topic": "子任务边界测试",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        task_payload = {
+            "title": "测试任务",
+            "priority": "medium",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks",
+            json=task_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, task_id
+
+    def test_create_sub_task_empty_title(self):
+        """创建子任务时 title="" 返回 422（min_length=1 验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_sub_task_title_max_length_boundary(self):
+        """title 长度 = 200 字符（边界值）返回 201"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "A" * 200, "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert len(resp.json()["title"]) == 200
+
+    def test_create_sub_task_title_exceeds_max_length(self):
+        """title 长度 = 201 字符返回 422（max_length=200 验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "A" * 201, "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_sub_task_invalid_status(self):
+        """创建子任务时 status="invalid_status" 返回 422（正则验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "测试子任务", "status": "invalid_status"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_sub_task_all_valid_statuses(self):
+        """验证全部 4 种 status 枚举值均可创建"""
+        plan_id, task_id = self._create_plan_and_task()
+        for status in ["pending", "in_progress", "completed", "cancelled"]:
+            payload = {"title": f"子任务-{status}", "status": status}
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+                json=payload, timeout=TIMEOUT
+            )
+            assert resp.status_code == 201, f"status={status} should be accepted"
+            assert resp.json()["status"] == status
+
+    def test_create_sub_task_plan_not_found(self):
+        """创建子任务时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())  # 随便一个不存在的 task_id
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_create_sub_task_task_not_found(self):
+        """创建子任务时 task 不存在 — API 不验证 task_id 存在性，接受任意 task_id（类似 comment/checkpoint）"""
+        plan_id, _ = self._create_plan_and_task()
+        fake_task_id = str(uuid.uuid4())
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{fake_task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        # API 只验证 plan_id 存在，不验证 task_id；返回 201
+        assert resp.status_code == 201
+
+    def test_update_sub_task_empty_title(self):
+        """更新子任务时 title="" 返回 422（min_length=1 验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "有效标题", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        sub_task_id = resp.json()["sub_task_id"]
+
+        update_payload = {"title": ""}
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{sub_task_id}",
+            json=update_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_sub_task_invalid_status(self):
+        """更新子任务时 status="bad_status" 返回 422（正则验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        sub_task_id = resp.json()["sub_task_id"]
+
+        update_payload = {"status": "bad_status"}
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{sub_task_id}",
+            json=update_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_sub_task_progress_negative(self):
+        """更新子任务时 progress=-0.1 返回 422（ge=0 验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        sub_task_id = resp.json()["sub_task_id"]
+
+        update_payload = {"progress": -0.1}
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{sub_task_id}",
+            json=update_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_sub_task_progress_exceeds_one(self):
+        """更新子任务时 progress=1.1 返回 422（le=1 验证）"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        sub_task_id = resp.json()["sub_task_id"]
+
+        update_payload = {"progress": 1.1}
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{sub_task_id}",
+            json=update_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_sub_task_progress_at_boundaries(self):
+        """更新子任务时 progress=0 和 progress=1（边界值）返回 200"""
+        plan_id, task_id = self._create_plan_and_task()
+        payload = {"title": "测试子任务", "status": "pending"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        sub_task_id = resp.json()["sub_task_id"]
+
+        for prog in [0.0, 1.0]:
+            update_payload = {"progress": prog}
+            resp = httpx.patch(
+                f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{sub_task_id}",
+                json=update_payload, timeout=TIMEOUT
+            )
+            assert resp.status_code == 200, f"progress={prog} should be accepted"
+            assert resp.json()["progress"] == prog
+
+    def test_update_sub_task_not_found(self):
+        """更新子任务时子任务不存在返回 404"""
+        plan_id, task_id = self._create_plan_and_task()
+        fake_sub_task_id = str(uuid.uuid4())
+        update_payload = {"title": "新标题"}
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{fake_sub_task_id}",
+            json=update_payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_delete_sub_task_not_found(self):
+        """删除子任务时子任务不存在返回 404"""
+        plan_id, task_id = self._create_plan_and_task()
+        fake_sub_task_id = str(uuid.uuid4())
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/tasks/{task_id}/sub-tasks/{fake_sub_task_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+
 class TestMessageSequence:
     """测试消息序号分配（Step 26: messages.sequence）"""
 
@@ -6990,6 +7206,143 @@ class TestActionItems:
         resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
             json={"assignee_level": 8}, timeout=TIMEOUT)
         assert resp.status_code == 422
+
+
+class TestActionItemsBoundary:
+    """Step 120: Action Items API Boundary Tests"""
+
+    @pytest.fixture
+    def test_room(self):
+        """创建一个测试房间"""
+        plan_data = {
+            "title": "Action Items Boundary Test Plan",
+            "topic": "用于测试行动项边界的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        return data["room"]
+
+    def test_create_action_item_all_valid_priorities(self, test_room):
+        """创建行动项：验证全部 4 种 priority 均可创建（backend无枚举验证）"""
+        room_id = test_room["room_id"]
+        for priority in ["critical", "high", "medium", "low"]:
+            resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+                json={"title": f"测试-{priority}", "priority": priority}, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"priority={priority} should return 201"
+
+    def test_create_action_item_invalid_priority_accepted(self, test_room):
+        """创建行动项：priority="super_urgent"（无效值）backend 无枚举验证，实际返回 201"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "测试标题", "priority": "super_urgent"}, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+    def test_create_action_item_invalid_status_accepted(self, test_room):
+        """创建行动项：status="invalid_status"（无效值）backend 无枚举验证，实际返回 201"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "测试标题", "status": "invalid_status"}, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+    def test_create_action_item_due_date_invalid_format(self, test_room):
+        """创建行动项：due_date 格式无效返回 422"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "测试标题", "due_date": "not-a-date"}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_action_item_long_title_accepted(self, test_room):
+        """创建行动项：title 长度 = 1000 字符（超长）backend 无 max_length 验证，实际返回 201"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "A" * 1000}, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+    def test_list_plan_action_items_nonexistent_plan_returns_empty(self):
+        """列出计划行动项：plan 不存在返回 200 空列表（backend 不验证 plan 存在性）"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/action-items", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+        assert data["items"] == []
+
+    def test_update_action_item_invalid_status_accepted(self, test_room):
+        """更新行动项：status="invalid_status"（无效值）backend 无枚举验证，实际返回 200"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待更新行动项"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
+            json={"status": "invalid_status"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_update_action_item_invalid_priority_accepted(self, test_room):
+        """更新行动项：priority="super_urgent"（无效值）backend 无枚举验证，实际返回 200"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待更新行动项"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
+            json={"priority": "super_urgent"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_complete_action_item_already_completed(self, test_room):
+        """完成行动项：行动项已处于 completed 状态，再次 complete 仍返回 200"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待完成行动项"}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        # 第一次完成
+        resp = httpx.post(f"{API_BASE}/action-items/{item_id}/complete", timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+        # 第二次完成（已完成的项目再次 complete）
+        resp = httpx.post(f"{API_BASE}/action-items/{item_id}/complete", timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_list_room_action_items_with_status_filter(self, test_room):
+        """列出行动项：使用 status 过滤参数（open 状态）"""
+        room_id = test_room["room_id"]
+        # 创建两个行动项（backend 忽略请求中的 status，始终存储为 "open"）
+        httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "待处理项"}, timeout=TIMEOUT).raise_for_status()
+        httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "第二项"}, timeout=TIMEOUT).raise_for_status()
+
+        # 获取 open 状态（两个都是 open）
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/action-items",
+            params={"status": "open"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] >= 2
+        for item in data["items"]:
+            assert item["status"] == "open"
+
+    def test_get_action_item_invalid_uuid(self):
+        """获取行动项：无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/action-items/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_action_item_invalid_uuid(self):
+        """更新行动项：无效 UUID 格式返回 404"""
+        resp = httpx.patch(f"{API_BASE}/action-items/not-a-uuid",
+            json={"title": "新标题"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_complete_action_item_invalid_uuid(self):
+        """完成行动项：无效 UUID 格式返回 404"""
+        resp = httpx.post(f"{API_BASE}/action-items/not-a-uuid/complete", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_delete_action_item_invalid_uuid(self):
+        """删除行动项：无效 UUID 格式返回 404"""
+        resp = httpx.delete(f"{API_BASE}/action-items/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code == 404
 
 
 class TestVersionComparison:

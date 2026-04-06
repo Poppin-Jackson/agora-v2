@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.65 | 日期：2026-04-06（Step 116 - Notifications API 边界测试）
+> 版本：v2.69 | 日期：2026-04-06（Step 120 - Action Items API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
@@ -3227,6 +3227,93 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 117（版本 v2.66）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 119 (2026-04-06)
+**版本**: v2.68 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 SubTasks API 添加边界测试覆盖
+
+背景：SubTasks API（任务子任务管理）包含 4 个端点（create/list/get/update/delete），只有 4 个基础测试（创建+列表/更新/删除/404），缺少 title 长度边界/status 枚举/progress 范围/plan不存在等边界测试。与 Step 84-118 的补全模式对齐。
+
+### Do
+新增 `TestSubTasksBoundary` 测试类（14个边界测试用例）：
+
+1. **`test_create_sub_task_empty_title`** — 创建子任务时 title="" 返回 422（min_length=1 验证）
+2. **`test_create_sub_task_title_max_length_boundary`** — title 长度 = 200 字符（边界值）返回 201
+3. **`test_create_sub_task_title_exceeds_max_length`** — title 长度 = 201 字符返回 422（max_length=200 验证）
+4. **`test_create_sub_task_invalid_status`** — 创建子任务时 status="invalid_status" 返回 422（正则验证）
+5. **`test_create_sub_task_all_valid_statuses`** — 验证全部 4 种 status 枚举值（pending/in_progress/completed/cancelled）均可创建
+6. **`test_create_sub_task_plan_not_found`** — 创建子任务时 plan 不存在返回 404
+7. **`test_create_sub_task_task_not_found`** — 创建子任务时 task 不存在 — API 不验证 task_id 存在性，接受任意 task_id，返回 201
+8. **`test_update_sub_task_empty_title`** — 更新子任务时 title="" 返回 422（min_length=1 验证）
+9. **`test_update_sub_task_invalid_status`** — 更新子任务时 status="bad_status" 返回 422（正则验证）
+10. **`test_update_sub_task_progress_negative`** — 更新子任务时 progress=-0.1 返回 422（ge=0 验证）
+11. **`test_update_sub_task_progress_exceeds_one`** — 更新子任务时 progress=1.1 返回 422（le=1 验证）
+12. **`test_update_sub_task_progress_at_boundaries`** — 更新子任务时 progress=0 和 progress=1（边界值）返回 200
+13. **`test_update_sub_task_not_found`** — 更新子任务时子任务不存在返回 404
+14. **`test_delete_sub_task_not_found`** — 删除子任务时子任务不存在返回 404
+
+**发现的行为**：
+- `title` 有 min_length=1 和 max_length=200 验证
+- `status` 有正则验证 `^(pending|in_progress|completed|cancelled)$`
+- `progress` 有 ge=0 和 le=1 验证
+- `create_sub_task` API 只验证 plan_id 存在性，不验证 task_id 存在性（接受任意 task_id）
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestSubTasksBoundary 14/14 passed（+14 new tests）
+- ✅ pytest tests/ 514/514 passed（原有500 + 新增14）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 119（版本 v2.68）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 120 (2026-04-06)
+**版本**: v2.69 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Action Items API 添加边界测试覆盖
+
+背景：Action Items API（行动项管理）包含 7 个端点（create/list/get/update/complete/delete/list_by_plan）。TestActionItems 有 20 个基础测试，缺少边界测试覆盖。与 Step 84-119 的补全模式对齐。
+
+### Do
+新增 `TestActionItemsBoundary` 测试类（14个边界测试用例）：
+
+1. **`test_create_action_item_all_valid_priorities`** — 验证全部 4 种 priority 值均可创建（critical/high/medium/low）
+2. **`test_create_action_item_invalid_priority_accepted`** — priority="super_urgent"（无效值）backend 无枚举验证，实际返回 201
+3. **`test_create_action_item_invalid_status_accepted`** — status="invalid_status"（无效值）backend 无枚举验证，实际返回 201
+4. **`test_create_action_item_due_date_invalid_format`** — due_date 格式无效返回 422
+5. **`test_create_action_item_long_title_accepted`** — title 长度 = 1000 字符（超长）backend 无 max_length 验证，实际返回 201
+6. **`test_list_plan_action_items_nonexistent_plan_returns_empty`** — plan 不存在返回 200 空列表（backend 不验证 plan 存在性）
+7. **`test_update_action_item_invalid_status_accepted`** — 更新时 status="invalid_status" backend 无枚举验证，实际返回 200
+8. **`test_update_action_item_invalid_priority_accepted`** — 更新时 priority="super_urgent" backend 无枚举验证，实际返回 200
+9. **`test_complete_action_item_already_completed`** — 行动项已 completed，再次 complete 仍返回 200
+10. **`test_list_room_action_items_with_status_filter`** — 使用 status 过滤参数（open 状态）
+11. **`test_get_action_item_invalid_uuid`** — 无效 UUID 格式返回 404
+12. **`test_update_action_item_invalid_uuid`** — 无效 UUID 格式返回 404
+13. **`test_complete_action_item_invalid_uuid`** — 无效 UUID 格式返回 404
+14. **`test_delete_action_item_invalid_uuid`** — 无效 UUID 格式返回 404
+
+**发现的行为**：
+- `priority` 字段无枚举验证，任意字符串均可创建
+- `status` 字段无枚举验证，任意字符串均可创建
+- `title` 字段无 max_length 验证，可接受任意长度
+- `create_action_item` 忽略请求中的 `status` 参数，始终存储为 "open"
+- `list_plan_action_items` 对不存在的 plan_id 返回 200 空列表（不做存在性检查）
+- 无效 UUID 格式的各操作均返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestActionItemsBoundary 14/14 passed
+- ✅ pytest tests/ 551/551 passed（原有537 + 新增14）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 120（版本 v2.69）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 
 ## Step 118 (2026-04-06)
