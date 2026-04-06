@@ -6317,6 +6317,70 @@ class TestActionItems:
         assert data["plan_id"] == plan_id
         assert data["count"] >= 1
 
+    def test_create_action_item_empty_title(self, test_room):
+        """创建行动项：title为空字符串返回422"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": ""}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_action_item_assignee_level_zero(self, test_room):
+        """创建行动项：assignee_level=0返回422（ge=1验证）"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "有效标题", "assignee_level": 0}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_action_item_assignee_level_out_of_bounds(self, test_room):
+        """创建行动项：assignee_level=8返回422（le=7验证）"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "有效标题", "assignee_level": 8}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_action_item_room_not_found(self):
+        """创建行动项：房间不存在返回404"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.post(f"{API_BASE}/rooms/{fake_room_id}/action-items",
+            json={"title": "测试标题"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_action_item_not_found(self):
+        """更新行动项：行动项不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/action-items/{fake_id}",
+            json={"title": "新标题"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_complete_action_item_not_found(self):
+        """完成行动项：行动项不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(f"{API_BASE}/action-items/{fake_id}/complete", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_delete_action_item_not_found(self):
+        """删除行动项：行动项不存在时返回204（DB DELETE不报错，found始终为True）"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/action-items/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+
+    def test_list_room_action_items_room_not_found(self):
+        """列出行动项：房间不存在返回404"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_room_id}/action-items", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_action_item_assignee_level_out_of_bounds(self, test_room):
+        """更新行动项：assignee_level=8返回422（le=7验证）"""
+        room_id = test_room["room_id"]
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items",
+            json={"title": "测试标题", "assignee_level": 3}, timeout=TIMEOUT)
+        item_id = resp.json()["action_item_id"]
+
+        resp = httpx.patch(f"{API_BASE}/action-items/{item_id}",
+            json={"assignee_level": 8}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
 
 class TestVersionComparison:
     """Step 71: Plan Version Comparison API Tests"""

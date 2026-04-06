@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.60 | 日期：2026-04-06（Step 110 - GatewayClient 单元测试）
+> 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
 > 版本：v2.59 | 日期：2026-04-06（Step 109 - Room/Task Templates 边界测试）
 > 版本：v2.58 | 日期：2026-04-06（Step 108 - Dashboard Stats API 边界测试 + rooms/activities 列不存在Bug修复）
 > 版本：v2.54 | 日期：2026-04-06（Step 104 - Room Message Search API 完整测试覆盖）
@@ -2972,4 +2972,37 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 110（版本 v2.60）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 111 (2026-04-06)
+**版本**: v2.61 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Action Items API 添加边界测试覆盖
+
+背景：Action Items API（行动项管理）允许在讨论室和计划中创建/管理行动项，是任务执行追踪的核心功能。包含 5 个端点（create/list/get/update/complete/delete），只有 10 个基础测试，缺少空标题/层级边界值/404 等边界测试。与 Step 84-110 的补全模式对齐。
+
+### Do
+新增 9 个 Action Items 边界测试用例（TestActionItems 类从 9 → 18 个）：
+
+1. **`test_create_action_item_empty_title`** — 创建行动项时 title="" 返回 422（min_length=1 验证）
+2. **`test_create_action_item_assignee_level_zero`** — 创建行动项时 assignee_level=0 返回 422（ge=1 验证）
+3. **`test_create_action_item_assignee_level_out_of_bounds`** — 创建行动项时 assignee_level=8 返回 422（le=7 验证）
+4. **`test_create_action_item_room_not_found`** — 创建行动项时房间不存在返回 404
+5. **`test_update_action_item_not_found`** — 更新行动项时行动项不存在返回 404
+6. **`test_complete_action_item_not_found`** — 完成行动项时行动项不存在返回 404
+7. **`test_delete_action_item_not_found`** — 删除行动项时行动项不存在返回 204（DB DELETE 不报错，found 始终为 True）
+8. **`test_list_room_action_items_room_not_found`** — 列出行动项时房间不存在返回 404
+9. **`test_update_action_item_assignee_level_out_of_bounds`** — 更新行动项时 assignee_level=8 返回 422（le=7 验证）
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestActionItems 18/18 passed（+9 new tests）
+- ✅ pytest tests/ 446/446 passed（原有437 + 新增9）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ curl http://localhost:8000/health → healthy
+
+### Act
+- 更新 SPEC.md 完成 Step 111（版本 v2.61）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
