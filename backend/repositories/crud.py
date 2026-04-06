@@ -2966,18 +2966,18 @@ async def get_dashboard_stats() -> Dict[str, Any]:
 
             # 最近房间（最近5个）
             recent_rooms = await conn.fetch("""
-                SELECT room_id, room_number, topic, phase, plan_id, status, created_at, updated_at
+                SELECT room_id, room_number, topic, phase, plan_id, created_at
                 FROM rooms
-                ORDER BY updated_at DESC
+                ORDER BY created_at DESC
                 LIMIT 5
             """)
 
             # 最近活动（最近10个）
             recent_activities = await conn.fetch("""
-                SELECT activity_id, action_type, description, actor_id, actor_name,
-                       plan_id, room_id, created_at
+                SELECT activity_id, action_type, actor_id, actor_name,
+                       plan_id, room_id, occurred_at
                 FROM activities
-                ORDER BY created_at DESC
+                ORDER BY occurred_at DESC
                 LIMIT 10
             """)
 

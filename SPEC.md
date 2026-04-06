@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.56 | 日期：2026-04-06（Step 106 - Phase Timeline API 边界测试覆盖 + 404修复）
+> 版本：v2.58 | 日期：2026-04-06（Step 108 - Dashboard Stats API 边界测试 + rooms/activities 列不存在Bug修复）
 > 版本：v2.54 | 日期：2026-04-06（Step 104 - Room Message Search API 完整测试覆盖）
 > 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
 > 版本：v2.50 | 日期：2026-04-06（Step 100 - Requirements API 边界测试覆盖）
@@ -2832,4 +2832,43 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 107（版本 v2.57）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 108 (2026-04-06)
+**版本**: v2.58 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Dashboard Stats API 添加边界测试覆盖 + 修复 `get_dashboard_stats` 数据库列不存在Bug
+
+背景：Dashboard Stats API（`GET /dashboard/stats`）只有 1 个结构测试，缺少边界测试覆盖。同时 `get_dashboard_stats` 函数存在严重 Bug：查询 `rooms` 表时使用不存在的 `status` 和 `updated_at` 列，导致整个函数异常返回全零数据。
+
+### Do
+**Bug Fix 1**：`recent_rooms` SQL 查询（crud.py）
+- 问题：`rooms` 表无 `status` 和 `updated_at` 列，导致查询失败
+- 修复：移除 `status, updated_at`，改用 `created_at` 排序
+
+**Bug Fix 2**：`recent_activities` SQL 查询（crud.py）
+- 问题：`activities` 表无 `description` 和 `created_at` 列（有 `details` 和 `occurred_at`）
+- 修复：改为查询 `activity_id, action_type, actor_id, actor_name, plan_id, room_id, occurred_at`
+
+**新增 8 个 Dashboard Stats 边界测试**（TestDashboard 类从 1 → 9 个）：
+1. `test_dashboard_stats_returns_valid_counts` — 验证所有字段存在、类型正确、非负数
+2. `test_dashboard_stats_creates_plan_increments_total` — 创建计划后 total_plans 增 1，recent_plans 包含新计划
+3. `test_dashboard_stats_creates_room_updates_total` — 创建计划后 total_rooms 增加，recent_rooms 正确记录
+4. `test_dashboard_stats_recent_plans_limit` — recent_plans 最多返回 5 条
+5. `test_dashboard_stats_recent_rooms_limit` — recent_rooms 最多返回 5 条
+6. `test_dashboard_stats_rooms_by_phase_correct` — rooms_by_phase 正确反映各阶段房间数量
+7. `test_dashboard_stats_with_action_item` — 创建 action_item 后 pending_action_items 计数增加
+8. `test_dashboard_stats_recent_activities_limit` — recent_activities 最多返回 10 条
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestDashboard 9/9 passed（+8 new tests）
+- ✅ pytest 403/403 passed（+8 new tests）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功（修复 Bug 的镜像重建）
+- ✅ API dashboard/stats 返回正确数据（total_plans=33607, total_rooms=33674）
+
+### Act
+- 更新 SPEC.md 完成 Step 108（版本 v2.58）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

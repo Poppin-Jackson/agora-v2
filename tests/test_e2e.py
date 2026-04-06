@@ -181,6 +181,162 @@ class TestDashboard:
         assert isinstance(body["pending_action_items"], int)
         assert isinstance(body["pending_approvals"], int)
 
+    def test_dashboard_stats_returns_valid_counts(self, ensure_api):
+        """Dashboard返回有效的统计数据（不依赖空数据库假设）"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        # 验证字段存在且类型正确
+        assert "total_plans" in body
+        assert "active_plans" in body
+        assert "total_rooms" in body
+        assert "rooms_by_phase" in body
+        assert "recent_plans" in body
+        assert "recent_rooms" in body
+        assert "recent_activities" in body
+        assert "pending_action_items" in body
+        assert "pending_approvals" in body
+        # 数字字段应为非负整数
+        assert body["total_plans"] >= 0
+        assert body["active_plans"] >= 0
+        assert body["total_rooms"] >= 0
+        assert body["pending_action_items"] >= 0
+        assert body["pending_approvals"] >= 0
+        # 列表字段应为列表
+        assert isinstance(body["recent_plans"], list)
+        assert isinstance(body["recent_rooms"], list)
+        assert isinstance(body["recent_activities"], list)
+        # rooms_by_phase 的值为房间数量（整数）
+        for phase, count in body["rooms_by_phase"].items():
+            assert isinstance(phase, str)
+            assert isinstance(count, int)
+            assert count >= 0
+
+    def test_dashboard_stats_creates_plan_increments_total(self, ensure_api):
+        """创建plan后，total_plans增加，recent_plans包含新计划"""
+        # 获取创建前的总数
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        before_total = resp.json()["total_plans"]
+
+        # 创建新计划
+        plan_payload = {
+            "title": "Dashboard测试计划1",
+            "topic": "测试仪表盘统计",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id_1 = resp.json()["plan"]["plan_id"]
+
+        # 验证总数增加
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_plans"] == before_total + 1
+        # recent_plans应包含刚创建的计划
+        recent_plan_ids = [p["plan_id"] for p in body["recent_plans"]]
+        assert plan_id_1 in recent_plan_ids
+
+    def test_dashboard_stats_creates_room_updates_total(self, ensure_api):
+        """创建plan后房间数增加，recent_rooms正确记录"""
+        plan_payload = {"title": "Dashboard房间测试", "topic": "房间统计测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_rooms"] >= 1
+        # recent_rooms应有记录
+        assert len(body["recent_rooms"]) >= 1
+
+    def test_dashboard_stats_recent_plans_limit(self, ensure_api):
+        """recent_plans最多返回5条记录"""
+        # 创建6个计划，验证只返回最近的5个
+        for i in range(6):
+            plan_payload = {
+                "title": f"Dashboard极限测试计划{i+1}",
+                "topic": f"测试话题{i+1}",
+            }
+            resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["recent_plans"]) <= 5
+
+    def test_dashboard_stats_recent_rooms_limit(self, ensure_api):
+        """recent_rooms最多返回5条记录"""
+        # 创建多个计划，每个带一个房间
+        for i in range(6):
+            plan_payload = {
+                "title": f"Dashboard房间极限测试{i+1}",
+                "topic": f"房间测试话题{i+1}",
+            }
+            resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["recent_rooms"]) <= 5
+
+    def test_dashboard_stats_rooms_by_phase_correct(self, ensure_api):
+        """rooms_by_phase正确反映各阶段的房间数量"""
+        # 创建一个计划（默认SELECTING阶段）
+        plan_payload = {"title": "Dashboard阶段测试", "topic": "阶段统计测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        rooms_by_phase = body.get("rooms_by_phase", {})
+        # 默认房间应该在SELECTING阶段
+        assert "selecting" in rooms_by_phase
+        assert rooms_by_phase["selecting"] >= 1
+
+    def test_dashboard_stats_with_action_item(self, ensure_api):
+        """创建action_item后，pending_action_items计数正确"""
+        # 创建一个计划+房间
+        plan_payload = {"title": "Dashboard行动项测试", "topic": "行动项统计测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 创建一个open的行动项
+        action_data = {
+            "title": "Dashboard测试行动项",
+            "assignee": "测试人",
+            "assignee_level": 3,
+            "priority": "high",
+            "created_by": "测试创建者",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/action-items", json=action_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pending_action_items"] >= 1
+
+    def test_dashboard_stats_recent_activities_limit(self, ensure_api):
+        """recent_activities最多返回10条记录"""
+        # 创建多个计划产生活动记录
+        for i in range(12):
+            plan_payload = {
+                "title": f"Dashboard活动极限测试{i+1}",
+                "topic": f"活动测试话题{i+1}",
+            }
+            resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+            assert resp.status_code == 201
+
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["recent_activities"]) <= 10
+
 
 class TestPlanCreation:
     """Plan创建 + 自动Room创建"""
