@@ -5391,7 +5391,7 @@ async def update_escalation(escalation_id: str, data: EscalationActionRequest):
 
 
 @app.get("/rooms/{room_id}/escalation-path")
-async def get_escalation_path(room_id: str, from_level: int, mode: EscalationMode = EscalationMode.LEVEL_BY_LEVEL):
+async def get_escalation_path(room_id: str, from_level: int = Query(..., ge=1, le=7), mode: EscalationMode = EscalationMode.LEVEL_BY_LEVEL):
     """
     计算指定汇报模式下的升级路径（预览）
     来源: 05-Hierarchy-Roles.md §4.2 - 对话模式

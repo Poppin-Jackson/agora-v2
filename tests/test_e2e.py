@@ -2067,6 +2067,222 @@ class TestEscalation:
         assert data["mode"] == "cross_level"
         assert data["escalation_path"] == [1, 3, 5, 7]
 
+    def test_escalate_same_level(self):
+        """测试 from_level == to_level 时返回 400"""
+        plan_payload = {
+            "title": "测试-同层级升级",
+            "topic": "测试同层级",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 同层级升级应该返回 400
+        escalation_payload = {
+            "from_level": 5,
+            "to_level": 5,  # 同层级，应该被拒绝
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"应该返回 400，实际: {resp.status_code}"
+
+    def test_escalate_invalid_mode(self):
+        """测试 invalid mode value 返回 422"""
+        plan_payload = {
+            "title": "测试-无效模式",
+            "topic": "测试无效模式",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 无效的 mode 字符串应该返回 422
+        escalation_payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "invalid_mode",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"应该返回 422，实际: {resp.status_code}"
+
+    def test_escalate_level_out_of_bounds(self):
+        """测试 level 超出 L1-L7 范围时返回 422"""
+        plan_payload = {
+            "title": "测试-层级越界",
+            "topic": "测试层级越界",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # from_level = 0 (小于 L1)
+        escalation_payload = {
+            "from_level": 0,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"from_level=0 应该返回 422，实际: {resp.status_code}"
+
+        # to_level = 8 (大于 L7)
+        escalation_payload = {
+            "from_level": 1,
+            "to_level": 8,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"to_level=8 应该返回 422，实际: {resp.status_code}"
+
+    def test_get_escalation_not_found(self):
+        """测试 GET 不存在的 escalation 返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/escalations/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"应该返回 404，实际: {resp.status_code}"
+
+    def test_get_plan_escalations_empty(self):
+        """测试 plan 没有 escalation 时返回空列表"""
+        plan_payload = {
+            "title": "测试-无升级计划",
+            "topic": "无升级计划",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/escalations", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert data["total"] == 0
+        assert data["escalations"] == []
+
+    def test_update_escalation_not_found(self):
+        """测试 PATCH 不存在的 escalation 返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/escalations/{fake_id}",
+            json={"action": "acknowledge", "actor_id": "test", "actor_name": "测试"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"应该返回 404，实际: {resp.status_code}"
+
+    def test_update_escalation_invalid_action(self):
+        """测试 PATCH escalation 时无效 action 返回 400"""
+        plan_payload = {
+            "title": "测试-无效action",
+            "topic": "测试action",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 创建 escalation
+        escalation_payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试action"},
+        }
+        create_resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert create_resp.status_code == 201
+        escalation_id = create_resp.json()["escalation_id"]
+
+        # 无效的 action
+        resp = httpx.patch(
+            f"{API_BASE}/escalations/{escalation_id}",
+            json={"action": "invalid_action", "actor_id": "test", "actor_name": "测试"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400, f"无效 action 应该返回 400，实际: {resp.status_code}"
+
+    def test_get_escalation_path_invalid_level(self):
+        """测试 escalation-path 的 level 超出范围返回 422"""
+        plan_payload = {
+            "title": "测试-路径越界",
+            "topic": "测试路径",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # from_level = 0
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/escalation-path",
+            params={"from_level": 0, "mode": "level_by_level"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"from_level=0 应该返回 422，实际: {resp.status_code}"
+
+        # from_level = 8
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/escalation-path",
+            params={"from_level": 8, "mode": "level_by_level"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"from_level=8 应该返回 422，实际: {resp.status_code}"
+
+    def test_escalate_l1_emergency_lowest_level(self):
+        """测试紧急汇报从 L1（最低层级）正常升到 L7"""
+        plan_payload = {
+            "title": "测试-紧急汇报L1",
+            "topic": "紧急汇报测试",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        escalation_payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "emergency",
+            "content": {"proposal": "紧急情况", "escalated_by": "L1_agent"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"L1→L7紧急汇报应该成功: {resp.text}"
+        data = resp.json()
+        assert data["from_level"] == 1
+        assert data["to_level"] == 7
+        assert data["mode"] == "emergency"
+        assert data["escalation_path"] == [1, 5, 7]
+
+    def test_escalate_cross_level_from_high_level(self):
+        """测试跨级汇报从较高层级（L5）起始"""
+        plan_payload = {
+            "title": "测试-跨级汇报L5",
+            "topic": "跨级汇报测试",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # L5 → L7 跨级汇报（L5是奇数，直接到L7）
+        escalation_payload = {
+            "from_level": 5,
+            "to_level": 7,
+            "mode": "cross_level",
+            "content": {"proposal": "跨级汇报", "escalated_by": "L5_agent"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=escalation_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"L5→L7跨级汇报应该成功: {resp.text}"
+        data = resp.json()
+        assert data["from_level"] == 5
+        assert data["to_level"] == 7
+        assert data["mode"] == "cross_level"
+        # 跨级模式从L5: 5→7（因为5本身就是奇数，直接跳到7）
+        assert data["escalation_path"] == [5, 7]
+
 
 # ========================
 # Task Comments & Checkpoints (Step 21)
@@ -5971,6 +6187,68 @@ class TestDecisions:
         assert "decisions" in data
         decision_ids = [d["decision_id"] for d in data["decisions"]]
         assert decision_id in decision_ids
+
+    def test_create_decision_empty_title(self, room_info):
+        """创建决策时 title 为空字符串返回 422"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+        payload = {"title": "", "decision_text": "这是决策内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422, f"空 title 应返回 422，实际: {resp.status_code}"
+
+    def test_create_decision_empty_decision_text(self, room_info):
+        """创建决策时 decision_text 为空字符串返回 422"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+        payload = {"title": "有效标题", "decision_text": ""}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422, f"空 decision_text 应返回 422，实际: {resp.status_code}"
+
+    def test_create_decision_plan_not_found(self):
+        """创建决策时计划不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        version = "v1.0"
+        payload = {"title": "测试决策", "decision_text": "测试内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/{version}/decisions",
+            json=payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404, f"计划不存在应返回 404，实际: {resp.status_code}"
+
+    def test_create_decision_version_not_found(self, room_info):
+        """创建决策时版本不存在返回 404"""
+        plan_id = room_info["plan_id"]
+        fake_version = "v99.99"
+        payload = {"title": "测试决策", "decision_text": "测试内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{fake_version}/decisions",
+            json=payload,
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404, f"版本不存在应返回 404，实际: {resp.status_code}"
+
+    def test_list_decisions_empty(self, room_info):
+        """列出决策时无决策返回空列表"""
+        plan_id = room_info["plan_id"]
+        version = "v1.0"
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "decisions" in data
+        assert isinstance(data["decisions"], list)
 
 
 class TestPlanSearch:

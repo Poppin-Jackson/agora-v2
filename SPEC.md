@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.44 | 日期：2026-04-06（Step 93 - Approval API 边界测试覆盖）
+> 版本：v2.46 | 日期：2026-04-06（Step 95 - Escalation API 边界测试覆盖）
 > 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
 > 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
 > 版本：v2.36 | 日期：2026-04-05（Step 84 - Stakeholders API 边界测试覆盖）
@@ -2230,6 +2230,105 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 92（版本 v2.43）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 94 (2026-04-06)
+**版本**: v2.45 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Decisions API 添加边界测试覆盖
+
+背景：Decisions API（决议/决策管理）是讨论室决策环节的核心功能，有6个基础测试（创建/列表/获取/更新/不存在/plan.json集成），缺少边界测试覆盖。与 Step 84-93 的补全模式对齐。
+
+### Do
+新增 5 个 Decisions 边界测试用例（TestDecisions 类从 6 → 11 个）：
+
+1. **`test_create_decision_empty_title`** — 创建决策时 title 为空字符串返回 422
+   - POST /plans/{plan_id}/versions/{version}/decisions
+   - payload: {"title": "", "decision_text": "内容"}
+   - 验证返回 422（min_length=1 验证）
+
+2. **`test_create_decision_empty_decision_text`** — 创建决策时 decision_text 为空字符串返回 422
+   - payload: {"title": "有效标题", "decision_text": ""}
+   - 验证返回 422（min_length=1 验证）
+
+3. **`test_create_decision_plan_not_found`** — 计划不存在返回 404
+   - 使用假 UUID 作为 plan_id
+   - 验证返回 404 + Plan not found
+
+4. **`test_create_decision_version_not_found`** — 版本不存在返回 404
+   - 使用 "v99.99" 作为不存在的版本
+   - 验证返回 404 + Version not found
+
+5. **`test_list_decisions_empty`** — 无决策时返回空列表
+   - 对新计划/版本列出决策
+   - 验证返回 200 + {"decisions": []}
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestDecisions 11/11 passed
+- ✅ pytest 284/284 passed（+5 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 94（版本 v2.45）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 95 (2026-04-06)
+**版本**: v2.46 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Escalation API 添加边界测试覆盖
+
+背景：Escalation API（层级汇报/升级）包含9大端点（escalate/get_room_escalations/get_plan_escalations/get_escalation/update_escalation/escalation-path），是讨论室升级决策的核心功能。原有 TestEscalation 类已有 11 个基础测试，缺少同层级升级/无效模式/越界层级/404/空列表等边界场景测试。
+
+### Do
+新增 10 个 Escalation 边界测试用例（TestEscalation 类从 10 → 20 个）：
+
+1. **`test_escalate_same_level`** — from_level == to_level 时返回 400
+   - 验证 `from_level=5, to_level=5` → 400 + invalid_escalation
+
+2. **`test_escalate_invalid_mode`** — 无效 mode value 返回 422
+   - 验证 `mode="invalid_mode"` → 422（FastAPI Enum 验证）
+
+3. **`test_escalate_level_out_of_bounds`** — level 超出 L1-L7 范围返回 422
+   - `from_level=0` → 422，`to_level=8` → 422（`ge=1, le=7` 验证）
+
+4. **`test_get_escalation_not_found`** — GET 不存在的 escalation 返回 404
+   - 使用假 UUID GET → 404
+
+5. **`test_get_plan_escalations_empty`** — plan 无 escalation 时返回空列表
+   - 新建计划无 escalation → total=0, escalations=[]
+
+6. **`test_update_escalation_not_found`** — PATCH 不存在的 escalation 返回 404
+   - 使用假 UUID PATCH → 404
+
+7. **`test_update_escalation_invalid_action`** — 无效 action 返回 400
+   - `action="invalid_action"` → 400
+
+8. **`test_get_escalation_path_invalid_level`** — escalation-path 的 level 越界返回 422
+   - `from_level=0` → 422，`from_level=8` → 422
+   - **Backend Fix**：`get_escalation_path` 端点 `from_level` 参数从 `int` 改为 `Query(..., ge=1, le=7)`
+
+9. **`test_escalate_l1_emergency_lowest_level`** — 紧急汇报从 L1 正常升到 L7
+   - `from_level=1, to_level=7, mode=emergency` → 201，路径 [1, 5, 7]
+
+10. **`test_escalate_cross_level_from_high_level`** — 跨级汇报从 L5 起始
+    - `from_level=5, to_level=7, mode=cross_level` → 201，路径 [5, 7]
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestEscalation 20/20 passed
+- ✅ pytest 294/294 passed（+10 new tests）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 95（版本 v2.46）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
 
 ## Step 93 (2026-04-06)
 **版本**: v2.44 | **迭代周期**: 13分钟自动触发
