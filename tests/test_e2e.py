@@ -13652,5 +13652,136 @@ class TestTaskCheckpointsBoundary:
         assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
 
 
+# ============================================================
+# TestVersionComparisonBoundary — Version Comparison API 边界测试
+# Step 135: Version Comparison API 边界测试
+# ============================================================
+
+class TestVersionComparisonBoundary:
+    """Step 135: Version Comparison API 边界测试"""
+
+    def _create_plan(self):
+        """创建一个测试计划"""
+        plan_data = {
+            "title": "Version Compare Boundary Test Plan",
+            "topic": "用于测试版本比较边界的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        return resp.json()["plan"]
+
+    def test_compare_plan_not_found(self):
+        """比较版本：plan UUID 有效但不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_id}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_compare_invalid_plan_uuid(self):
+        """比较版本：plan_id 为无效 UUID 格式 → 404/422"""
+        resp = httpx.get(
+            f"{API_BASE}/plans/not-a-uuid/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code in (404, 422), f"expected 404/422, got {resp.status_code}: {resp.text}"
+
+    def test_compare_missing_from_version(self):
+        """比较版本：缺少 from_version 参数 → 422"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_compare_missing_to_version(self):
+        """比较版本：缺少 to_version 参数 → 422"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_compare_both_versions_nonexistent(self):
+        """比较版本：两个版本都不存在 → 400"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v99.0", "to_version": "v98.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+
+    def test_compare_response_is_object(self):
+        """比较版本：响应是 dict 而非 array"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict), f"expected dict, got {type(data)}"
+
+    def test_compare_summary_all_numeric_fields_non_negative(self):
+        """比较版本：summary 中所有计数字段为非负数"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        summary = data.get("summary", {})
+        for key in ["tasks", "requirements", "decisions", "edicts", "issues", "risks"]:
+            assert key in summary, f"summary missing key: {key}"
+            for sub_key in ["added", "removed", "modified"]:
+                if sub_key in summary[key]:
+                    assert summary[key][sub_key] >= 0, f"summary[{key}][{sub_key}] is negative: {summary[key][sub_key]}"
+
+    def test_compare_plan_id_matches_request(self):
+        """比较版本：响应 plan_id 与请求 plan_id 一致"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan["plan_id"], f"expected {plan['plan_id']}, got {data.get('plan_id')}"
+
+    def test_compare_all_lists_are_arrays(self):
+        """比较版本：所有列表字段均为数组"""
+        plan = self._create_plan()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan['plan_id']}/versions/compare",
+            params={"from_version": "v1.0", "to_version": "v1.0"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        list_fields = [
+            "tasks_added", "tasks_removed", "tasks_modified",
+            "requirements_added", "requirements_removed",
+            "decisions_added", "decisions_removed",
+            "edicts_added", "edicts_removed",
+            "issues_added", "issues_removed",
+            "risks_added", "risks_removed",
+        ]
+        for field in list_fields:
+            assert field in data, f"missing field: {field}"
+            assert isinstance(data[field], list), f"expected list, got {type(data[field])} for {field}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

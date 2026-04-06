@@ -3956,3 +3956,35 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 134（版本 v2.83）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 135 (2026-04-06)
+**版本**: v2.84 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Version Comparison API 添加边界测试覆盖
+
+背景：Version Comparison API（`GET /plans/{plan_id}/versions/compare?from_version=...&to_version=...`）比较两个计划版本的差异（tasks/decisions/requirements/edicts/issues/risks）。`TestVersionComparison` 仅有 6 个基础测试（比较不存在版本/相同版本/新增任务），缺少 plan UUID 格式/plan 不存在/缺少参数/响应结构/数据类型等边界测试。与 Step 84-134 的补全模式对齐。
+
+### Do
+新增 `TestVersionComparisonBoundary` 测试类（9个边界测试用例）：
+
+1. **`test_compare_plan_not_found`** — plan UUID 有效但不存在 → 404
+2. **`test_compare_invalid_plan_uuid`** — plan_id 为无效 UUID 格式 → 404/422
+3. **`test_compare_missing_from_version`** — 缺少 from_version 参数 → 422（FastAPI Query required 验证）
+4. **`test_compare_missing_to_version`** — 缺少 to_version 参数 → 422（FastAPI Query required 验证）
+5. **`test_compare_both_versions_nonexistent`** — 两个版本都不存在 → 400
+6. **`test_compare_response_is_object`** — 验证响应是 dict 而非 array
+7. **`test_compare_summary_all_numeric_fields_non_negative`** — summary 中所有计数字段为非负数
+8. **`test_compare_plan_id_matches_request`** — 响应 plan_id 与请求 plan_id 一致
+9. **`test_compare_all_lists_are_arrays`** — 所有列表字段（tasks_added/tasks_removed/decisions_added 等 13 个）均为数组
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestVersionComparisonBoundary 9/9 passed（+9 new tests）
+- ✅ pytest tests/ 758/758 passed（原有749 + 新增9 = 758）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 135（版本 v2.84）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
