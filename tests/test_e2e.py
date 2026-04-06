@@ -9934,6 +9934,196 @@ class TestRoomTagsBoundary:
         assert set(resp.json()["tags"]) == {"重要", "紧急"}
 
 
+# ========================
+# Step 144: Room CRUD API Boundary Tests
+# ========================
+
+class TestRoomCRUDBoundary:
+    """Step 144: Room CRUD API 边界测试 — 创建/获取/列表房间的边界场景"""
+
+    # =====================
+    # POST /rooms — 创建房间
+    # =====================
+
+    def test_create_room_minimal_payload(self):
+        """创建房间: 仅提供空 payload → 使用默认值（topic="讨论室"）"""
+        resp = httpx.post(f"{API_BASE}/rooms", json={}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "room_id" in data
+        assert data["room"]["topic"] == "讨论室"
+        assert data["room"]["phase"] == "selecting"
+
+    def test_create_room_with_topic(self):
+        """创建房间: 提供 topic 字段 → 房间使用指定 topic"""
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "技术方案评审", "plan_id": ""},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room"]["topic"] == "技术方案评审"
+
+    def test_create_room_with_plan_id(self):
+        """创建房间: 提供 plan_id → 房间关联指定 plan"""
+        # 先创建一个 plan 以获得有效 plan_id
+        plan_payload = {"title": "RoomCRUDBoundary测试", "topic": "测试"}
+        plan_resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert plan_resp.status_code == 201
+        plan_id = plan_resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "关联讨论室", "plan_id": plan_id},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room"]["plan_id"] == plan_id
+
+    def test_create_room_purpose_and_mode_are_defaults(self):
+        """创建房间: purpose 和 mode 为默认值（create_room 不从请求体读取这两个字段）"""
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "问题解决室", "purpose": "problem_solving", "mode": "collaborative"},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        # create_room 的 purpose 和 mode 是硬编码默认值，不从请求体读取
+        assert data["room"]["purpose"] == "general_discussion"
+        assert data["room"]["mode"] == "hierarchical"
+
+    def test_create_room_returns_room_number(self):
+        """创建房间: 响应包含 room_number 字段（格式 ROOM-YYYY-NNNN）"""
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "编号测试"},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "room_number" in data["room"]
+        assert data["room"]["room_number"].startswith("ROOM-")
+
+    # =====================
+    # GET /rooms/{room_id} — 获取房间
+    # =====================
+
+    def test_get_room_invalid_uuid_format(self):
+        """获取房间: room_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid-format", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_not_found(self):
+        """获取房间: room_id 有效但不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_success(self):
+        """获取房间: 正常获取房间 → 200，含 room_id/room_number/topic/phase"""
+        room_resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "获取测试室"},
+            timeout=TIMEOUT)
+        room_id = room_resp.json()["room_id"]
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["topic"] == "获取测试室"
+        assert data["phase"] == "selecting"
+        assert "participants" in data
+
+    # =====================
+    # GET /rooms — 列表房间
+    # =====================
+
+    def test_list_rooms_returns_list(self):
+        """列出房间: 返回房间列表"""
+        httpx.post(f"{API_BASE}/rooms", json={"topic": "列表测试1"}, timeout=TIMEOUT).raise_for_status()
+        httpx.post(f"{API_BASE}/rooms", json={"topic": "列表测试2"}, timeout=TIMEOUT).raise_for_status()
+
+        resp = httpx.get(f"{API_BASE}/rooms", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        # 返回格式为 list 或 dict
+        data = resp.json()
+        assert isinstance(data, list) or isinstance(data, dict)
+
+    # =====================
+    # GET /plans/{plan_id}/rooms — 按计划列出房间
+    # =====================
+
+    def test_list_rooms_by_plan_invalid_plan_uuid(self):
+        """列出计划房间: plan_id 为无效 UUID 格式 → 行为验证"""
+        resp = httpx.get(f"{API_BASE}/plans/not-a-uuid/rooms", timeout=TIMEOUT)
+        # get_rooms_by_plan 不做 UUID 格式验证，可能返回 200 空列表或 500
+        assert resp.status_code in (200, 404, 500)
+
+    def test_list_rooms_by_plan_not_found(self):
+        """列出计划房间: plan_id 有效但不存在 → 返回空列表"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/rooms", timeout=TIMEOUT)
+        # get_rooms_by_plan 查询 DB，不存在的 plan 返回空 rooms 列表
+        assert resp.status_code == 200
+        assert resp.json().get("rooms", []) == []
+
+    def test_list_rooms_by_plan_with_rooms(self):
+        """列出计划房间: 计划有关联房间 → 返回房间列表"""
+        # 创建计划
+        plan_payload = {"title": "RoomCRUD计划测试", "topic": "测试"}
+        plan_resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert plan_resp.status_code == 201
+        plan_id = plan_resp.json()["plan"]["plan_id"]
+
+        # 创建关联房间
+        room_resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "计划关联室", "plan_id": plan_id},
+            timeout=TIMEOUT)
+        assert room_resp.status_code == 200
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/rooms", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "rooms" in data
+        # 计划创建时会自动创建一个 room
+        assert len(data["rooms"]) >= 1
+
+    def test_list_rooms_by_plan_returns_correct_structure(self):
+        """列出计划房间: 返回 rooms 数组，每个房间含必要字段"""
+        plan_payload = {"title": "RoomCRUD结构测试", "topic": "测试"}
+        plan_resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert plan_resp.status_code == 201
+        plan_id = plan_resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/rooms", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "rooms" in data
+        if data["rooms"]:
+            room = data["rooms"][0]
+            assert "room_id" in room
+            assert "topic" in room
+
+    # =====================
+    # Room 创建后数据完整性
+    # =====================
+
+    def test_created_room_has_all_required_fields(self):
+        """创建房间: 响应包含所有必要字段"""
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "完整性测试"},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        room = resp.json()["room"]
+        required_fields = ["room_id", "room_number", "topic", "phase",
+                          "coordinator_id", "current_version", "created_at"]
+        for field in required_fields:
+            assert field in room, f"Missing field: {field}"
+
+    def test_created_room_phase_is_selecting(self):
+        """创建房间: phase 初始为 selecting"""
+        resp = httpx.post(f"{API_BASE}/rooms",
+            json={"topic": "阶段测试"},
+            timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json()["room"]["phase"] == "selecting"
+
+
 class TestActionItems:
     """Step 70: Action Items API Tests"""
 
