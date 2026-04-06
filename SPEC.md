@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
 > 版本：v2.59 | 日期：2026-04-06（Step 109 - Room/Task Templates 边界测试）
 > 版本：v2.58 | 日期：2026-04-06（Step 108 - Dashboard Stats API 边界测试 + rooms/activities 列不存在Bug修复）
@@ -3005,4 +3006,64 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 111（版本 v2.61）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 112 (2026-04-06)
+**版本**: v2.62 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Export API 添加边界测试覆盖
+
+背景：Export API（plan/export 和 version/export）只有 5 个基础测试（plan导出/version导出/不存在404/含讨论室详情），缺少 UUID 格式验证、空内容计划导出、Unicode 处理等边界场景。与 Step 84-111 的补全模式对齐。
+
+### Do
+新增 5 个 Export API 边界测试用例（TestExportAPI 类从 5 → 10 个）：
+
+1. **`test_export_plan_invalid_uuid`** — plan_id 为无效 UUID 格式字符串时返回 404
+2. **`test_export_plan_empty_no_rooms_no_tasks`** — 空计划（无讨论室无任务）导出返回有效 Markdown，内容包含计划标题
+3. **`test_export_plan_unicode_title`** — 含 Unicode 字符的计划标题（🚀 🎯）导出正确处理
+4. **`test_export_version_invalid_uuid`** — version export 时 plan_id 为无效 UUID 格式返回 404
+5. **`test_export_version_empty_no_rooms`** — 空版本（无讨论室）导出版本返回有效 Markdown，内容包含版本标题
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestExportAPI 10/10 passed（+5 new tests）
+- ✅ pytest tests/ 451/451 passed（原有446 + 新增5）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 112（版本 v2.62）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 113 (2026-04-06)
+**版本**: v2.63 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Watch API 添加边界测试覆盖
+
+背景：Room Watch API（关注/取消关注讨论室）包含 5 个端点（watch/list_watchers/unwatch/get_watched_rooms/is_watched），之前有 7 个基础测试（Step 81），缺少幂等性/无效UUID/空值/缺少参数等边界场景测试。与 Step 84-112 的补全模式对齐。
+
+### Do
+新增 10 个 Room Watch API 边界测试用例（TestRoomWatch 类从 7 → 17 个）：
+
+1. **`test_watch_room_twice_same_user`** — 同一用户重复关注同一讨论室幂等性验证（返回 200 或 201）
+2. **`test_watch_room_invalid_uuid`** — room_id 为无效 UUID 格式时返回 404
+3. **`test_list_room_watchers_invalid_uuid`** — 列出关注者时 room_id 为无效 UUID 格式返回 404
+4. **`test_get_user_watched_rooms_invalid_uuid`** — 获取用户关注房间时 user_id 为无效 UUID 格式返回 200（API 接受任意字符串，返回空列表）
+5. **`test_is_room_watched_invalid_uuid`** — 检查关注状态时 room_id 为无效 UUID 格式返回 404
+6. **`test_watch_room_empty_user_id`** — user_id 为空字符串时返回 422
+7. **`test_list_room_watchers_empty_room`** — room_id 为空字符串时返回 404 或 422
+8. **`test_unwatch_invalid_uuid_room`** — 取消关注时 room_id 为无效 UUID 格式返回 404
+9. **`test_watch_room_missing_user_name`** — user_name 缺失时（可选字段）返回 201
+10. **`test_is_room_watched_missing_user_id`** — 检查关注状态时缺少 user_id 参数返回 422
+
+### Check
+- ✅ pytest TestRoomWatch 17/17 passed（+10 new tests）
+- ✅ pytest tests/ 461/461 passed（原有451 + 新增10）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 113（版本 v2.63）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

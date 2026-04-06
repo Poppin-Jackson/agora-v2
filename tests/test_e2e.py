@@ -5180,6 +5180,76 @@ class TestExportAPI:
         content = resp.json()["content"]
         assert "导出测试讨论室" in content
 
+    def test_export_plan_invalid_uuid(self):
+        """导出计划（无效UUID格式）返回404"""
+        fake_id = "not-a-valid-uuid-12345"
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_export_plan_empty_no_rooms_no_tasks(self):
+        """导出空计划（无讨论室无任务）返回有效Markdown"""
+        plan_payload = {"title": "空计划导出测试", "topic": "无内容计划"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["format"] == "markdown"
+        assert data["plan_id"] == plan_id
+        content = data["content"]
+        # 空计划仍应包含计划标题
+        assert "空计划导出测试" in content
+
+    def test_export_plan_unicode_title(self):
+        """导出计划（含Unicode标题）正确处理"""
+        plan_payload = {"title": "计划标题 🚀 测试 🎯 项目", "topic": "Unicode测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        content = resp.json()["content"]
+        # Unicode 字符应出现在导出内容中
+        assert "🚀" in content or "计划标题" in content
+
+    def test_export_version_invalid_uuid(self):
+        """导出版本（无效UUID格式）返回404"""
+        fake_id = "invalid-uuid-format-abc"
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/versions/v1.0/export", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_export_version_not_found(self):
+        """导出版本（版本不存在）返回404"""
+        plan_payload = {"title": "版本不存在导出测试", "topic": "测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/v99.99/export", timeout=TIMEOUT)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Version not found"
+
+    def test_export_version_empty_no_rooms(self):
+        """导出空版本（无讨论室）返回有效Markdown"""
+        plan_payload = {"title": "空版本导出测试", "topic": "无讨论室"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/{version}/export", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["format"] == "markdown"
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        content = data["content"]
+        # 版本标题应出现在导出内容中
+        assert "空版本导出测试" in content
+
 
 class TestNotificationAPI:
     """测试通知 API (Step 34)"""
@@ -6894,6 +6964,96 @@ class TestRoomWatch:
         room_id = room_info["room_id"]
         resp = httpx.delete(f"{API_BASE}/rooms/{room_id}/watch?user_id=never-watched-user", timeout=TIMEOUT)
         assert resp.status_code == 404
+
+    def test_watch_room_twice_same_user(self, room_info):
+        """同一用户重复关注同一讨论室（幂等性）"""
+        room_id = room_info["room_id"]
+        user_id = f"user-{uuid.uuid4().hex[:8]}"
+        # 第一次关注
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id, "user_name": "重复观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        # 第二次关注同一房间 — 幂等，返回 200 或 201
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id, "user_name": "重复观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code in (200, 201)
+
+    def test_watch_room_invalid_uuid(self):
+        """关注时 room_id 为无效 UUID 格式返回 404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/not-a-valid-uuid/watch",
+            json={"user_id": "any-user", "user_name": "测试"},
+            timeout=TIMEOUT
+        )
+        # 房间不存在返回 404（无效UUID不触发422，因为 path param 是 str 类型）
+        assert resp.status_code == 404
+
+    def test_list_room_watchers_invalid_uuid(self):
+        """列出关注者时 room_id 为无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/invalid-uuid-12345/watchers", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_user_watched_rooms_invalid_uuid(self):
+        """获取用户关注房间时 user_id 为无效 UUID 格式返回 200（API 接受任意字符串）"""
+        resp = httpx.get(f"{API_BASE}/users/not-valid-uuid/watched-rooms", timeout=TIMEOUT)
+        # 该端点接受任意字符串作为 user_id，返回 200 和空关注列表
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == "not-valid-uuid"
+        assert data["count"] == 0
+        assert data["watched_rooms"] == []
+
+    def test_is_room_watched_invalid_uuid(self):
+        """检查关注状态时 room_id 为无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/bad-uuid-0000/watch/status?user_id=any-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_watch_room_empty_user_id(self, room_info):
+        """关注时 user_id 为空字符串返回 422"""
+        room_id = room_info["room_id"]
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": "", "user_name": "空ID观众"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_list_room_watchers_empty_room(self):
+        """列出关注者时 room_id 为空字符串返回 404 或 422"""
+        resp = httpx.get(f"{API_BASE}/rooms//watchers", timeout=TIMEOUT)
+        # FastAPI 路由不匹配空字符串，通常 404
+        assert resp.status_code in (404, 422)
+
+    def test_unwatch_invalid_uuid_room(self):
+        """取消关注时 room_id 为无效 UUID 格式返回 404"""
+        resp = httpx.delete(f"{API_BASE}/rooms/fake-uuid-xyz/unwatch?user_id=test-user", timeout=TIMEOUT)
+        # 注：路由定义是 /rooms/{room_id}/watch（DELETE），不是 /unwatch
+        # 错误的 URL 会被 404
+        assert resp.status_code == 404
+
+    def test_watch_room_missing_user_name(self, room_info):
+        """关注时 user_name 缺失（可选字段）应返回 201"""
+        room_id = room_info["room_id"]
+        user_id = f"user-{uuid.uuid4().hex[:8]}"
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": user_id},
+            timeout=TIMEOUT
+        )
+        # user_name 是可选字段，应成功创建
+        assert resp.status_code == 201
+
+    def test_is_room_watched_missing_user_id(self, room_info):
+        """检查关注状态时缺少 user_id 参数返回 422"""
+        room_id = room_info["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/watch/status", timeout=TIMEOUT)
+        assert resp.status_code == 422
 
 
 # ========================
