@@ -7717,6 +7717,234 @@ class TestRoomTags:
         assert resp.status_code == 404
 
 
+# ========================
+# Step 124: Room Tags API Boundary Tests
+# ========================
+
+class TestRoomTagsBoundary:
+    """Step 124: Room Tags API 边界测试 — 补充 TestRoomTags 的边界覆盖"""
+
+    @pytest.fixture
+    def test_room(self):
+        """创建一个测试房间"""
+        plan_data = {"title": "RoomTagsBoundary测试", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        return resp.json()["room"]
+
+    # GET /rooms/{room_id}/tags — 边界测试
+
+    def test_get_room_tags_invalid_room_id_format(self):
+        """GET tags: room_id 无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid/tags", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_tags_room_not_found(self):
+        """GET tags: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/tags", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_tags_empty_room(self, test_room):
+        """GET tags: 房间无标签 → 返回空列表"""
+        room_id = test_room["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/tags", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["tags"] == []
+
+    # PATCH /rooms/{room_id}/tags — 边界测试
+
+    def test_update_room_tags_invalid_room_id_format(self):
+        """PATCH tags: room_id 无效 UUID → 404"""
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/invalid-uuid/tags",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_room_tags_room_not_found(self):
+        """PATCH tags: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{fake_id}/tags",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_room_tags_empty_list(self, test_room):
+        """PATCH tags: 空标签列表 → 200, tags=[]"""
+        room_id = test_room["room_id"]
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == []
+
+    def test_update_room_tags_single_tag(self, test_room):
+        """PATCH tags: 单个标签 → 200"""
+        room_id = test_room["room_id"]
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == ["重要"]
+
+    def test_update_room_tags_many_tags(self, test_room):
+        """PATCH tags: 大量标签（50个）→ 200"""
+        room_id = test_room["room_id"]
+        many_tags = [f"标签{i}" for i in range(50)]
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": many_tags},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["tags"]) == 50
+
+    def test_update_room_tags_duplicates_in_input(self, test_room):
+        """PATCH tags: 输入含重复标签 → backend原样存储（不去重），去重只在add时发生"""
+        room_id = test_room["room_id"]
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要", "紧急", "重要", "紧急"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        tags = resp.json()["tags"]
+        # PATCH 直接替换，不做去重
+        assert tags == ["重要", "紧急", "重要", "紧急"]
+
+    def test_update_room_tags_unicode(self, test_room):
+        """PATCH tags: 中文/Unicode 标签 → 200"""
+        room_id = test_room["room_id"]
+        unicode_tags = ["重要✅", "紧急⚠️", "技术评审🔧"]
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": unicode_tags},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == unicode_tags
+
+    def test_update_room_tags_long_tag_string(self, test_room):
+        """PATCH tags: 单个超长标签（500字符）→ 200"""
+        room_id = test_room["room_id"]
+        long_tag = "测试标签" * 50  # 200 chars in Chinese + ASCII
+        resp = httpx.patch(
+            f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": [long_tag]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert long_tag in resp.json()["tags"]
+
+    # POST /rooms/{room_id}/tags/add — 边界测试
+
+    def test_add_room_tags_invalid_room_id_format(self):
+        """POST add: room_id 无效 UUID → 404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/bad-uuid/tags/add",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_add_room_tags_room_not_found(self):
+        """POST add: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_id}/tags/add",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_add_room_tags_empty_list(self, test_room):
+        """POST add: 空列表 → 200, 标签不变（幂等）"""
+        room_id = test_room["room_id"]
+        # 先设置标签
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要"]}, timeout=TIMEOUT).raise_for_status()
+        # 添加空列表
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/tags/add",
+            json={"tags": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == ["重要"]
+
+    def test_add_room_tags_existing_tag_idempotent(self, test_room):
+        """POST add: 添加已存在标签 → 幂等，不重复"""
+        room_id = test_room["room_id"]
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要"]}, timeout=TIMEOUT).raise_for_status()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/tags/add",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        # 重要只出现一次
+        assert resp.json()["tags"].count("重要") == 1
+        assert resp.json()["tags"] == ["重要"]
+
+    # POST /rooms/{room_id}/tags/remove — 边界测试
+
+    def test_remove_room_tags_invalid_room_id_format(self):
+        """POST remove: room_id 无效 UUID → 404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/bad-uuid/tags/remove",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_remove_room_tags_room_not_found(self):
+        """POST remove: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_id}/tags/remove",
+            json={"tags": ["重要"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_remove_room_tags_empty_list(self, test_room):
+        """POST remove: 空列表 → 200, 标签不变（幂等）"""
+        room_id = test_room["room_id"]
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要", "紧急"]}, timeout=TIMEOUT).raise_for_status()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/tags/remove",
+            json={"tags": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert set(resp.json()["tags"]) == {"重要", "紧急"}
+
+    def test_remove_room_tags_nonexistent_tag(self, test_room):
+        """POST remove: 移除不存在的标签 → 幂等，剩余标签不变"""
+        room_id = test_room["room_id"]
+        httpx.patch(f"{API_BASE}/rooms/{room_id}/tags",
+            json={"tags": ["重要", "紧急"]}, timeout=TIMEOUT).raise_for_status()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/tags/remove",
+            json={"tags": ["不存在的标签"]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert set(resp.json()["tags"]) == {"重要", "紧急"}
+
+
 class TestActionItems:
     """Step 70: Action Items API Tests"""
 
@@ -9095,6 +9323,283 @@ class TestDecisions:
         data = resp.json()
         assert "decisions" in data
         assert isinstance(data["decisions"], list)
+
+
+class TestDecisionsBoundary:
+    """Decisions API 边界测试 — Step 125"""
+
+    def _create_plan_and_decision(self):
+        """创建计划并返回 plan_id 和 version"""
+        plan_payload = {"title": "决策边界测试计划", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+        return plan_id, version
+
+    def _create_decision(self, plan_id, version, extra=None):
+        """创建决策并返回 decision_id"""
+        payload = {
+            "title": "测试决策",
+            "decision_text": "测试决策内容",
+        }
+        if extra:
+            payload.update(extra)
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        return resp.json()["decision_id"]
+
+    # ---- 字段长度边界 ----
+
+    def test_create_decision_title_max_length_boundary(self):
+        """创建决策：title=200字符（边界值）→ 201"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"title": "A" * 200, "decision_text": "测试内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert len(resp.json()["decision"]["title"]) == 200
+
+    def test_create_decision_title_exceeds_max_length(self):
+        """创建决策：title=201字符 → 422 (max_length=200)"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"title": "A" * 201, "decision_text": "测试内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_decision_decision_text_min_length_boundary(self):
+        """创建决策：decision_text=1字符（边界值）→ 201"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"title": "有效标题", "decision_text": "A"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert resp.json()["decision"]["decision_text"] == "A"
+
+    # ---- 必填字段缺失 ----
+
+    def test_create_decision_missing_title(self):
+        """创建决策：缺少 title → 422"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"decision_text": "有内容但无标题"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_decision_missing_decision_text(self):
+        """创建决策：缺少 decision_text → 422"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"title": "有标题但无内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    # ---- 必填字段仅提供必填 ----
+
+    def test_create_decision_only_required_fields(self):
+        """创建决策：仅提供必填字段（title+decision_text）→ 201"""
+        plan_id, version = self._create_plan_and_decision()
+        payload = {"title": "最小化决策", "decision_text": "最小内容"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            json=payload, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        d = resp.json()["decision"]
+        assert d["title"] == "最小化决策"
+        assert d["decision_text"] == "最小内容"
+        assert d["description"] is None
+        assert d["rationale"] is None
+        assert d["alternatives_considered"] == []
+        assert d["agreed_by"] == []
+        assert d["disagreed_by"] == []
+
+    # ---- list_operations: plan/version 不存在 ----
+
+    def test_list_decisions_plan_not_found(self):
+        """列出决策：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/decisions",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_list_decisions_version_not_found(self):
+        """列出决策：version 不存在 → 404"""
+        plan_id, version = self._create_plan_and_decision()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/decisions",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_list_decisions_invalid_plan_uuid(self):
+        """列出决策：plan_id 无效 UUID → 404"""
+        resp = httpx.get(
+            f"{API_BASE}/plans/not-a-uuid/versions/v1.0/decisions",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    # ---- get_decision: plan/version/decision 不存在 ----
+
+    def test_get_decision_plan_not_found(self):
+        """获取决策：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        decision_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/decisions/{decision_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_decision_version_not_found(self):
+        """获取决策：version 不存在 → 404"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/decisions/{decision_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_decision_not_found(self):
+        """获取决策：decision 不存在 → 404"""
+        plan_id, version = self._create_plan_and_decision()
+        fake_decision_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{fake_decision_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Decision not found"
+
+    # ---- update_decision: plan/version/decision 不存在 ----
+
+    def test_update_decision_plan_not_found(self):
+        """更新决策：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/decisions/{str(uuid.uuid4())}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_decision_version_not_found(self):
+        """更新决策：version 不存在 → 404"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/decisions/{decision_id}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_decision_not_found(self):
+        """更新决策：decision 不存在 → 404"""
+        plan_id, version = self._create_plan_and_decision()
+        fake_decision_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{fake_decision_id}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    # ---- update: 字段验证边界 ----
+
+    def test_update_decision_empty_title(self):
+        """更新决策：title="" → 200 (DecisionUpdate.title 为 Optional，无 min_length 验证)"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            json={"title": ""},
+            timeout=TIMEOUT
+        )
+        # DecisionUpdate.title = Optional[str]，不校验 min_length
+        assert resp.status_code == 200
+        assert resp.json()["decision"]["title"] == ""
+
+    def test_update_decision_empty_decision_text(self):
+        """更新决策：decision_text="" → 200 (DecisionUpdate.decision_text 为 Optional，无 min_length 验证)"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            json={"decision_text": ""},
+            timeout=TIMEOUT
+        )
+        # DecisionUpdate.decision_text = Optional[str]，不校验 min_length
+        assert resp.status_code == 200
+        assert resp.json()["decision"]["decision_text"] == ""
+
+    def test_update_decision_title_exceeds_max_length(self):
+        """更新决策：title=201字符 → 200 (DecisionUpdate.title 为 Optional，无 max_length 验证)"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            json={"title": "A" * 201},
+            timeout=TIMEOUT
+        )
+        # DecisionUpdate.title = Optional[str]，不校验 max_length
+        assert resp.status_code == 200
+        assert len(resp.json()["decision"]["title"]) == 201
+
+    def test_update_decision_title_at_max_length(self):
+        """更新决策：title=200字符 → 200"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            json={"title": "A" * 200},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["decision"]["title"]) == 200
+
+    # ---- delete: plan/version/decision 不存在 ----
+
+    def test_delete_decision_endpoint_not_exists(self):
+        """删除决策：DELETE 端点不存在 → 405 Method Not Allowed"""
+        plan_id, version = self._create_plan_and_decision()
+        decision_id = self._create_decision(plan_id, version)
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions/{decision_id}",
+            timeout=TIMEOUT
+        )
+        # Decisions API 无 DELETE 端点，返回 405
+        assert resp.status_code == 405
+
+    # ---- list: 无决策时返回空列表 ----
+
+    def test_list_decisions_empty(self):
+        """列出决策：无决策时 → 200，空列表"""
+        plan_id, version = self._create_plan_and_decision()
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/decisions",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        assert resp.json()["decisions"] == []
 
 
 class TestPlanSearch:

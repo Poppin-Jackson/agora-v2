@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.70 | 日期：2026-04-06（Step 122 - Task Dependency API 边界测试）
+> 版本：v2.73 | 日期：2026-04-06（Step 124 - Room Tags API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
@@ -3494,4 +3494,96 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 123（版本 v2.72）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 124 (2026-04-06)
+**版本**: v2.73 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Tags API 添加边界测试覆盖
+
+背景：Room Tags API（讨论室标签管理）包含 4 个端点（GET/PATCH/POST add/POST remove），TestRoomTags 已有基础测试（获取/更新/添加/删除/去重/搜索），缺少 room_id 无效 UUID/房间不存在/空列表/单标签/大量标签/Unicode 标签/超长标签/幂等性等边界测试。与 Step 84-123 的补全模式对齐。
+
+### Do
+新增 `TestRoomTagsBoundary` 测试类（19个边界测试用例）：
+
+1. **`test_get_room_tags_invalid_room_id_format`** — GET tags: room_id 无效 UUID 格式 → 404
+2. **`test_get_room_tags_room_not_found`** — GET tags: room 不存在 → 404
+3. **`test_get_room_tags_empty_room`** — GET tags: 房间无标签 → 返回空列表
+4. **`test_update_room_tags_invalid_room_id_format`** — PATCH tags: room_id 无效 UUID → 404
+5. **`test_update_room_tags_room_not_found`** — PATCH tags: room 不存在 → 404
+6. **`test_update_room_tags_empty_list`** — PATCH tags: 空标签列表 → 200, tags=[]
+7. **`test_update_room_tags_single_tag`** — PATCH tags: 单个标签 → 200
+8. **`test_update_room_tags_many_tags`** — PATCH tags: 大量标签（50个）→ 200
+9. **`test_update_room_tags_duplicates_in_input`** — PATCH tags: 输入含重复标签 → backend原样存储
+10. **`test_update_room_tags_unicode`** — PATCH tags: 中文/Unicode 标签 → 200
+11. **`test_update_room_tags_long_tag_string`** — PATCH tags: 单个超长标签 → 200
+12. **`test_add_room_tags_invalid_room_id_format`** — POST add: room_id 无效 UUID → 404
+13. **`test_add_room_tags_room_not_found`** — POST add: room 不存在 → 404
+14. **`test_add_room_tags_empty_list`** — POST add: 空列表 → 200, 标签不变（幂等）
+15. **`test_add_room_tags_existing_tag_idempotent`** — POST add: 添加已存在标签 → 幂等，不重复
+16. **`test_remove_room_tags_invalid_room_id_format`** — POST remove: room_id 无效 UUID → 404
+17. **`test_remove_room_tags_room_not_found`** — POST remove: room 不存在 → 404
+18. **`test_remove_room_tags_empty_list`** — POST remove: 空列表 → 200, 标签不变（幂等）
+19. **`test_remove_room_tags_nonexistent_tag`** — POST remove: 移除不存在的标签 → 幂等，剩余标签不变
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestRoomTagsBoundary 19/19 passed
+- ✅ pytest tests/ 595/595 passed（原有576 + 新增19）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 124（版本 v2.73）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 125 (2026-04-06)
+**版本**: v2.74 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Decisions API 添加边界测试覆盖
+
+背景：Decisions API（版本内决策管理）包含 4 个端点（create/list/get/update），TestDecisions 已有基础测试（创建/列表/获取/更新/不存在/plan.json集成），缺少 title max_length 边界/decision_text min_length 边界/必填字段缺失/plan-not-found-404/version-not-found-404/无决策空列表等边界测试。与 Step 84-124 的补全模式对齐。
+
+### Do
+新增 `TestDecisionsBoundary` 测试类（21个边界测试用例）：
+
+1. **`test_create_decision_title_max_length_boundary`** — 创建决策：title=200字符（边界值）→ 201
+2. **`test_create_decision_title_exceeds_max_length`** — 创建决策：title=201字符 → 422 (max_length=200)
+3. **`test_create_decision_decision_text_min_length_boundary`** — 创建决策：decision_text=1字符（边界值）→ 201
+4. **`test_create_decision_missing_title`** — 创建决策：缺少 title → 422
+5. **`test_create_decision_missing_decision_text`** — 创建决策：缺少 decision_text → 422
+6. **`test_create_decision_only_required_fields`** — 创建决策：仅提供必填字段 → 201
+7. **`test_list_decisions_plan_not_found`** — 列出决策：plan 不存在 → 404
+8. **`test_list_decisions_version_not_found`** — 列出决策：version 不存在 → 404
+9. **`test_list_decisions_invalid_plan_uuid`** — 列出决策：plan_id 无效 UUID → 404
+10. **`test_get_decision_plan_not_found`** — 获取决策：plan 不存在 → 404
+11. **`test_get_decision_version_not_found`** — 获取决策：version 不存在 → 404
+12. **`test_get_decision_not_found`** — 获取决策：decision 不存在 → 404
+13. **`test_update_decision_plan_not_found`** — 更新决策：plan 不存在 → 404
+14. **`test_update_decision_version_not_found`** — 更新决策：version 不存在 → 404
+15. **`test_update_decision_not_found`** — 更新决策：decision 不存在 → 404
+16. **`test_update_decision_empty_title`** — 更新决策：title="" → 200（DecisionUpdate.title 为 Optional，无 min_length 验证）
+17. **`test_update_decision_empty_decision_text`** — 更新决策：decision_text="" → 200（DecisionUpdate.decision_text 为 Optional，无 min_length 验证）
+18. **`test_update_decision_title_exceeds_max_length`** — 更新决策：title=201字符 → 200（DecisionUpdate.title 为 Optional，无 max_length 验证）
+19. **`test_update_decision_title_at_max_length`** — 更新决策：title=200字符 → 200
+20. **`test_delete_decision_endpoint_not_exists`** — 删除决策：DELETE 端点不存在 → 405 Method Not Allowed
+21. **`test_list_decisions_empty`** — 列出决策：无决策时 → 200，空列表
+
+**发现的行为**：
+- DecisionUpdate 的 Optional 字段（title/decision_text）无 min_length/max_length 验证，update 时可传入任意字符串
+- Decisions API 无 DELETE 端点，对应路径返回 405 Method Not Allowed
+- create 时 title="" 和 decision_text="" 均返回 422（DecisionCreate 有 min_length=1 验证）
+- create 时 title=200字符成功，title=201字符返回 422（max_length=200 验证）
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestDecisionsBoundary 21/21 passed
+- ✅ pytest tests/ 639/639 passed（原有618 + 新增21）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 125（版本 v2.74）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
