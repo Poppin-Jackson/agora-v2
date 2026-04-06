@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.92 | 日期：2026-04-06（Step 143 - Task CRUD API 边界测试完成）
 > 版本：v2.91 | 日期：2026-04-06（Step 142 - API 输入验证强化完成）
 > 版本：v2.82 | 日期：2026-04-06（Step 133 - Speech API 边界测试）
 > 版本：v2.81 | 日期：2026-04-06（Step 132 - Task Comments/Checkpoints 边界测试）
