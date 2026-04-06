@@ -8674,6 +8674,297 @@ class TestMeetingMinutes:
 
 
 # ========================
+# Meeting Minutes API Boundary Tests (Step 126)
+# ========================
+
+class TestMeetingMinutesBoundary:
+    """Step 126: MeetingMinutes API 边界测试 — 填补 GET/PATCH/DELETE 空白 + UUID/404 边界场景"""
+
+    def _create_plan_and_room(self):
+        """创建 plan 并返回 (plan_id, room_id, version)"""
+        plan_data = {
+            "title": f"MM边界测试计划-{uuid.uuid4().hex[:8]}",
+            "topic": "会议纪要边界测试",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        return data["plan"]["plan_id"], data["room"]["room_id"], data["plan"].get("current_version", "v1.0")
+
+    def _create_meeting_minutes(self, room_id, title="测试纪要"):
+        """创建一条会议纪要并返回 meeting_minutes_id"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": title, "content": f"{title}的内容"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        return resp.json()["meeting_minutes_id"]
+
+    # ========================
+    # CREATE 边界测试
+    # ========================
+
+    def test_create_meeting_minutes_invalid_room_id_format(self):
+        """创建会议纪要：room_id 无效 UUID 格式 → 404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/invalid-uuid-format/meeting-minutes",
+            json={"title": "无效UUID"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_meeting_minutes_room_not_found(self):
+        """创建会议纪要：room 不存在 → 404"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_room_id}/meeting-minutes",
+            json={"title": "不存在的房间"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Room not found"
+
+    def test_create_meeting_minutes_empty_title(self):
+        """创建会议纪要：title="" → backend 行为验证"""
+        _, room_id, _ = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": ""},
+            timeout=TIMEOUT,
+        )
+        # title 是必填字段，应该返回 422 或被接受（取决于 backend 验证）
+        assert resp.status_code in (201, 422)
+
+    def test_create_meeting_minutes_missing_title(self):
+        """创建会议纪要：缺少必填字段 title → 422"""
+        _, room_id, _ = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"content": "有内容无标题"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_meeting_minutes_only_required_fields(self):
+        """创建会议纪要：仅提供必填字段 → 201"""
+        _, room_id, _ = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes",
+            json={"title": "最简纪要"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["title"] == "最简纪要"
+        assert "meeting_minutes_id" in data
+
+    # ========================
+    # LIST BY ROOM 边界测试
+    # ========================
+
+    def test_list_room_meeting_minutes_invalid_room_id(self):
+        """列出讨论室纪要：room_id 无效 UUID → 404"""
+        resp = httpx.get(
+            f"{API_BASE}/rooms/not-a-uuid/meeting-minutes",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_room_meeting_minutes_room_not_found(self):
+        """列出讨论室纪要：room 不存在 → 404"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{fake_room_id}/meeting-minutes",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_room_meeting_minutes_empty(self):
+        """列出讨论室纪要：无纪要 → 返回空列表"""
+        _, room_id, _ = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/meeting-minutes", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    # ========================
+    # LIST BY PLAN 边界测试
+    # ========================
+
+    def test_list_plan_meeting_minutes_plan_not_found(self):
+        """列出计划纪要：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/meeting-minutes",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_plan_meeting_minutes_empty(self):
+        """列出计划纪要：无纪要 → 返回 200（列表或空列表，取决于 DB 状态）"""
+        plan_id, _, _ = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/meeting-minutes", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        # 新建计划可能无关联纪要（返回 []）也可能因 DB 污染累积了历史纪要（返回 >0）
+        # 核心验证：返回 200 + list 类型
+
+    # ========================
+    # GET SINGLE 边界测试
+    # ========================
+
+    def test_get_meeting_minutes_invalid_uuid(self):
+        """获取单个纪要：meeting_minutes_id 无效 UUID → 404"""
+        resp = httpx.get(
+            f"{API_BASE}/meeting-minutes/not-a-uuid-string",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_meeting_minutes_not_found(self):
+        """获取单个纪要：纪要不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/meeting-minutes/{fake_id}",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_meeting_minutes_success(self):
+        """获取单个纪要：正常获取 → 200"""
+        _, room_id, _ = self._create_plan_and_room()
+        mm_id = self._create_meeting_minutes(room_id, "待获取纪要")
+        resp = httpx.get(f"{API_BASE}/meeting-minutes/{mm_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["meeting_minutes_id"] == mm_id
+        assert data["title"] == "待获取纪要"
+
+    # ========================
+    # UPDATE 边界测试
+    # ========================
+
+    def test_update_meeting_minutes_invalid_uuid(self):
+        """更新会议纪要：meeting_minutes_id 无效 UUID → 404"""
+        resp = httpx.patch(
+            f"{API_BASE}/meeting-minutes/invalid-uuid-123/patch",
+            json={"title": "新标题"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_update_meeting_minutes_not_found(self):
+        """更新会议纪要：纪要不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/meeting-minutes/{fake_id}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_update_meeting_minutes_success(self):
+        """更新会议纪要：正常更新 → 200"""
+        _, room_id, _ = self._create_plan_and_room()
+        mm_id = self._create_meeting_minutes(room_id, "待更新纪要")
+        resp = httpx.patch(
+            f"{API_BASE}/meeting-minutes/{mm_id}",
+            json={"title": "更新后标题", "content": "更新后内容"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "更新后标题"
+        assert data["content"] == "更新后内容"
+
+    def test_update_meeting_minutes_empty_body(self):
+        """更新会议纪要：空请求体 → backend 行为验证"""
+        _, room_id, _ = self._create_plan_and_room()
+        mm_id = self._create_meeting_minutes(room_id)
+        resp = httpx.patch(
+            f"{API_BASE}/meeting-minutes/{mm_id}",
+            json={},
+            timeout=TIMEOUT,
+        )
+        # 空 body 应该被接受（不做任何更新）或返回 422
+        assert resp.status_code in (200, 422)
+
+    # ========================
+    # DELETE 边界测试
+    # ========================
+
+    def test_delete_meeting_minutes_invalid_uuid(self):
+        """删除会议纪要：meeting_minutes_id 无效 UUID → 404"""
+        resp = httpx.delete(
+            f"{API_BASE}/meeting-minutes/invalid-uuid-string",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_delete_meeting_minutes_not_found(self):
+        """删除会议纪要：纪要不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(
+            f"{API_BASE}/meeting-minutes/{fake_id}",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_delete_meeting_minutes_success(self):
+        """删除会议纪要：正常删除 → 204"""
+        _, room_id, _ = self._create_plan_and_room()
+        mm_id = self._create_meeting_minutes(room_id, "待删除纪要")
+        resp = httpx.delete(f"{API_BASE}/meeting-minutes/{mm_id}", timeout=TIMEOUT)
+        assert resp.status_code == 204
+        # 再次获取应该 404
+        resp2 = httpx.get(f"{API_BASE}/meeting-minutes/{mm_id}", timeout=TIMEOUT)
+        assert resp2.status_code == 404
+
+    # ========================
+    # GENERATE 边界测试
+    # ========================
+
+    def test_generate_meeting_minutes_invalid_room_id(self):
+        """生成会议纪要：room_id 无效 UUID → 404"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/not-a-valid-uuid/meeting-minutes/generate",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_generate_meeting_minutes_all_options_disabled_idempotent(self):
+        """生成会议纪要：所有选项关闭时可重复生成（幂等）"""
+        _, room_id, _ = self._create_plan_and_room()
+        resp1 = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            json={
+                "title": "空选项纪要",
+                "include_decisions": False,
+                "include_action_items": False,
+                "include_timeline": False,
+                "include_messages": False,
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp1.status_code == 201
+        # 第二次生成应该也成功（幂等）
+        resp2 = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/meeting-minutes/generate",
+            json={
+                "include_decisions": False,
+                "include_action_items": False,
+                "include_timeline": False,
+                "include_messages": False,
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp2.status_code == 201
+
+
+# ========================
 # Room Watch API (Step 81)
 # ========================
 

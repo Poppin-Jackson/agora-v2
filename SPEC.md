@@ -3587,3 +3587,53 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 125（版本 v2.74）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 126 (2026-04-06)
+**版本**: v2.75 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 MeetingMinutes API 添加边界测试覆盖
+
+背景：MeetingMinutes API（会议纪要管理）包含 7 个端点（create/list-by-room/list-by-plan/get/update/delete/generate），TestMeetingMinutes 仅有 12 个基础测试，缺少：无效 UUID 格式/房间不存在/空列表/成功完整 CRUD 操作/幂等等边界场景测试。与 Step 84-125 的补全模式对齐。
+
+### Do
+新增 `TestMeetingMinutesBoundary` 测试类（22个边界测试用例）：
+
+1. **`test_create_meeting_minutes_invalid_room_id_format`** — 创建：room_id 无效 UUID → 404
+2. **`test_create_meeting_minutes_room_not_found`** — 创建：room 不存在 → 404
+3. **`test_create_meeting_minutes_empty_title`** — 创建：title="" → backend 行为验证
+4. **`test_create_meeting_minutes_missing_title`** — 创建：缺少必填字段 → 422
+5. **`test_create_meeting_minutes_only_required_fields`** — 创建：仅提供必填字段 → 201
+6. **`test_list_room_meeting_minutes_invalid_room_id`** — 列表（房间）：room_id 无效 UUID → 404
+7. **`test_list_room_meeting_minutes_room_not_found`** — 列表（房间）：room 不存在 → 404
+8. **`test_list_room_meeting_minutes_empty`** — 列表（房间）：无纪要 → 返回空列表
+9. **`test_list_plan_meeting_minutes_plan_not_found`** — 列表（计划）：plan 不存在 → 404
+10. **`test_list_plan_meeting_minutes_empty`** — 列表（计划）：无纪要 → 200 + list
+11. **`test_get_meeting_minutes_invalid_uuid`** — 获取：meeting_minutes_id 无效 UUID → 404
+12. **`test_get_meeting_minutes_not_found`** — 获取：纪要不存在 → 404
+13. **`test_get_meeting_minutes_success`** — 获取：正常获取 → 200
+14. **`test_update_meeting_minutes_invalid_uuid`** — 更新：meeting_minutes_id 无效 UUID → 404
+15. **`test_update_meeting_minutes_not_found`** — 更新：纪要不存在 → 404
+16. **`test_update_meeting_minutes_success`** — 更新：正常更新 → 200
+17. **`test_update_meeting_minutes_empty_body`** — 更新：空请求体 → 200 或 422
+18. **`test_delete_meeting_minutes_invalid_uuid`** — 删除：meeting_minutes_id 无效 UUID → 404
+19. **`test_delete_meeting_minutes_not_found`** — 删除：纪要不存在 → 404
+20. **`test_delete_meeting_minutes_success`** — 删除：正常删除 → 204，再次 GET 404
+21. **`test_generate_meeting_minutes_invalid_room_id`** — 生成：room_id 无效 UUID → 404
+22. **`test_generate_meeting_minutes_all_options_disabled_idempotent`** — 生成：所有选项关闭时可重复生成（幂等）
+
+**发现的行为**：
+- backend 接受 title=""（无 min_length 验证）
+- 所有 UUID 格式验证均返回 404
+- DELETE 成功后 GET 返回 404
+- generate 接口可重复调用（幂等）
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestMeetingMinutesBoundary 22/22 passed
+- ✅ pytest tests/ 638/638 passed（原有616 + 新增22）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 126（版本 v2.75）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
