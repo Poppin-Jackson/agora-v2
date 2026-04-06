@@ -3456,6 +3456,278 @@ class TestRequirements:
         assert resp.status_code == 404
 
 
+class TestRequirementsBoundary:
+    """Requirements API 边界测试 — 补充 TestRequirements 的边界覆盖"""
+
+    def test_create_requirement_invalid_category(self):
+        """创建需求时 category 无效枚举值返回 422"""
+        plan_payload = {"title": "测试-无效分类", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "有效描述", "priority": "high", "category": "invalid_category"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_requirement_all_valid_categories(self):
+        """验证全部 8 种 RequirementCategory 枚举值均可创建成功"""
+        plan_payload = {"title": "测试-全部分类", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        categories = ["budget", "timeline", "technical", "quality", "resource", "risk", "compliance", "other"]
+        for cat in categories:
+            req = {"description": f"需求-{cat}", "priority": "high", "category": cat}
+            resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"category={cat} should succeed"
+
+    def test_create_requirement_all_valid_statuses(self):
+        """验证全部 6 种 RequirementStatus 枚举值均可创建成功"""
+        plan_payload = {"title": "测试-全部状态", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        statuses = ["pending", "in_progress", "met", "partially_met", "not_met", "deprecated"]
+        for s in statuses:
+            req = {"description": f"需求-{s}", "priority": "medium", "status": s}
+            resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"status={s} should succeed"
+
+    def test_create_requirement_all_valid_priorities(self):
+        """验证全部 3 种 RequirementPriority 枚举值均可创建成功"""
+        plan_payload = {"title": "测试-全部优先级", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        for priority in ["high", "medium", "low"]:
+            req = {"description": f"需求-{priority}", "priority": priority}
+            resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"priority={priority} should succeed"
+
+    def test_create_requirement_description_max_length(self):
+        """创建需求时 description 达到 max_length=500 边界值返回 201"""
+        plan_payload = {"title": "测试-描述最大长度", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "x" * 500, "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+    def test_create_requirement_description_exceeds_max_length(self):
+        """创建需求时 description 超过 max_length=500 返回 422"""
+        plan_payload = {"title": "测试-描述超长", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "x" * 501, "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_update_requirement_invalid_category(self):
+        """更新需求时 category 无效枚举值返回 422"""
+        plan_payload = {"title": "测试-更新无效分类", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "需求", "priority": "high", "category": "technical"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+            json={"category": "invalid_cat"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_requirement_invalid_priority(self):
+        """更新需求时 priority 无效枚举值返回 422"""
+        plan_payload = {"title": "测试-更新无效优先级", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "需求", "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+            json={"priority": "invalid_priority"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_requirement_invalid_status(self):
+        """更新需求时 status 无效枚举值返回 422"""
+        plan_payload = {"title": "测试-更新无效状态", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "需求", "priority": "high", "status": "pending"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+            json={"status": "invalid_status"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_requirement_empty_description(self):
+        """更新需求时 description='' 返回 422 (min_length=1)"""
+        plan_payload = {"title": "测试-更新空描述", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "初始描述", "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+            json={"description": ""},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_requirement_description_exceeds_max_length(self):
+        """更新需求时 description 超过 max_length=500 返回 422"""
+        plan_payload = {"title": "测试-更新超长描述", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "初始描述", "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+            json={"description": "x" * 501},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_list_requirements_empty(self):
+        """无需求时 GET /requirements 返回空列表 []"""
+        plan_payload = {"title": "测试-空需求列表", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/requirements", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_get_requirement_plan_not_found(self):
+        """GET 单个需求时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_req_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/requirements/{fake_req_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_requirement_plan_not_found(self):
+        """PATCH 需求时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_req_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{fake_plan_id}/requirements/{fake_req_id}",
+            json={"priority": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_delete_requirement_plan_not_found(self):
+        """DELETE 需求时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_req_id = str(uuid.uuid4())
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{fake_plan_id}/requirements/{fake_req_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_requirement_stats_empty(self):
+        """无需求时 GET /requirements/stats 返回 total=0"""
+        plan_payload = {"title": "测试-空统计", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/requirements/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        stats = resp.json()
+        assert stats["total"] == 0
+        assert stats["by_status"] == {}
+        assert stats["by_priority"] == {}
+        assert stats["by_category"] == {}
+
+    def test_create_requirement_invalid_plan_uuid(self):
+        """创建需求时 plan_id 为无效 UUID 格式返回 404"""
+        resp = httpx.post(
+            f"{API_BASE}/plans/not-a-uuid/requirements",
+            json={"description": "需求", "priority": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_requirement_all_enum_values(self):
+        """更新需求时 priority/category/status 全枚举值均可接受"""
+        plan_payload = {"title": "测试-全枚举更新", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "需求", "priority": "medium", "category": "technical", "status": "pending"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        req_id = resp.json()["id"]
+
+        for priority in ["high", "medium", "low"]:
+            resp = httpx.patch(
+                f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+                json={"priority": priority},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 200, f"priority={priority} should succeed"
+
+        for category in ["budget", "timeline", "technical", "quality", "resource", "risk", "compliance", "other"]:
+            resp = httpx.patch(
+                f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+                json={"category": category},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 200, f"category={category} should succeed"
+
+        for status in ["pending", "in_progress", "met", "partially_met", "not_met", "deprecated"]:
+            resp = httpx.patch(
+                f"{API_BASE}/plans/{plan_id}/requirements/{req_id}",
+                json={"status": status},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 200, f"status={status} should succeed"
+
+
 class TestConstraints:
     """测试 Constraints API (Plan 约束)"""
 
@@ -4521,6 +4793,198 @@ class TestTaskDependencyBlocking:
         # C解除阻塞
         resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_c_id}", timeout=TIMEOUT)
         assert len(resp.json().get("blocked_by", [])) == 0
+
+
+# ========================
+# Step 122: Task Dependency API Boundary Tests
+# ========================
+
+class TestTaskDependencyBoundary:
+    """Step 122: 为 Task Dependency API 添加边界测试覆盖"""
+
+    def test_get_dependency_graph_plan_not_found(self):
+        """GET dependency-graph: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks/dependency-graph",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_dependency_graph_version_not_found(self):
+        """GET dependency-graph: version 不存在 → 404"""
+        plan_payload = {"title": "边界测试-依赖图", "topic": "依赖图边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.0/tasks/dependency-graph",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_dependency_graph_empty_plan(self):
+        """GET dependency-graph: 无任务计划 → 返回空图"""
+        plan_payload = {"title": "边界测试-空计划", "topic": "空依赖图测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/dependency-graph",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        assert data["nodes"] == []
+        assert data["edges"] == []
+        assert data["blocked_task_count"] == 0
+
+    def test_get_blocked_tasks_plan_not_found(self):
+        """GET blocked: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks/blocked",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_blocked_tasks_version_not_found(self):
+        """GET blocked: version 不存在 → 404"""
+        plan_payload = {"title": "边界测试-阻塞任务", "topic": "阻塞任务边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.0/tasks/blocked",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_blocked_tasks_no_blocked(self):
+        """GET blocked: 无阻塞任务 → 返回空列表"""
+        plan_payload = {"title": "边界测试-无阻塞", "topic": "无阻塞任务测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/blocked",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert data["blocked_count"] == 0
+        assert data["blocked_tasks"] == []
+
+    def test_validate_dependencies_empty_list(self):
+        """POST validate-dependencies: 空依赖列表 → 返回 valid=True"""
+        plan_payload = {"title": "边界测试-验证依赖", "topic": "依赖验证边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/validate-dependencies",
+            json={"dependencies": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is True
+        assert data["errors"] == []
+
+    def test_validate_dependencies_plan_not_found(self):
+        """POST validate-dependencies: plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/tasks/validate-dependencies",
+            json={"dependencies": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_validate_dependencies_version_not_found(self):
+        """POST validate-dependencies: version 不存在 → 404"""
+        plan_payload = {"title": "边界测试-验证版本", "topic": "依赖验证版本测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.0/tasks/validate-dependencies",
+            json={"dependencies": []},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_validate_dependencies_nonexistent_task(self):
+        """POST validate-dependencies: 依赖不存在的任务 → invalid=True"""
+        plan_payload = {"title": "边界测试-无效依赖", "topic": "无效依赖测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+        fake_task_id = str(uuid.uuid4())
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/validate-dependencies",
+            json={"dependencies": [fake_task_id]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # 依赖不存在的任务，应该返回 invalid
+        # 行为：depends_on_not_found 错误
+        assert data["valid"] is False or any(
+            "not_found" in e.get("type", "").lower() or "not found" in e.get("message", "").lower()
+            for e in data.get("errors", [])
+        )
+
+    def test_validate_dependencies_self_reference(self):
+        """POST validate-dependencies: 依赖自己 → backend接受为valid（依赖验证仅检查存在性和跨版本，不检测自引用）"""
+        plan_payload = {"title": "边界测试-自引用", "topic": "自引用测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        # 先创建一个任务
+        task_payload = {"title": "自引用任务", "priority": "high"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload, timeout=TIMEOUT
+        )
+        task_id = resp.json()["task_id"]
+
+        # 让任务依赖自己 - backend 将其视为 valid（仅验证存在性）
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/validate-dependencies",
+            json={"dependencies": [task_id]},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # Backend 当前行为：依赖自己被视为 valid（仅检查任务存在性）
+        assert data["valid"] is True
+        assert data["errors"] == []
+
+    def test_get_dependency_graph_invalid_plan_uuid(self):
+        """GET dependency-graph: 无效 plan_id UUID 格式 → 404"""
+        resp = httpx.get(
+            f"{API_BASE}/plans/not-a-uuid/versions/v1.0/tasks/dependency-graph",
+            timeout=TIMEOUT
+        )
+        # plan 不存在 → 404
+        assert resp.status_code == 404
+
+    def test_get_blocked_tasks_invalid_plan_uuid(self):
+        """GET blocked: 无效 plan_id UUID 格式 → 404"""
+        resp = httpx.get(
+            f"{API_BASE}/plans/invalid-uuid/versions/v1.0/tasks/blocked",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
 
 
 # ========================

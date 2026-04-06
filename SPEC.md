@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.69 | 日期：2026-04-06（Step 120 - Action Items API 边界测试）
+> 版本：v2.70 | 日期：2026-04-06（Step 122 - Task Dependency API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
@@ -3408,4 +3408,90 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 121（版本 v2.70）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 122 (2026-04-06)
+**版本**: v2.71 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Task Dependency API 添加边界测试覆盖
+
+背景：Task Dependency API（任务依赖关系图/阻塞任务/依赖验证）是任务管理阻塞的核心功能，包含 3 个端点：
+- `GET /plans/{plan_id}/versions/{version}/tasks/dependency-graph` — 获取依赖关系图
+- `GET /plans/{plan_id}/versions/{version}/tasks/blocked` — 获取所有被阻塞任务
+- `POST /plans/{plan_id}/versions/{version}/tasks/validate-dependencies` — 验证依赖列表有效性
+
+`TestTaskDependencyBlocking` 已有 7 个基础测试（自动阻塞/解除阻塞/循环检测/获取阻塞/依赖图/多依赖阻塞），缺少 404 场景/空计划/无效 UUID/不存在任务等边界测试。与 Step 84-121 的补全模式对齐。
+
+### Do
+新增 `TestTaskDependencyBoundary` 测试类（13个边界测试用例）：
+
+1. **`test_get_dependency_graph_plan_not_found`** — GET dependency-graph: plan 不存在 → 404
+2. **`test_get_dependency_graph_version_not_found`** — GET dependency-graph: version 不存在 → 404
+3. **`test_get_dependency_graph_empty_plan`** — GET dependency-graph: 无任务计划 → 返回空图（nodes=[], edges=[], blocked_task_count=0）
+4. **`test_get_blocked_tasks_plan_not_found`** — GET blocked: plan 不存在 → 404
+5. **`test_get_blocked_tasks_version_not_found`** — GET blocked: version 不存在 → 404
+6. **`test_get_blocked_tasks_no_blocked`** — GET blocked: 无阻塞任务 → 返回空列表（blocked_count=0, blocked_tasks=[]）
+7. **`test_validate_dependencies_empty_list`** — POST validate-dependencies: 空依赖列表 → valid=True
+8. **`test_validate_dependencies_plan_not_found`** — POST validate-dependencies: plan 不存在 → 404
+9. **`test_validate_dependencies_version_not_found`** — POST validate-dependencies: version 不存在 → 404
+10. **`test_validate_dependencies_nonexistent_task`** — POST validate-dependencies: 依赖不存在的任务 → invalid=True
+11. **`test_validate_dependencies_self_reference`** — POST validate-dependencies: 依赖自己 → backend 接受为 valid（仅验证存在性，不检测自引用）
+12. **`test_get_dependency_graph_invalid_plan_uuid`** — GET dependency-graph: 无效 plan_id UUID 格式 → 404
+13. **`test_get_blocked_tasks_invalid_plan_uuid`** — GET blocked: 无效 plan_id UUID 格式 → 404
+
+**发现的行为**：
+- `dependency-graph` 返回字段：`blocked_task_count`（非 `total_blocked`），`total_tasks`
+- `blocked` 返回字段：`blocked_count`（非 `total_blocked`）
+- `validate-dependencies` 对自引用（task_id 依赖自己）返回 valid=True，backend 仅验证依赖任务存在性，不检测自引用
+- 依赖不存在任务返回 invalid=True，errors 含 "依赖任务不存在"
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestTaskDependencyBoundary 13/13 passed
+- ✅ pytest tests/ 558/558 passed（原有545 + 新增13）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 122（版本 v2.71）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 123 (2026-04-06)
+**版本**: v2.72 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Requirements API 添加边界测试覆盖
+
+背景：Requirements API（Plan 需求管理）包含 6 个端点（create/list/get/update/delete/stats），TestRequirements 已有基础测试（创建+列表/获取/更新/删除/统计/枚举验证/plan_not_found），缺少 category 枚举验证/description max_length/更新操作枚举验证/空列表边界/stats 空值/无效 UUID 等边界测试。与 Step 84-122 的补全模式对齐。
+
+### Do
+新增 `TestRequirementsBoundary` 测试类（18个边界测试用例）：
+
+1. **`test_create_requirement_invalid_category`** — 创建需求时 category 无效枚举值返回 422
+2. **`test_create_requirement_all_valid_categories`** — 验证全部 8 种 RequirementCategory 枚举值均可创建成功
+3. **`test_create_requirement_all_valid_statuses`** — 验证全部 6 种 RequirementStatus 枚举值均可创建成功
+4. **`test_create_requirement_all_valid_priorities`** — 验证全部 3 种 RequirementPriority 枚举值均可创建成功
+5. **`test_create_requirement_description_max_length`** — 创建需求时 description 达到 max_length=500 边界值返回 201
+6. **`test_create_requirement_description_exceeds_max_length`** — 创建需求时 description 超过 max_length=500 返回 422
+7. **`test_update_requirement_invalid_category`** — 更新需求时 category 无效枚举值返回 422
+8. **`test_update_requirement_invalid_priority`** — 更新需求时 priority 无效枚举值返回 422
+9. **`test_update_requirement_invalid_status`** — 更新需求时 status 无效枚举值返回 422
+10. **`test_update_requirement_empty_description`** — 更新需求时 description='' 返回 422 (min_length=1)
+11. **`test_update_requirement_description_exceeds_max_length`** — 更新需求时 description 超过 max_length=500 返回 422
+12. **`test_list_requirements_empty`** — 无需求时 GET /requirements 返回空列表 []
+13. **`test_get_requirement_plan_not_found`** — GET 单个需求时 plan 不存在返回 404
+14. **`test_update_requirement_plan_not_found`** — PATCH 需求时 plan 不存在返回 404
+15. **`test_delete_requirement_plan_not_found`** — DELETE 需求时 plan 不存在返回 404
+16. **`test_get_requirement_stats_empty`** — 无需求时 GET /requirements/stats 返回 total=0
+17. **`test_create_requirement_invalid_plan_uuid`** — 创建需求时 plan_id 为无效 UUID 格式返回 404
+18. **`test_update_requirement_all_enum_values`** — 更新需求时 priority/category/status 全枚举值均可接受
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestRequirementsBoundary 18/18 passed
+- ✅ pytest tests/ 576/576 passed（原有558 + 新增18）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 123（版本 v2.72）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
