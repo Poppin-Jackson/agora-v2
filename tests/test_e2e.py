@@ -3625,6 +3625,407 @@ class TestEscalation:
 
 
 # ========================
+# Escalation API Boundary Tests (Step 139)
+# ========================
+
+class TestEscalationBoundary:
+    """Step 139: Escalation API 边界测试"""
+
+    def _create_plan_and_room(self):
+        """创建一个测试计划+房间，返回 (plan_id, room_id)"""
+        plan_payload = {
+            "title": "Escalation Boundary Test Plan",
+            "topic": "用于测试升级边界的主题",
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        return resp.json()["plan"]["plan_id"], resp.json()["room"]["room_id"]
+
+    def _create_escalation(self, room_id, from_level=1, to_level=7, mode="level_by_level"):
+        """创建一个 escalation，返回 escalation_id"""
+        payload = {
+            "from_level": from_level,
+            "to_level": to_level,
+            "mode": mode,
+            "content": {"proposal": "测试升级内容"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        return resp.json()["escalation_id"]
+
+    # POST /rooms/{room_id}/escalate 边界测试
+
+    def test_escalate_room_invalid_uuid_format(self):
+        """升级: room_id 为无效 UUID 格式 → 404"""
+        payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/not-a-uuid/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_room_not_found(self):
+        """升级: room 存在但不在系统中 → 404"""
+        fake_id = str(uuid.uuid4())
+        payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{fake_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_from_level_zero(self):
+        """升级: from_level=0 超出 L1 下界 → 422（Pydantic ge=1 验证）"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 0,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_from_level_negative(self):
+        """升级: from_level=-1 负数 → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": -1,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_from_level_eight(self):
+        """升级: from_level=8 超出 L7 上界 → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 8,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_to_level_zero(self):
+        """升级: to_level=0 超出 L1 下界 → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 1,
+            "to_level": 0,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_to_level_eight(self):
+        """升级: to_level=8 超出 L7 上界 → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 1,
+            "to_level": 8,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_to_level_equals_from_level(self):
+        """升级: to_level == from_level（同级）→ 400"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 5,
+            "to_level": 5,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_to_level_less_than_from_level(self):
+        """升级: to_level < from_level（向下）→ 400"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 7,
+            "to_level": 3,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_invalid_mode(self):
+        """升级: mode 使用无效枚举值 → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "invalid_mode",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_missing_from_level(self):
+        """升级: 缺少必填字段 from_level → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_escalate_missing_to_level(self):
+        """升级: 缺少必填字段 to_level → 422"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 1,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    # GET /rooms/{room_id}/escalations 边界测试
+
+    def test_get_room_escalations_invalid_uuid(self):
+        """列出房间升级记录: room_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid/escalations", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_get_room_escalations_room_not_found(self):
+        """列出房间升级记录: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/escalations", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    # GET /plans/{plan_id}/escalations 边界测试
+
+    def test_get_plan_escalations_invalid_uuid(self):
+        """列出计划升级记录: plan_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/plans/not-a-uuid/escalations", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_get_plan_escalations_plan_not_found(self):
+        """列出计划升级记录: plan 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/escalations", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    # GET /escalations/{escalation_id} 边界测试
+
+    def test_get_escalation_not_found(self):
+        """获取升级记录: escalation 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/escalations/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_invalid_uuid_format(self):
+        """获取升级记录: escalation_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/escalations/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    # PATCH /escalations/{escalation_id} 边界测试
+
+    def test_update_escalation_not_found(self):
+        """更新升级记录: escalation 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        payload = {
+            "action": "acknowledge",
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{fake_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_update_escalation_invalid_uuid_format(self):
+        """更新升级记录: escalation_id 为无效 UUID 格式 → 404"""
+        payload = {
+            "action": "acknowledge",
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/not-a-uuid", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_update_escalation_invalid_action(self):
+        """更新升级记录: action 使用无效值 → 400"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "action": "invalid_action",
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
+
+    def test_update_escalation_missing_actor_id(self):
+        """更新升级记录: 缺少必填字段 actor_id → 422"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "action": "acknowledge",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_update_escalation_missing_actor_name(self):
+        """更新升级记录: 缺少必填字段 actor_name → 422"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "action": "acknowledge",
+            "actor_id": "actor-001",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_update_escalation_missing_action(self):
+        """更新升级记录: 缺少必填字段 action → 422"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    # GET /rooms/{room_id}/escalation-path 边界测试
+
+    def test_get_escalation_path_room_not_found(self):
+        """获取升级路径: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/escalation-path", params={"from_level": 1}, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_invalid_room_uuid(self):
+        """获取升级路径: room_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid/escalation-path", params={"from_level": 1}, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_level_zero(self):
+        """获取升级路径: from_level=0 超出 L1 下界 → 422"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/escalation-path", params={"from_level": 0}, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_level_eight(self):
+        """获取升级路径: from_level=8 超出 L7 上界 → 422"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/escalation-path", params={"from_level": 8}, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_level_negative(self):
+        """获取升级路径: from_level=-1 负数 → 422"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/escalation-path", params={"from_level": -1}, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_invalid_mode(self):
+        """获取升级路径: mode 使用无效枚举值 → 422"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/escalation-path",
+            params={"from_level": 1, "mode": "invalid_mode"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_missing_from_level(self):
+        """获取升级路径: 缺少必填查询参数 from_level → 422"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/escalation-path", timeout=TIMEOUT)
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_get_escalation_path_cross_level_mode(self):
+        """获取升级路径: mode=cross_level 正常返回"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/escalation-path",
+            params={"from_level": 2, "mode": "cross_level"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["mode"] == "cross_level"
+        assert data["from_level"] == 2
+        assert isinstance(data["escalation_path"], list)
+        assert len(data["escalation_path"]) > 0
+
+    def test_get_escalation_path_emergency_mode(self):
+        """获取升级路径: mode=emergency 正常返回"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/escalation-path",
+            params={"from_level": 1, "mode": "emergency"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["mode"] == "emergency"
+        assert data["from_level"] == 1
+        assert isinstance(data["escalation_path"], list)
+
+    def test_escalate_boundary_levels_at_valid_extremes(self):
+        """升级: from_level=1 和 to_level=7 边界值合法 → 201"""
+        _, room_id = self._create_plan_and_room()
+        payload = {
+            "from_level": 1,
+            "to_level": 7,
+            "mode": "level_by_level",
+            "content": {"proposal": "测试边界值"},
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/escalate", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["from_level"] == 1
+        assert data["to_level"] == 7
+        assert data["escalation_path"] == [1, 2, 3, 4, 5, 6, 7]
+
+    def test_update_escalation_complete_action(self):
+        """更新升级记录: action=complete 正常完成 → 200"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "action": "complete",
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["status"] == "completed"
+
+    def test_update_escalation_reject_action(self):
+        """更新升级记录: action=reject 拒绝升级 → 200"""
+        _, room_id = self._create_plan_and_room()
+        escalation_id = self._create_escalation(room_id, from_level=1, to_level=7)
+        payload = {
+            "action": "reject",
+            "actor_id": "actor-001",
+            "actor_name": "测试actor",
+            "comment": "不符合条件",
+        }
+        resp = httpx.patch(f"{API_BASE}/escalations/{escalation_id}", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["status"] == "rejected"
+
+
+# ========================
 # Task Comments & Checkpoints (Step 21)
 # 来源: 08-Data-Models-Details.md §3.1 Task模型 comments/checkpoints
 # ========================

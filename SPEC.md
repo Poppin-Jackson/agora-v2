@@ -4125,3 +4125,71 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 138（版本 v2.87）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 139 (2026-04-06)
+**版本**: v2.88 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Escalation API 添加边界测试覆盖
+
+背景：Escalation API（层级汇报/升级）包含 6 个端点（escalate/list_room/list_plan/get/update/patch/escalation-path）。`TestEscalation` 仅有 4 个基础测试（逐级/跨级/紧急/无效层级），缺少无效UUID/房间不存在/from_level边界/invalid mode/必填字段/更新动作/GET escalation-path边界等测试。与 Step 84-138 的补全模式对齐。
+
+### Do
+新增 `TestEscalationBoundary` 测试类（36个边界测试用例）：
+
+1. **`test_escalate_room_invalid_uuid_format`** — 升级: room_id 为无效 UUID 格式 → 404
+2. **`test_escalate_room_not_found`** — 升级: room 存在但不在系统中 → 404
+3. **`test_escalate_from_level_zero`** — 升级: from_level=0 超出 L1 下界 → 422
+4. **`test_escalate_from_level_negative`** — 升级: from_level=-1 负数 → 422
+5. **`test_escalate_from_level_eight`** — 升级: from_level=8 超出 L7 上界 → 422
+6. **`test_escalate_to_level_zero`** — 升级: to_level=0 超出 L1 下界 → 422
+7. **`test_escalate_to_level_eight`** — 升级: to_level=8 超出 L7 上界 → 422
+8. **`test_escalate_to_level_equals_from_level`** — 升级: to_level == from_level（同级）→ 400
+9. **`test_escalate_to_level_less_than_from_level`** — 升级: to_level < from_level（向下）→ 400
+10. **`test_escalate_invalid_mode`** — 升级: mode 使用无效枚举值 → 422
+11. **`test_escalate_missing_from_level`** — 升级: 缺少必填字段 from_level → 422
+12. **`test_escalate_missing_to_level`** — 升级: 缺少必填字段 to_level → 422
+13. **`test_get_room_escalations_invalid_uuid`** — 列出房间升级记录: room_id 无效 UUID → 404
+14. **`test_get_room_escalations_room_not_found`** — 列出房间升级记录: room 不存在 → 404
+15. **`test_get_plan_escalations_invalid_uuid`** — 列出计划升级记录: plan_id 无效 UUID → 404
+16. **`test_get_plan_escalations_plan_not_found`** — 列出计划升级记录: plan 不存在 → 404
+17. **`test_get_escalation_not_found`** — 获取升级记录: escalation 不存在 → 404
+18. **`test_get_escalation_invalid_uuid_format`** — 获取升级记录: escalation_id 无效 UUID → 404
+19. **`test_update_escalation_not_found`** — 更新升级记录: escalation 不存在 → 404
+20. **`test_update_escalation_invalid_uuid_format`** — 更新升级记录: escalation_id 无效 UUID → 404
+21. **`test_update_escalation_invalid_action`** — 更新升级记录: action 使用无效值 → 400
+22. **`test_update_escalation_missing_actor_id`** — 更新升级记录: 缺少必填字段 actor_id → 422
+23. **`test_update_escalation_missing_actor_name`** — 更新升级记录: 缺少必填字段 actor_name → 422
+24. **`test_update_escalation_missing_action`** — 更新升级记录: 缺少必填字段 action → 422
+25. **`test_get_escalation_path_room_not_found`** — 获取升级路径: room 不存在 → 404
+26. **`test_get_escalation_path_invalid_room_uuid`** — 获取升级路径: room_id 无效 UUID → 404
+27. **`test_get_escalation_path_level_zero`** — 获取升级路径: from_level=0 超出 L1 下界 → 422
+28. **`test_get_escalation_path_level_eight`** — 获取升级路径: from_level=8 超出 L7 上界 → 422
+29. **`test_get_escalation_path_level_negative`** — 获取升级路径: from_level=-1 负数 → 422
+30. **`test_get_escalation_path_invalid_mode`** — 获取升级路径: mode 使用无效枚举值 → 422
+31. **`test_get_escalation_path_missing_from_level`** — 获取升级路径: 缺少必填查询参数 from_level → 422
+32. **`test_get_escalation_path_cross_level_mode`** — 获取升级路径: mode=cross_level 正常返回
+33. **`test_get_escalation_path_emergency_mode`** — 获取升级路径: mode=emergency 正常返回
+34. **`test_escalate_boundary_levels_at_valid_extremes`** — 升级: from_level=1 和 to_level=7 边界值合法 → 201
+35. **`test_update_escalation_complete_action`** — 更新升级记录: action=complete 正常完成 → 200
+36. **`test_update_escalation_reject_action`** — 更新升级记录: action=reject 拒绝升级 → 200
+
+**发现的行为**：
+- `from_level` 和 `to_level` 有 Pydantic ge=1/le=7 验证，0/-1/8 等超界值返回 422
+- `to_level <= from_level` 由 backend 校验，返回 400
+- `mode` 为 FastAPI enum，拒绝无效值返回 422
+- `escalate` 端点缺少 `escalated_by` 字段时会自动生成 UUID
+- `get_room_escalations` 和 `get_plan_escalations` 对不存在的 room/plan 返回 404
+- `update_escalation` 支持 acknowledge/complete/reject 三种 action，无效 action 返回 400
+- `escalation-path` 端点要求 `from_level` 为必填查询参数（Query(...)），缺失返回 422
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestEscalationBoundary 36/36 passed（+36 new tests）
+- ✅ pytest tests/test_e2e.py 840/840 passed（原有804 + 新增36 = 840）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 139（版本 v2.88）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
