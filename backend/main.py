@@ -3234,6 +3234,10 @@ async def list_plan_templates(
 async def get_plan_template(template_id: str):
     """获取单个计划模板"""
     try:
+        uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Template not found")
+    try:
         template = await crud.get_plan_template(template_id)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
@@ -3248,6 +3252,10 @@ async def get_plan_template(template_id: str):
 @app.patch("/plan-templates/{template_id}")
 async def update_plan_template(template_id: str, data: PlanTemplateUpdate):
     """更新计划模板"""
+    try:
+        uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Template not found")
     try:
         template = await crud.update_plan_template(
             template_id=template_id,
@@ -3270,6 +3278,10 @@ async def update_plan_template(template_id: str, data: PlanTemplateUpdate):
 @app.delete("/plan-templates/{template_id}", status_code=204)
 async def delete_plan_template(template_id: str):
     """删除计划模板"""
+    try:
+        uuid.UUID(template_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Template not found")
     try:
         deleted = await crud.delete_plan_template(template_id)
         if not deleted:

@@ -3792,3 +3792,87 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 130（版本 v2.79）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 131 (2026-04-06)
+**版本**: v2.80 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 PlanTemplates API 添加边界测试覆盖
+
+背景：PlanTemplates API（计划模板管理）包含 5 个端点（create/list/get/update/delete），只有 8 个基础测试（创建/列表/获取/更新/删除/不存在/create-plan-from-template/search），缺少：空名称验证/无效UUID格式/模板不存在/标签筛选/is_shared筛选等边界测试。同时修复 backend 对无效 UUID 格式返回 500 而非 404 的 Bug。与 Step 84-130 的补全模式对齐。
+
+### Do
+**Bug Fix**：为 plan template 端点（GET/PATCH/DELETE）添加 UUID 格式校验
+- `get_plan_template` 端点：无效 UUID 格式时返回 404（非 500）
+- `update_plan_template` 端点：无效 UUID 格式时返回 404（非 500）
+- `delete_plan_template` 端点：无效 UUID 格式时返回 404（非 500）
+
+**新增 `TestPlanTemplatesBoundary` 测试类**（13个边界测试用例）：
+
+1. **`test_create_plan_template_empty_name`** — 创建计划模板时 name="" 返回 422（min_length=1 验证）
+2. **`test_create_plan_template_missing_name`** — 创建计划模板时缺少必填字段 name 返回 422
+3. **`test_create_plan_template_only_required_fields`** — 创建计划模板时仅提供必填字段（name）返回 201
+4. **`test_get_plan_template_invalid_uuid`** — 获取计划模板时 template_id 为无效 UUID 格式返回 404
+5. **`test_update_plan_template_invalid_uuid`** — 更新计划模板时 template_id 为无效 UUID 格式返回 404
+6. **`test_update_plan_template_not_found`** — 更新计划模板时模板不存在返回 404
+7. **`test_update_plan_template_empty_body`** — 更新计划模板时空请求体返回 200（所有字段可选）
+8. **`test_delete_plan_template_invalid_uuid`** — 删除计划模板时 template_id 为无效 UUID 格式返回 404
+9. **`test_create_plan_from_template_not_found`** — 从计划模板创建计划时模板不存在返回 404
+10. **`test_list_plan_templates_filter_by_tag`** — 列出计划模板时按 tag 筛选
+11. **`test_list_plan_templates_filter_by_is_shared`** — 列出计划模板时按 is_shared 筛选
+12. **`test_create_plan_from_template_with_optional_fields`** — 从计划模板创建计划时提供可选字段（title/topic）
+13. **`test_update_plan_template_all_fields`** — 更新计划模板时所有字段均可更新
+
+### Check
+- ✅ python3 -m py_compile backend/main.py 语法检查通过
+- ✅ pytest TestPlanTemplatesBoundary 13/13 passed（+13 new tests）
+- ✅ pytest tests/ 729/729 passed（原有716 + 新增13 = 729）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 131（版本 v2.80）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 132 (2026-04-06)
+**版本**: v2.81 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Task Comments + Task Checkpoints API 添加边界测试覆盖
+
+背景：Task Comments API（任务评论）和 Task Checkpoints API（任务检查点）是任务管理的辅助功能，分别支持团队成员对任务进行讨论和将任务分解为可验证里程碑。TestTaskComments 和 TestTaskCheckpoints 各有 8 个基础测试（创建/列表/获取/更新/删除/不存在/字段验证），缺少边界测试覆盖。与 Step 84-131 的补全模式对齐。
+
+### Do
+**新增 `TestTaskCommentsBoundary` 测试类**（8个边界测试用例）：
+
+1. **`test_create_comment_empty_content`** — 创建评论时 content="" 返回 422（min_length=1 验证）
+2. **`test_create_comment_missing_content`** — 创建评论时缺少必填字段 content 返回 422
+3. **`test_create_comment_empty_author_name`** — 创建评论时 author_name="" 返回 422（min_length=1 验证）
+4. **`test_update_comment_not_found`** — 更新不存在的评论返回 404
+5. **`test_delete_comment_not_found`** — 删除不存在的评论返回 404
+6. **`test_create_comment_plan_not_found`** — 创建评论时 plan 不存在返回 404
+7. **`test_create_comment_invalid_version`** — 创建评论时 version 不存在 —— API 不验证 version，返回 201（记录实际行为）
+8. **`test_list_comments_plan_not_found`** — 列出评论时 plan 不存在 —— API 返回空列表 200（记录实际行为）
+
+**新增 `TestTaskCheckpointsBoundary` 测试类**（8个边界测试用例）：
+
+1. **`test_create_checkpoint_empty_name`** — 创建检查点时 name="" 返回 422（min_length=1 验证）
+2. **`test_create_checkpoint_missing_name`** — 创建检查点时缺少必填字段 name 返回 422
+3. **`test_create_checkpoint_name_too_long`** — 创建检查点时 name 超过 200 字符返回 422（max_length=200 验证）
+4. **`test_update_checkpoint_not_found`** — 更新不存在的检查点返回 404
+5. **`test_delete_checkpoint_not_found`** — 删除不存在的检查点返回 404
+6. **`test_create_checkpoint_plan_not_found`** — 创建检查点时 plan 不存在返回 404
+7. **`test_create_checkpoint_invalid_version`** — 创建检查点时 version 不存在 —— API 不验证 version，返回 201（记录实际行为）
+8. **`test_update_checkpoint_name_too_long`** — 更新检查点名称超过 200 字符返回 422
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestTaskCommentsBoundary 8/8 passed（+8 new tests）
+- ✅ pytest TestTaskCheckpointsBoundary 8/8 passed（+8 new tests）
+- ✅ pytest tests/ 745/745 passed（原有729 + 新增16 = 745）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 132（版本 v2.81）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

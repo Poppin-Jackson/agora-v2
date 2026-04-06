@@ -7729,6 +7729,171 @@ class TestPlanTemplates:
         assert resp.status_code == 404
 
 
+class TestPlanTemplatesBoundary:
+    """Plan Templates API 边界测试"""
+
+    def test_create_plan_template_empty_name(self):
+        """创建计划模板时 name="" 返回 422（min_length=1 验证）"""
+        template_data = {
+            "name": "",
+            "description": "空名称测试",
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_plan_template_missing_name(self):
+        """创建计划模板时缺少必填字段 name 返回 422"""
+        template_data = {
+            "description": "缺少name字段测试",
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_plan_template_only_required_fields(self):
+        """创建计划模板时仅提供必填字段（name）返回 201"""
+        template_data = {
+            "name": "仅必填字段测试模板",
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        result = resp.json()
+        assert result["name"] == "仅必填字段测试模板"
+        assert result["description"] == ""
+        assert result["tags"] == []
+        assert result["is_shared"] is False
+
+    def test_get_plan_template_invalid_uuid(self):
+        """获取计划模板时 template_id 为无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/plan-templates/invalid-uuid-xyz", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_plan_template_invalid_uuid(self):
+        """更新计划模板时 template_id 为无效 UUID 格式返回 404"""
+        resp = httpx.patch(f"{API_BASE}/plan-templates/invalid-uuid-xyz", json={"name": "新名称"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_plan_template_not_found(self):
+        """更新计划模板时模板不存在返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/plan-templates/{fake_id}", json={"name": "新名称"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_plan_template_empty_body(self):
+        """更新计划模板时空请求体返回 200（所有字段可选）"""
+        # 先创建一个模板
+        template_data = {
+            "name": "空更新测试模板",
+            "description": "原始描述",
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 空请求体
+        resp = httpx.patch(f"{API_BASE}/plan-templates/{template_id}", json={}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_delete_plan_template_invalid_uuid(self):
+        """删除计划模板时 template_id 为无效 UUID 格式返回 404"""
+        resp = httpx.delete(f"{API_BASE}/plan-templates/invalid-uuid-xyz", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_plan_from_template_not_found(self):
+        """从计划模板创建计划时模板不存在返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(f"{API_BASE}/plan-templates/{fake_id}/create-plan", json={"title": "新计划"}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_plan_templates_filter_by_tag(self):
+        """列出计划模板时按 tag 筛选"""
+        # 创建带特定标签的模板
+        template_data = {
+            "name": "标签筛选边界测试模板XYZ",
+            "tags": ["boundary-tag-xyz-abc"],
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 按标签筛选
+        resp = httpx.get(f"{API_BASE}/plan-templates", params={"tag": "boundary-tag-xyz-abc"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json()
+        assert any(t.get("name") == "标签筛选边界测试模板XYZ" for t in templates)
+
+    def test_list_plan_templates_filter_by_is_shared(self):
+        """列出计划模板时按 is_shared 筛选"""
+        # 创建一个 is_shared=True 的模板
+        template_data = {
+            "name": "共享模板边界测试XYZ",
+            "is_shared": True,
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 按 is_shared=True 筛选
+        resp = httpx.get(f"{API_BASE}/plan-templates", params={"is_shared": True}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        templates = resp.json()
+        assert any(t.get("name") == "共享模板边界测试XYZ" for t in templates)
+
+    def test_create_plan_from_template_with_optional_fields(self):
+        """从计划模板创建计划时提供可选字段"""
+        # 先创建一个模板
+        template_data = {
+            "name": "可选字段模板测试XYZ",
+            "description": "模板描述",
+            "plan_content": {"title": "原始标题", "topic": "原始主题"},
+            "tags": ["test"],
+            "is_shared": True,
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 从模板创建计划时提供 title 和 topic
+        resp = httpx.post(
+            f"{API_BASE}/plan-templates/{template_id}/create-plan",
+            json={"title": "自定义标题", "topic": "自定义主题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        result = resp.json()
+        assert result["plan"]["title"] == "自定义标题"
+        assert result["plan"]["topic"] == "自定义主题"
+        assert result["template_applied"] == "可选字段模板测试XYZ"
+
+    def test_update_plan_template_all_fields(self):
+        """更新计划模板时所有字段均可更新"""
+        # 先创建一个模板
+        template_data = {
+            "name": "全字段更新测试模板",
+            "description": "原始描述",
+            "tags": ["原始标签"],
+            "is_shared": False,
+        }
+        resp = httpx.post(f"{API_BASE}/plan-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 更新所有字段
+        resp = httpx.patch(
+            f"{API_BASE}/plan-templates/{template_id}",
+            json={
+                "name": "更新后名称",
+                "description": "更新后描述",
+                "tags": ["新标签1", "新标签2"],
+                "is_shared": True,
+            },
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        tmpl = resp.json()
+        assert tmpl["name"] == "更新后名称"
+        assert tmpl["description"] == "更新后描述"
+        assert tmpl["tags"] == ["新标签1", "新标签2"]
+        assert tmpl["is_shared"] is True
+
+
 class TestTaskTemplates:
     """Task Templates API Tests"""
 
@@ -12944,6 +13109,304 @@ class TestExportAPIBoundary:
         # 空计划也应返回有效 Markdown
         assert isinstance(content, str)
         assert len(content) > 0
+
+
+# ============================================================
+# TestTaskCommentsBoundary — Task Comments API 边界测试
+# Step 132: Task Comments/Checkpoints API 边界测试
+# ============================================================
+
+class TestTaskCommentsBoundary:
+    """Step 132: Task Comments API 边界测试"""
+
+    def _create_plan_and_task(self):
+        """创建计划+任务，返回 (plan_id, version, task_id)"""
+        plan_payload = {
+            "title": "评论边界测试计划",
+            "topic": "测试评论边界",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {
+            "title": "测试任务-评论边界",
+            "owner_level": 4,
+            "owner_role": "L4_PLANNER",
+            "priority": "medium",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, version, task_id
+
+    def test_create_comment_empty_content(self):
+        """创建评论时 content="" 返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        comment_payload = {
+            "author_name": "张工",
+            "content": "",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/comments",
+            json=comment_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_comment_missing_content(self):
+        """创建评论时缺少必填字段 content 返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        comment_payload = {
+            "author_name": "张工",
+            # 缺少 content
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/comments",
+            json=comment_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_comment_empty_author_name(self):
+        """创建评论时 author_name="" 返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        comment_payload = {
+            "author_name": "",
+            "content": "有效内容",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/comments",
+            json=comment_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_update_comment_not_found(self):
+        """更新不存在的评论返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_comment_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/comments/{fake_comment_id}",
+            json={"content": "更新内容"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_delete_comment_not_found(self):
+        """删除不存在的评论返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_comment_id = str(uuid.uuid4())
+
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/comments/{fake_comment_id}",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_comment_plan_not_found(self):
+        """创建评论时 plan 不存在返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_plan_id = str(uuid.uuid4())
+
+        comment_payload = {
+            "author_name": "张工",
+            "content": "测试内容",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/{version}/tasks/{task_id}/comments",
+            json=comment_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_comment_invalid_version(self):
+        """创建评论时 version 不存在 —— API 不验证 version，返回 201"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_version = "v99.99"
+
+        comment_payload = {
+            "author_name": "张工",
+            "content": "测试内容",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{fake_version}/tasks/{task_id}/comments",
+            json=comment_payload,
+            timeout=TIMEOUT,
+        )
+        # API 当前行为：不验证 version 存在性，直接写入
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["version"] == fake_version
+
+    def test_list_comments_plan_not_found(self):
+        """列出评论时 plan 不存在 —— API 返回空列表（200）"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_plan_id = str(uuid.uuid4())
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/{version}/tasks/{task_id}/comments",
+            timeout=TIMEOUT,
+        )
+        # API 当前行为：不验证 plan 存在，返回空列表
+        assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["comments"] == []
+
+
+# ============================================================
+# TestTaskCheckpointsBoundary — Task Checkpoints API 边界测试
+# Step 132: Task Comments/Checkpoints API 边界测试
+# ============================================================
+
+class TestTaskCheckpointsBoundary:
+    """Step 132: Task Checkpoints API 边界测试"""
+
+    def _create_plan_and_task(self):
+        """创建计划+任务，返回 (plan_id, version, task_id)"""
+        plan_payload = {
+            "title": "检查点边界测试计划",
+            "topic": "测试检查点边界",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        task_payload = {
+            "title": "测试任务-检查点边界",
+            "owner_level": 4,
+            "owner_role": "L4_PLANNER",
+            "priority": "medium",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, version, task_id
+
+    def test_create_checkpoint_empty_name(self):
+        """创建检查点时 name="" 返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        checkpoint_payload = {"name": ""}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_checkpoint_missing_name(self):
+        """创建检查点时缺少必填字段 name 返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        checkpoint_payload = {}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_checkpoint_name_too_long(self):
+        """创建检查点时 name 超过 200 字符返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        checkpoint_payload = {"name": "A" * 201}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_update_checkpoint_not_found(self):
+        """更新不存在的检查点返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_checkpoint_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints/{fake_checkpoint_id}",
+            json={"status": "completed"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_delete_checkpoint_not_found(self):
+        """删除不存在的检查点返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_checkpoint_id = str(uuid.uuid4())
+
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints/{fake_checkpoint_id}",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_checkpoint_plan_not_found(self):
+        """创建检查点时 plan 不存在返回 404"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_plan_id = str(uuid.uuid4())
+
+        checkpoint_payload = {"name": "测试检查点"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/{version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_checkpoint_invalid_version(self):
+        """创建检查点时 version 不存在 —— API 不验证 version，返回 201"""
+        plan_id, version, task_id = self._create_plan_and_task()
+        fake_version = "v99.99"
+
+        checkpoint_payload = {"name": "测试检查点"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{fake_version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        # API 当前行为：不验证 version 存在性，直接写入
+        assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["version"] == fake_version
+
+    def test_update_checkpoint_name_too_long(self):
+        """更新检查点名称超过 200 字符返回 422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        # 先创建检查点
+        checkpoint_payload = {"name": "正常名称"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints",
+            json=checkpoint_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        checkpoint_id = resp.json()["checkpoint_id"]
+
+        # 更新名称超过 200 字符
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/checkpoints/{checkpoint_id}",
+            json={"name": "A" * 201},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
 
 
 if __name__ == "__main__":
