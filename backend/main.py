@@ -4768,13 +4768,16 @@ async def submit_debate_position(room_id: str, data: DebatePositionSubmit):
             detail=f"Cannot submit position in phase {current.value}, only DEBATE phase is allowed",
         )
 
-    result = submit_position(
-        room_id=room_id,
-        point_id=data.point_id,
-        agent_id=data.agent_id,
-        position=data.position,
-        argument=data.argument,
-    )
+    try:
+        result = submit_position(
+            room_id=room_id,
+            point_id=data.point_id,
+            agent_id=data.agent_id,
+            position=data.position,
+            argument=data.argument,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # 持久化到历史
     if room_id not in _messages:

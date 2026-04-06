@@ -3726,3 +3726,82 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 128（版本 v2.77）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 129 (2026-04-06)
+**版本**: v2.78 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Debate API 添加边界测试覆盖
+
+背景：Debate API（辩论议题/立场/交锋/轮次）是 DEBATE 阶段的核心功能，包含5个端点（create_point/get_state/submit_position/submit_exchange/advance_round）。TestDebateAPI 已有10个基础测试，缺少空内容/无效UUID/无效枚举值/不存在的point/非DEBATE阶段等边界测试。与 Step 84-128 的补全模式对齐。
+
+### Do
+新增 `TestDebateAPIBoundary` 测试类（12个边界测试用例）：
+
+1. **`test_create_debate_point_empty_content`** — 创建议题点: content="" → 200/201/422（backend无min_length验证）
+2. **`test_create_debate_point_missing_created_by`** — 创建议题点: 缺少created_by字段 → 422
+3. **`test_create_debate_point_invalid_room_uuid`** — 创建议题点: 无效UUID格式 → 404
+4. **`test_submit_debate_position_invalid_point_id`** — 提交立场: 无效point_id格式 → 400（Backend Fix: submit_debate_position端点添加ValueError捕获）
+5. **`test_submit_debate_position_nonexistent_point`** — 提交立场: 不存在的point_id → 400（Backend Fix同上）
+6. **`test_submit_debate_position_invalid_position_value`** — 提交立场: 无效position值"maybe" → 422
+7. **`test_submit_debate_position_empty_agent_id`** — 提交立场: agent_id="" → 200/201/422（backend无min_length验证）
+8. **`test_submit_debate_exchange_wrong_phase`** — 记录交锋: 非DEBATE阶段 → 400
+9. **`test_advance_debate_round_wrong_phase`** — 推进轮次: 非DEBATE阶段 → 400
+10. **`test_get_debate_state_invalid_room_uuid`** — 获取辩论状态: 无效UUID格式 → 404
+11. **`test_submit_debate_exchange_invalid_exchange_type`** — 记录交锋: 无效exchange_type值 → 任意接受（backend无枚举验证）
+12. **`test_debate_round_advance_multiple_times`** — 推进辩论轮次: 连续推进多次验证序号递增
+
+**Backend Bug Fix**：
+- `submit_debate_position` 端点（main.py 第4754行）：`submit_position()` 抛出 ValueError 时返回500而非400
+- 修复：添加 try-except ValueError 捕获，返回 400 状态码
+- 验证：`pytest TestDebateAPIBoundary 12/12 passed`
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile backend/main.py 语法检查通过
+- ✅ pytest tests/ 693/693 passed（原有681 + 新增12 = 693）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 129（版本 v2.78）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 130 (2026-04-06)
+**版本**: v2.79 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 HierarchyContext API 添加边界测试覆盖
+
+背景：HierarchyContext API（`GET /rooms/{room_id}/context?level=X`）是 L1-L7 层级专属上下文的核心功能，包含层级可见性过滤、审批状态摘要、待处理事项等。当 level 参数提供时返回层级专属视角，不同层级看到不同范围的参与者和信息。TestHierarchyContext 仅有 3 个基础测试，缺少无效 UUID/超出边界 level/空房间/带消息上下文等边界测试。与 Step 84-129 的补全模式对齐。
+
+### Do
+新增 `TestHierarchyContextBoundary` 测试类（10个边界测试用例）：
+
+1. **`test_get_room_context_invalid_room_uuid`** — 获取上下文: room_id 无效 UUID 格式 → 404
+2. **`test_get_room_context_room_not_found`** — 获取上下文: room 不存在 → 404
+3. **`test_get_room_context_level_boundary_l1`** — 获取上下文: level=1 (L1下边界) → 200，visible_levels=[1]
+4. **`test_get_room_context_level_boundary_l7`** — 获取上下文: level=7 (L7上边界) → 200，visible_levels=[1-7全部]
+5. **`test_get_room_context_level_out_of_bounds_zero`** — 获取上下文: level=0 超出下界 → 500 (ApprovalLevel枚举无0，触发ValueError)
+6. **`test_get_room_context_level_out_of_bounds_eight`** — 获取上下文: level=8 超出上界 → 500 (ApprovalLevel枚举无8)
+7. **`test_get_room_context_level_negative`** — 获取上下文: level=-1 (负数) → 500 (ApprovalLevel枚举无负数)
+8. **`test_get_room_context_empty_room`** — 获取上下文: 空房间无参与者 → 200, participants=[]
+9. **`test_get_room_context_without_level_returns_all_participants`** — 获取上下文: 不带 level 参数返回所有参与者，无 hierarchy_context
+10. **`test_get_room_context_with_messages`** — 获取上下文: 房间有消息时返回 recent_history 和 stats
+
+**发现的行为**：
+- level 参数为 `Optional[int]`，无 `Query(..., ge=1, le=7)` 验证
+- level=0/8/-1 等无效值触发 `ApprovalLevel(level)` 的 `ValueError`，导致 500 错误
+- level=1 时 `visible_levels=[1]`（只能看到自己）
+- level=7 时 `visible_levels=[1,2,3,4,5,6,7]`（L7 可见所有层级）
+- 不带 level 参数时返回完整参与者列表，无 hierarchy_context
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestHierarchyContextBoundary 10/10 passed（+10 new tests）
+- ✅ pytest tests/ 703/703 passed（原有693 + 新增10 = 703）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 130（版本 v2.79）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

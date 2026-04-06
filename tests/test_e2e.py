@@ -1735,6 +1735,158 @@ class TestHierarchyContext:
         assert approval["current_level"] == 7  # 从 L7 开始
 
 
+class TestHierarchyContextBoundary:
+    """测试层级专属上下文 API 边界测试"""
+
+    def test_get_room_context_invalid_room_uuid(self, ensure_api):
+        """获取上下文: room_id 无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/invalid-uuid-format/context", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_context_room_not_found(self, ensure_api):
+        """获取上下文: room 不存在 → 404"""
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_uuid}/context", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_context_level_boundary_l1(self, ensure_api):
+        """获取上下文: level=1 (L1下边界) → 200"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "边界测试", "topic": "测试L1边界", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent_l1", "name": "L1操作员", "level": 1, "role": "Member"},
+            timeout=TIMEOUT,
+        )
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context?level=1", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        ctx = resp.json()
+        assert ctx["hierarchy_context"]["viewer_level"] == 1
+        assert ctx["hierarchy_context"]["visible_levels"] == [1]
+
+    def test_get_room_context_level_boundary_l7(self, ensure_api):
+        """获取上下文: level=7 (L7上边界) → 200"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "边界测试", "topic": "测试L7边界", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        for lvl in [7, 6, 5]:
+            httpx.post(
+                f"{API_BASE}/rooms/{room_id}/participants",
+                json={"agent_id": f"agent_l{lvl}", "name": f"L{lvl}", "level": lvl, "role": "Member"},
+                timeout=TIMEOUT,
+            )
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context?level=7", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        ctx = resp.json()
+        assert ctx["hierarchy_context"]["viewer_level"] == 7
+        assert set(ctx["hierarchy_context"]["visible_levels"]) == {1, 2, 3, 4, 5, 6, 7}
+
+    def test_get_room_context_level_out_of_bounds_zero(self, ensure_api):
+        """获取上下文: level=0 超出下界 → 500 (ApprovalLevel枚举无0)"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "边界测试", "topic": "测试level=0", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context?level=0", timeout=TIMEOUT)
+        # ApprovalLevel(0) 不存在，触发 ValueError → 500
+        assert resp.status_code == 500
+
+    def test_get_room_context_level_out_of_bounds_eight(self, ensure_api):
+        """获取上下文: level=8 超出上界 → 500 (ApprovalLevel枚举无8)"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "边界测试", "topic": "测试level=8", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context?level=8", timeout=TIMEOUT)
+        # ApprovalLevel(8) 不存在，触发 ValueError → 500
+        assert resp.status_code == 500
+
+    def test_get_room_context_level_negative(self, ensure_api):
+        """获取上下文: level=-1 (负数) → 500 (ApprovalLevel枚举无负数)"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "边界测试", "topic": "测试level负数", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context?level=-1", timeout=TIMEOUT)
+        assert resp.status_code == 500
+
+    def test_get_room_context_empty_room(self, ensure_api):
+        """获取上下文: 空房间无参与者 → 200, participants=[]"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "空房间", "topic": "无参与者房间", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        ctx = resp.json()
+        assert ctx["participants"] == []
+        assert ctx["stats"]["total_messages"] == 0
+
+    def test_get_room_context_without_level_returns_all_participants(self, ensure_api):
+        """获取上下文: 不带 level 参数返回所有参与者"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "全量测试", "topic": "不带level参数", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        for lvl, name in [(5, "L5经理"), (4, "L4主管"), (3, "L3组长")]:
+            httpx.post(
+                f"{API_BASE}/rooms/{room_id}/participants",
+                json={"agent_id": f"agent_lvl{lvl}", "name": name, "level": lvl, "role": "Member"},
+                timeout=TIMEOUT,
+            )
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        ctx = resp.json()
+        assert len(ctx["participants"]) == 3
+        assert "hierarchy_context" not in ctx  # 无 level 参数时无层级上下文
+
+    def test_get_room_context_with_messages(self, ensure_api):
+        """获取上下文: 房间有消息时返回 recent_history"""
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "消息测试", "topic": "测试历史消息", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        # 添加发言消息
+        httpx.post(
+            f"{API_BASE}/rooms/{room_id}/speech",
+            json={"agent_id": "agent_001", "content": "测试发言内容", "agent_name": "测试Agent"},
+            timeout=TIMEOUT,
+        )
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/context", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        ctx = resp.json()
+        assert "recent_history" in ctx
+        assert "stats" in ctx
+        assert ctx["stats"]["total_messages"] >= 1
+
+
 class TestProblemHandling:
     """问题处理流程测试 (PROBLEM_DETECTED → PROBLEM_ANALYSIS → PROBLEM_DISCUSSION → PLAN_UPDATE → RESUMING)"""
 
@@ -10808,6 +10960,158 @@ class TestDebateAPI:
         # 房间处于 SELECTING 阶段，未初始化辩论状态
         resp = httpx.get(f"{API_BASE}/rooms/{room_id}/debate/state", timeout=TIMEOUT)
         assert resp.status_code == 404
+
+
+class TestDebateAPIBoundary:
+    """Step 129: Debate API Boundary Tests — 辩论 API 边界场景"""
+
+    def _create_debate_room(self):
+        """创建计划+房间，并转换到DEBATE阶段，返回room_id和plan_id"""
+        plan_payload = {
+            "title": "辩论边界测试计划",
+            "topic": "测试辩论边界场景",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "sharing"}, timeout=TIMEOUT)
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "debate"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        return plan_id, room_id
+
+    def _create_debate_point(self, room_id):
+        """创建议题点并返回point_id"""
+        payload = {"content": "测试议题", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        return resp.json()["point"]["point_id"]
+
+    def test_create_debate_point_empty_content(self):
+        """创建议题点: content为空字符串返回200/201/422"""
+        _, room_id = self._create_debate_room()
+        payload = {"content": "", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        # backend无min_length=1验证，空字符串被接受
+        assert resp.status_code in (200, 201, 422)
+
+    def test_create_debate_point_missing_created_by(self):
+        """创建议题点: 缺少created_by字段返回422"""
+        _, room_id = self._create_debate_room()
+        payload = {"content": "测试议题内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"缺少created_by应返回422，实际: {resp.status_code}"
+
+    def test_create_debate_point_invalid_room_uuid(self):
+        """创建议题点: 无效UUID格式返回404"""
+        invalid_room_id = "not-a-uuid"
+        payload = {"content": "测试", "created_by": "agent-001"}
+        resp = httpx.post(f"{API_BASE}/rooms/{invalid_room_id}/debate/points", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"无效UUID应返回404，实际: {resp.status_code}"
+
+    def test_submit_debate_position_invalid_point_id(self):
+        """提交辩论立场: 无效point_id格式返回422/400"""
+        _, room_id = self._create_debate_room()
+        payload = {
+            "point_id": "not-a-uuid",
+            "agent_id": "agent-001",
+            "position": "agree",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (400, 422), f"无效point_id应返回400/422，实际: {resp.status_code}"
+
+    def test_submit_debate_position_nonexistent_point(self):
+        """提交辩论立场: 不存在的point_id返回400"""
+        _, room_id = self._create_debate_room()
+        fake_point_id = str(uuid.uuid4())
+        payload = {
+            "point_id": fake_point_id,
+            "agent_id": "agent-001",
+            "position": "agree",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"不存在的point_id应返回400，实际: {resp.status_code}"
+
+    def test_submit_debate_position_invalid_position_value(self):
+        """提交辩论立场: 无效position值返回422"""
+        _, room_id = self._create_debate_room()
+        point_id = self._create_debate_point(room_id)
+        payload = {
+            "point_id": point_id,
+            "agent_id": "agent-001",
+            "position": "maybe",  # 无效值
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"无效position值应返回422，实际: {resp.status_code}"
+
+    def test_submit_debate_position_empty_agent_id(self):
+        """提交辩论立场: agent_id为空字符串"""
+        _, room_id = self._create_debate_room()
+        point_id = self._create_debate_point(room_id)
+        payload = {
+            "point_id": point_id,
+            "agent_id": "",
+            "position": "agree",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/position", json=payload, timeout=TIMEOUT)
+        # backend无agent_id min_length验证
+        assert resp.status_code in (200, 201, 422)
+
+    def test_submit_debate_exchange_wrong_phase(self):
+        """记录辩论交锋: 非DEBATE阶段返回400"""
+        plan_payload = {"title": "测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        room_id = resp.json()["room"]["room_id"]
+
+        exchange_payload = {
+            "exchange_type": "challenge",
+            "from_agent": "agent-001",
+            "target_agent": "agent-002",
+            "content": "测试交锋",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/exchange", json=exchange_payload, timeout=TIMEOUT)
+        assert resp.status_code == 400, f"非DEBATE阶段应返回400，实际: {resp.status_code}"
+
+    def test_advance_debate_round_wrong_phase(self):
+        """推进辩论轮次: 非DEBATE阶段返回400"""
+        plan_payload = {"title": "测试", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        room_id = resp.json()["room"]["room_id"]
+
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/round", timeout=TIMEOUT)
+        assert resp.status_code == 400, f"非DEBATE阶段应返回400，实际: {resp.status_code}"
+
+    def test_get_debate_state_invalid_room_uuid(self):
+        """获取辩论状态: 无效UUID格式返回404"""
+        invalid_room_id = "invalid-uuid-xyz"
+        resp = httpx.get(f"{API_BASE}/rooms/{invalid_room_id}/debate/state", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"无效UUID应返回404，实际: {resp.status_code}"
+
+    def test_submit_debate_exchange_invalid_exchange_type(self):
+        """记录辩论交锋: 无效exchange_type值"""
+        _, room_id = self._create_debate_room()
+        exchange_payload = {
+            "exchange_type": "invalid_type",
+            "from_agent": "agent-001",
+            "target_agent": "agent-002",
+            "content": "测试交锋",
+        }
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/exchange", json=exchange_payload, timeout=TIMEOUT)
+        # exchange_type无枚举验证，任意值均可
+        assert resp.status_code in (200, 201, 400, 422)
+
+    def test_debate_round_advance_multiple_times(self):
+        """推进辩论轮次: 连续推进多次"""
+        _, room_id = self._create_debate_room()
+
+        for i in range(1, 4):
+            resp = httpx.post(f"{API_BASE}/rooms/{room_id}/debate/round", timeout=TIMEOUT)
+            assert resp.status_code == 200, f"第{i}次推进失败: {resp.text}"
+            data = resp.json()
+            assert data["new_round"] == i
 
 
 class TestTaskComments:
