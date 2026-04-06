@@ -5405,6 +5405,100 @@ class TestActivityAPI:
         assert "activities" in data
 
 
+class TestActivityAPIBoundary:
+    """Step 117: Activity API 边界测试"""
+
+    def test_list_activities_invalid_plan_id_format(self):
+        """activities列表 - 无效plan_id格式返回200（API接受任意字符串）"""
+        resp = httpx.get(f"{API_BASE}/activities?plan_id=not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert "activities" in resp.json()
+
+    def test_list_activities_invalid_room_id_format(self):
+        """activities列表 - 无效room_id格式返回200"""
+        resp = httpx.get(f"{API_BASE}/activities?room_id=invalid-format", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "activities" in data
+
+    def test_list_activities_limit_zero(self):
+        """activities列表 - limit=0返回200（limit无ge=1验证）"""
+        resp = httpx.get(f"{API_BASE}/activities?limit=0", timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_list_activities_limit_negative(self):
+        """activities列表 - limit=-1返回500（SQL LIMIT不支持负数）"""
+        resp = httpx.get(f"{API_BASE}/activities?limit=-1", timeout=TIMEOUT)
+        assert resp.status_code == 500
+
+    def test_list_activities_offset_negative(self):
+        """activities列表 - offset=-1返回500（SQL OFFSET不支持负数）"""
+        resp = httpx.get(f"{API_BASE}/activities?offset=-1", timeout=TIMEOUT)
+        assert resp.status_code == 500
+
+    def test_list_activities_nonexistent_plan_returns_empty(self):
+        """activities列表 - 不存在的plan_id返回空列表"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/activities?plan_id={fake_plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json()["activities"] == []
+
+    def test_get_activity_invalid_uuid(self):
+        """获取单个活动 - 无效UUID格式返回404"""
+        resp = httpx.get(f"{API_BASE}/activities/not-a-uuid", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_activities_stats_invalid_plan_id(self):
+        """活动统计 - 无效plan_id格式返回200"""
+        resp = httpx.get(f"{API_BASE}/activities/stats?plan_id=invalid", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total" in data
+        assert "by_action_type" in data
+
+    def test_list_plan_activities_nonexistent_plan(self):
+        """计划活动列表 - 不存在的plan_id返回404（计划不存在）"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/activities", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_room_activities_nonexistent_room(self):
+        """房间活动列表 - 不存在的room_id返回404"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_room_id}/activities", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_version_activities_nonexistent_plan(self):
+        """版本活动列表 - 不存在的plan_id返回404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/activities", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_single_activity_not_found(self):
+        """获取单个活动 - 不存在的activity_id返回404"""
+        fake_activity_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/activities/{fake_activity_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_activities_with_all_filters(self):
+        """activities列表 - 同时使用多个过滤参数"""
+        plan_payload = {"title": "ActivityFilterTest", "topic": "多参数过滤"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/activities",
+            params={"plan_id": plan_id, "room_id": room_id, "limit": 10, "offset": 0},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "activities" in data
+        assert data["count"] >= 0
+
+
 class TestExportAPI:
     """Step 32: Plan/Deliberation Export API"""
 
@@ -9800,6 +9894,444 @@ class TestRoomMessageSearch:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 3  # 大小写不敏感，三条都匹配
+
+
+# ==============================================================================
+# Step 118: Edict API Boundary Tests
+# ==============================================================================
+class TestEdictAPIBoundary:
+    """Edict API 边界测试 — 圣旨创建/更新/查询的边界场景"""
+
+    @staticmethod
+    def _create_plan_and_edict():
+        """创建计划+版本+圣旨，返回 (plan_id, version, edict_id)"""
+        plan_payload = {"title": "边界测试计划", "topic": "Edict边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7-Emperor",
+            "recipients": [6, 5],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        edict_id = resp.json()["edict"]["edict_id"]
+        return plan_id, version, edict_id
+
+    def test_create_edict_empty_title(self):
+        """创建圣旨：title="" → 422 (min_length=1)"""
+        plan_payload = {"title": "边界测试", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {"title": "", "content": "有效内容", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_edict_empty_content(self):
+        """创建圣旨：content="" → 422 (min_length=1)"""
+        plan_payload = {"title": "边界测试2", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {"title": "有效标题", "content": "", "issued_by": "L7"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_edict_empty_issued_by(self):
+        """创建圣旨：issued_by="" → 422 (min_length=1)"""
+        plan_payload = {"title": "边界测试3", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {"title": "有效标题", "content": "有效内容", "issued_by": ""}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_edict_title_max_length(self):
+        """创建圣旨：title 长度 = 200 字符（边界值）→ 201"""
+        plan_payload = {"title": "边界测试4", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "A" * 200,
+            "content": "有效内容",
+            "issued_by": "L7",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert len(resp.json()["edict"]["title"]) == 200
+
+    def test_create_edict_title_exceeds_max_length(self):
+        """创建圣旨：title 长度 = 201 字符 → 422 (max_length=200)"""
+        plan_payload = {"title": "边界测试5", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "A" * 201,
+            "content": "有效内容",
+            "issued_by": "L7",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_edict_invalid_recipients_level_zero(self):
+        """创建圣旨：recipients=[0] → 201 (List[int] 无范围验证)"""
+        plan_payload = {"title": "边界测试6", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "有效标题",
+            "content": "有效内容",
+            "issued_by": "L7",
+            "recipients": [0],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        # 无范围验证，接受任意整数
+        assert resp.status_code == 201
+
+    def test_create_edict_invalid_recipients_level_out_of_bounds(self):
+        """创建圣旨：recipients=[8] → 201 (List[int] 无范围验证)"""
+        plan_payload = {"title": "边界测试7", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "有效标题",
+            "content": "有效内容",
+            "issued_by": "L7",
+            "recipients": [8],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        # 无范围验证，接受任意整数
+        assert resp.status_code == 201
+
+    def test_create_edict_recipients_non_integer(self):
+        """创建圣旨：recipients=["L7"] → 422 (类型验证)"""
+        plan_payload = {"title": "边界测试8", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "有效标题",
+            "content": "有效内容",
+            "issued_by": "L7",
+            "recipients": ["L7"],  # 应该是 int，不是 str
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_edict_arbitrary_status_accepted(self):
+        """创建圣旨：status="random_xyz" → 201 (无枚举验证)"""
+        plan_payload = {"title": "边界测试9", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "有效标题",
+            "content": "有效内容",
+            "issued_by": "L7",
+            "status": "random_invalid_status_xyz",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        # status 字段无枚举验证，任意字符串均可创建
+        assert resp.status_code == 201
+        assert resp.json()["edict"]["status"] == "random_invalid_status_xyz"
+
+    def test_create_edict_plan_not_found(self):
+        """创建圣旨：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/edicts",
+            json={"title": "标题", "content": "内容", "issued_by": "L7"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_create_edict_version_not_found(self):
+        """创建圣旨：version 不存在 → 404"""
+        plan_payload = {"title": "边界测试10", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/edicts",
+            json={"title": "标题", "content": "内容", "issued_by": "L7"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_get_edict_plan_not_found(self):
+        """获取圣旨：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/edicts",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_edict_not_found(self):
+        """更新圣旨：edict 不存在 → 404"""
+        plan_payload = {"title": "边界测试11", "topic": "Edict边界"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+        fake_edict_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{fake_edict_id}",
+            json={"title": "新标题"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_delete_edict_plan_not_found(self):
+        """删除圣旨：plan 不存在 → 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_edict_id = str(uuid.uuid4())
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/edicts/{fake_edict_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+
+class TestEdictAcknowledgmentBoundary:
+    """Edict Acknowledgment API 边界测试 — 圣旨签收的边界场景"""
+
+    def test_acknowledge_edict_acknowledged_by_too_long(self):
+        """签收圣旨：acknowledged_by 超过100字符 → 201 (无max_length验证)"""
+        plan_payload = {"title": "边界测试A1", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7-Emperor",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        ack_data = {
+            "acknowledged_by": "A" * 101,
+            "level": 5,
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        # acknowledged_by 无 max_length 验证，接受超长字符串
+        assert resp.status_code == 201
+        assert len(resp.json()["acknowledgment"]["acknowledged_by"]) == 101
+
+    def test_acknowledge_edict_level_zero(self):
+        """签收圣旨：level=0 → 422 (ge=1 验证)"""
+        plan_payload = {"title": "边界测试A2", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        ack_data = {"acknowledged_by": "张工", "level": 0}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_acknowledge_edict_level_out_of_bounds(self):
+        """签收圣旨：level=8 → 422 (le=7 验证)"""
+        plan_payload = {"title": "边界测试A3", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        ack_data = {"acknowledged_by": "张工", "level": 8}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_acknowledge_edict_level_at_boundaries(self):
+        """签收圣旨：level=1 和 level=7（边界值）→ 201"""
+        plan_payload = {"title": "边界测试A4", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        for level in [1, 7]:
+            ack_data = {"acknowledged_by": f"L{level}-用户", "level": level}
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+                json=ack_data, timeout=TIMEOUT
+            )
+            assert resp.status_code == 201
+            assert resp.json()["acknowledgment"]["level"] == level
+
+    def test_acknowledge_edict_empty_acknowledged_by(self):
+        """签收圣旨：acknowledged_by="" → 422 (min_length=1 验证)"""
+        plan_payload = {"title": "边界测试A5", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        ack_data = {"acknowledged_by": "", "level": 5}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_acknowledge_edict_level_coerced_from_string(self):
+        """签收圣旨：level="5" (字符串) → 201 (Pydantic 自动类型转换，将 "5" 转为 int 5)"""
+        plan_payload = {"title": "边界测试A6", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        edict_data = {
+            "title": "测试圣旨",
+            "content": "测试内容",
+            "issued_by": "L7",
+            "recipients": [6],
+            "status": "published",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts",
+            json=edict_data, timeout=TIMEOUT
+        )
+        edict_id = resp.json()["edict"]["edict_id"]
+
+        ack_data = {"acknowledged_by": "张工", "level": "5"}  # 字符串 "5"，Pydantic 转为 int 5
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{edict_id}/acknowledgments",
+            json=ack_data, timeout=TIMEOUT
+        )
+        # Pydantic 默认启用 coercion，"5" 被自动转为 int 5，ge=1/le=7 验证通过
+        assert resp.status_code == 201
+        assert resp.json()["acknowledgment"]["level"] == 5
+
+    def test_list_acknowledgments_edict_not_found(self):
+        """列出签收记录：edict 不存在 → 200 (空列表，edict_id 在路径中不做存在性检查)"""
+        plan_payload = {"title": "边界测试A7", "topic": "签收边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+        fake_edict_id = str(uuid.uuid4())
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/edicts/{fake_edict_id}/acknowledgments",
+            timeout=TIMEOUT
+        )
+        # 返回空列表（edict 存在性不验证）
+        assert resp.status_code == 200
+        assert resp.json()["acknowledgments"] == []
 
 
 if __name__ == "__main__":

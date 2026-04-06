@@ -3187,3 +3187,98 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 116（版本 v2.65）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 117 (2026-04-06)
+**版本**: v2.66 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Activity API 添加边界测试覆盖
+
+背景：Activity API（活动日志/审计追踪）包含6个端点（GET /activities, GET /plans/{plan_id}/activities, GET /rooms/{room_id}/activities, GET /plans/{plan_id}/versions/{version}/activities, GET /activities/stats, GET /activities/{activity_id}）。此前仅有8个基础测试，缺少无效UUID格式、limit/offset边界值、非存在资源404等边界场景测试。与 Step 84-116 的补全模式对齐。
+
+### Do
+新增 `TestActivityAPIBoundary` 测试类（13个边界测试用例）：
+
+1. **`test_list_activities_invalid_plan_id_format`** — activities列表 - 无效plan_id格式返回200（API接受任意字符串，无UUID格式验证）
+2. **`test_list_activities_invalid_room_id_format`** — activities列表 - 无效room_id格式返回200
+3. **`test_list_activities_limit_zero`** — activities列表 - limit=0返回200（limit参数无ge=1验证）
+4. **`test_list_activities_limit_negative`** — activities列表 - limit=-1返回500（SQL LIMIT不支持负数，产生服务器错误）
+5. **`test_list_activities_offset_negative`** — activities列表 - offset=-1返回500（SQL OFFSET不支持负数，产生服务器错误）
+6. **`test_list_activities_nonexistent_plan_returns_empty`** — activities列表 - 不存在的plan_id返回空列表
+7. **`test_get_activity_invalid_uuid`** — 获取单个活动 - 无效UUID格式返回404
+8. **`test_activities_stats_invalid_plan_id`** — 活动统计 - 无效plan_id格式返回200（API接受任意字符串）
+9. **`test_list_plan_activities_nonexistent_plan`** — 计划活动列表 - 不存在的plan_id返回404（Plan not found）
+10. **`test_list_room_activities_nonexistent_room`** — 房间活动列表 - 不存在的room_id返回404（Room not found）
+11. **`test_list_version_activities_nonexistent_plan`** — 版本活动列表 - 不存在的plan_id返回404
+12. **`test_get_single_activity_not_found`** — 获取单个活动 - 不存在的activity_id返回404
+13. **`test_list_activities_with_all_filters`** — activities列表 - 同时使用多个过滤参数（plan_id/room_id/limit/offset）
+
+**发现的行为**：
+- limit=-1 和 offset=-1 返回500（SQL错误），说明limit/offset参数缺少ge=0验证
+- list_plan_activities 和 list_room_activities 对不存在的plan_id/room_id返回404（正确）
+- API接受任意字符串作为plan_id/room_id，不做UUID格式验证
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestActivityAPIBoundary 13/13 passed
+- ✅ pytest tests/ 502/502 passed（原有489 + 新增13）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 117（版本 v2.66）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 118 (2026-04-06)
+**版本**: v2.67 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Edict API 和 Edict Acknowledgment API 添加边界测试覆盖
+
+背景：Edict API（圣旨/L7下行 decree）和 Edict Acknowledgment API（圣旨签收）是朝堂议政的核心功能，分别包含 5 个端点（create/list/get/update/delete）和 3 个端点（create/list/delete）。TestEdictAPI 有 7 个基础测试（Step 27），TestEdictAcknowledgment 有 6 个基础测试（Step 82），均缺少边界测试覆盖。与 Step 84-117 的补全模式对齐。
+
+### Do
+新增 `TestEdictAPIBoundary` 测试类（14个边界测试用例）：
+
+1. **`test_create_edict_empty_title`** — 创建圣旨时 title="" → 422（min_length=1 验证）
+2. **`test_create_edict_empty_content`** — 创建圣旨时 content="" → 422（min_length=1 验证）
+3. **`test_create_edict_empty_issued_by`** — 创建圣旨时 issued_by="" → 422（min_length=1 验证）
+4. **`test_create_edict_title_max_length`** — title 长度 = 200 字符（边界值）→ 201
+5. **`test_create_edict_title_exceeds_max_length`** — title 长度 = 201 字符 → 422（max_length=200 验证）
+6. **`test_create_edict_invalid_recipients_level_zero`** — recipients=[0] → 201（List[int] 无范围验证）
+7. **`test_create_edict_invalid_recipients_level_out_of_bounds`** — recipients=[8] → 201（List[int] 无范围验证）
+8. **`test_create_edict_recipients_non_integer`** — recipients=["L7"] → 422（类型验证）
+9. **`test_create_edict_arbitrary_status_accepted`** — status="random_xyz" → 201（无枚举验证）
+10. **`test_create_edict_plan_not_found`** — plan 不存在 → 404
+11. **`test_create_edict_version_not_found`** — version 不存在 → 404
+12. **`test_get_edict_plan_not_found`** — 获取圣旨时 plan 不存在 → 404
+13. **`test_update_edict_not_found`** — 更新圣旨时 edict 不存在 → 404
+14. **`test_delete_edict_plan_not_found`** — 删除圣旨时 plan 不存在 → 404
+
+新增 `TestEdictAcknowledgmentBoundary` 测试类（7个边界测试用例）：
+
+1. **`test_acknowledge_edict_acknowledged_by_too_long`** — acknowledged_by 超过100字符 → 201（无 max_length 验证）
+2. **`test_acknowledge_edict_level_zero`** — level=0 → 422（ge=1 验证）
+3. **`test_acknowledge_edict_level_out_of_bounds`** — level=8 → 422（le=7 验证）
+4. **`test_acknowledge_edict_level_at_boundaries`** — level=1 和 level=7（边界值）→ 201
+5. **`test_acknowledge_edict_empty_acknowledged_by`** — acknowledged_by="" → 422（min_length=1 验证）
+6. **`test_acknowledge_edict_level_coerced_from_string`** — level="5"（字符串）→ 201（Pydantic 自动将 "5" 转为 int 5）
+7. **`test_list_acknowledgments_edict_not_found`** — 列出签收记录时 edict 不存在 → 200（空列表，edict_id 不做存在性检查）
+
+**发现的行为**：
+- `recipients` 字段为 `List[int]`，无范围验证（L1-L7），接受 0 或 8 等超界值
+- `status` 字段无枚举验证，任意字符串均可创建
+- `acknowledged_by` 字段无 max_length=100 验证，实际可接受任意长度字符串
+- `level: int` 在 Pydantic v2 中默认启用字符串到整数自动转换（coercion），"5" 被转为 5
+- `list_acknowledgments` 端点对不存在的 edict_id 返回 200 空列表（不做存在性检查）
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestEdictAPIBoundary 14/14 passed
+- ✅ pytest TestEdictAcknowledgmentBoundary 7/7 passed
+- ✅ pytest tests/ 523/523 passed（原有502 + 新增21）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 118（版本 v2.67）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
