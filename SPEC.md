@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.73 | 日期：2026-04-06（Step 124 - Room Tags API 边界测试）
+> 版本：v2.75 | 日期：2026-04-06（Step 125 - Export API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
@@ -3540,52 +3540,39 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 
 ## Step 125 (2026-04-06)
-**版本**: v2.74 | **迭代周期**: 13分钟自动触发
+**版本**: v2.75 | **迭代周期**: 13分钟自动触发
 
 ### Plan
-为 Decisions API 添加边界测试覆盖
+为 Export API 添加边界测试覆盖
 
-背景：Decisions API（版本内决策管理）包含 4 个端点（create/list/get/update），TestDecisions 已有基础测试（创建/列表/获取/更新/不存在/plan.json集成），缺少 title max_length 边界/decision_text min_length 边界/必填字段缺失/plan-not-found-404/version-not-found-404/无决策空列表等边界测试。与 Step 84-124 的补全模式对齐。
+背景：Export API（Plan/Version Markdown 导出）包含 2 个端点（GET /plans/{plan_id}/export 和 GET /plans/{plan_id}/versions/{version}/export），TestExportAPI 仅有 6 个基础测试（基本导出/404/房间详情/无效UUID），缺少：空字符串 plan_id/特殊字符/path traversal/超长 plan_id/version/版本不存在/多版本点号等边界测试。与 Step 84-124 的补全模式对齐。
 
 ### Do
-新增 `TestDecisionsBoundary` 测试类（21个边界测试用例）：
+新增 `TestExportAPIBoundary` 测试类（13个边界测试用例）：
 
-1. **`test_create_decision_title_max_length_boundary`** — 创建决策：title=200字符（边界值）→ 201
-2. **`test_create_decision_title_exceeds_max_length`** — 创建决策：title=201字符 → 422 (max_length=200)
-3. **`test_create_decision_decision_text_min_length_boundary`** — 创建决策：decision_text=1字符（边界值）→ 201
-4. **`test_create_decision_missing_title`** — 创建决策：缺少 title → 422
-5. **`test_create_decision_missing_decision_text`** — 创建决策：缺少 decision_text → 422
-6. **`test_create_decision_only_required_fields`** — 创建决策：仅提供必填字段 → 201
-7. **`test_list_decisions_plan_not_found`** — 列出决策：plan 不存在 → 404
-8. **`test_list_decisions_version_not_found`** — 列出决策：version 不存在 → 404
-9. **`test_list_decisions_invalid_plan_uuid`** — 列出决策：plan_id 无效 UUID → 404
-10. **`test_get_decision_plan_not_found`** — 获取决策：plan 不存在 → 404
-11. **`test_get_decision_version_not_found`** — 获取决策：version 不存在 → 404
-12. **`test_get_decision_not_found`** — 获取决策：decision 不存在 → 404
-13. **`test_update_decision_plan_not_found`** — 更新决策：plan 不存在 → 404
-14. **`test_update_decision_version_not_found`** — 更新决策：version 不存在 → 404
-15. **`test_update_decision_not_found`** — 更新决策：decision 不存在 → 404
-16. **`test_update_decision_empty_title`** — 更新决策：title="" → 200（DecisionUpdate.title 为 Optional，无 min_length 验证）
-17. **`test_update_decision_empty_decision_text`** — 更新决策：decision_text="" → 200（DecisionUpdate.decision_text 为 Optional，无 min_length 验证）
-18. **`test_update_decision_title_exceeds_max_length`** — 更新决策：title=201字符 → 200（DecisionUpdate.title 为 Optional，无 max_length 验证）
-19. **`test_update_decision_title_at_max_length`** — 更新决策：title=200字符 → 200
-20. **`test_delete_decision_endpoint_not_exists`** — 删除决策：DELETE 端点不存在 → 405 Method Not Allowed
-21. **`test_list_decisions_empty`** — 列出决策：无决策时 → 200，空列表
-
-**发现的行为**：
-- DecisionUpdate 的 Optional 字段（title/decision_text）无 min_length/max_length 验证，update 时可传入任意字符串
-- Decisions API 无 DELETE 端点，对应路径返回 405 Method Not Allowed
-- create 时 title="" 和 decision_text="" 均返回 422（DecisionCreate 有 min_length=1 验证）
-- create 时 title=200字符成功，title=201字符返回 422（max_length=200 验证）
+1. **`test_export_plan_empty_string_plan_id`** — 导出计划：plan_id="" (空字符串) → 404
+2. **`test_export_plan_special_chars_in_plan_id`** — 导出计划：plan_id 含特殊字符 → 404
+3. **`test_export_plan_very_long_plan_id`** — 导出计划：plan_id 超长字符串(1000字符) → 404
+4. **`test_export_version_empty_string_version`** — 导出版本：version="" (空字符串) → 404/422
+5. **`test_export_version_invalid_version_format`** — 导出版本：version="invalid_version_xyz" → 404
+6. **`test_export_version_special_chars_in_version`** — 导出版本：version 含特殊字符 → 404
+7. **`test_export_version_very_long_version`** — 导出版本：version 超长字符串(500字符) → 404
+8. **`test_export_plan_valid_uuid_format_not_found`** — 导出计划：有效UUID但不在DB → 404
+9. **`test_export_version_valid_uuid_format_plan_not_found`** — 导出版本：有效UUID plan不存在 → 404
+10. **`test_export_plan_returns_valid_markdown_format`** — 导出计划：返回非空 Markdown 格式
+11. **`test_export_version_returns_valid_markdown_format`** — 导出版本：返回非空 Markdown 格式
+12. **`test_export_version_with_dots_in_version`** — 导出版本：version 含多点号(v1.2.3) → 404
+13. **`test_export_plan_with_only_header_content`** — 导出计划：空计划返回仅含标题的 Markdown
 
 ### Check
 - ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
-- ✅ pytest TestDecisionsBoundary 21/21 passed
-- ✅ pytest tests/ 639/639 passed（原有618 + 新增21）
+- ✅ pytest TestExportAPIBoundary 13/13 passed
+- ✅ pytest tests/ 716/716 passed（原有703 + 新增13）
 - ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
 
 ### Act
-- 更新 SPEC.md 完成 Step 125（版本 v2.74）
+- 更新 SPEC.md 完成 Step 125（版本 v2.75）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
 
 ## Step 126 (2026-04-06)

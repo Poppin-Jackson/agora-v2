@@ -12786,5 +12786,165 @@ class TestEdictAcknowledgmentBoundary:
         assert resp.json()["acknowledgments"] == []
 
 
+class TestExportAPIBoundary:
+    """Step 125: Export API 边界测试 — 补充 TestExportAPI 的边界覆盖"""
+
+    def test_export_plan_empty_string_plan_id(self):
+        """导出计划：plan_id=\"\" (空字符串) → 404 (Plan not found)"""
+        resp = httpx.get(f"{API_BASE}/plans//export", timeout=TIMEOUT)
+        # 空字符串 plan_id 匹配到 /plans/{plan_id} 的空参数，返回 404
+        assert resp.status_code == 404
+
+    def test_export_plan_special_chars_in_plan_id(self):
+        """导出计划：plan_id 含特殊字符 → 404 (Plan not found)"""
+        resp = httpx.get(f"{API_BASE}/plans/../../../../etc/passwd/export", timeout=TIMEOUT)
+        # FastAPI 将路径中的特殊字符作为 plan_id 字符串处理，找不到返回 404
+        assert resp.status_code == 404
+
+    def test_export_plan_very_long_plan_id(self):
+        """导出计划：plan_id 超长字符串（1000字符）→ 404 (Plan not found)"""
+        long_id = "a" * 1000
+        resp = httpx.get(f"{API_BASE}/plans/{long_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_export_version_empty_string_version(self):
+        """导出版本：version=\"\" (空字符串) → 404 或行为"""
+        # 先创建计划
+        plan_payload = {"title": "导出边界测试", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # 空 version → 路由匹配失败或 404
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions//export", timeout=TIMEOUT)
+        assert resp.status_code in (404, 422)
+
+    def test_export_version_invalid_version_format(self):
+        """导出版本：version=\"invalid_version_xyz\" → 404 (Version not found)"""
+        plan_payload = {"title": "导出边界测试2", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/invalid_version_xyz/export",
+            timeout=TIMEOUT
+        )
+        # 版本不存在，返回 404
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Version not found"
+
+    def test_export_version_special_chars_in_version(self):
+        """导出版本：version 含特殊字符 → 404 或 422"""
+        plan_payload = {"title": "导出边界测试3", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # version 含 / 会导致路由匹配到其他端点，含 .. 会被当作路径遍历
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/../../../etc/passwd/export",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_export_version_very_long_version(self):
+        """导出版本：version 超长字符串（500字符）→ 404 (Version not found)"""
+        plan_payload = {"title": "导出边界测试4", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        long_version = "v" + "1" * 500
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{long_version}/export",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_export_plan_valid_uuid_format_not_found(self):
+        """导出计划：有效UUID格式但不在DB中 → 404"""
+        fake_id = str(uuid.uuid4())  # 有效的 UUID 格式
+        resp = httpx.get(f"{API_BASE}/plans/{fake_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Plan not found"
+
+    def test_export_version_valid_uuid_format_plan_not_found(self):
+        """导出版本：有效UUID格式plan_id但不存在 → 404"""
+        fake_id = str(uuid.uuid4())  # 有效的 UUID 格式
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_id}/versions/v1.0/export",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Plan not found"
+
+    def test_export_plan_returns_valid_markdown_format(self):
+        """导出计划：正常返回时 content 为非空 Markdown 格式"""
+        plan_payload = {"title": "导出格式验证", "topic": "验证markdown格式"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["format"] == "markdown"
+        assert data["plan_id"] == plan_id
+        assert "content" in data
+        assert isinstance(data["content"], str)
+        assert len(data["content"]) > 0
+        # Markdown 应包含标题
+        assert "#" in data["content"]
+
+    def test_export_version_returns_valid_markdown_format(self):
+        """导出版本：正常返回时 content 为非空 Markdown 格式"""
+        plan_payload = {"title": "版本导出格式验证", "topic": "验证markdown格式"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"].get("current_version", "v1.0")
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/export",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["format"] == "markdown"
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        assert isinstance(data["content"], str)
+        assert len(data["content"]) > 0
+
+    def test_export_version_with_dots_in_version(self):
+        """导出版本：version 含多个点号（如 v1.2.3）→ 404 (Version not found)"""
+        plan_payload = {"title": "多版本点号测试", "topic": "边界测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # v1.2.3 格式不是标准版本号格式，应该返回 404
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.2.3/export",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_export_plan_with_only_header_content(self):
+        """导出计划：空计划（无房间无任务）返回仅含标题的 Markdown"""
+        plan_payload = {"title": "空计划导出", "topic": "空计划"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/export", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        content = resp.json()["content"]
+        # 空计划也应返回有效 Markdown
+        assert isinstance(content, str)
+        assert len(content) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
