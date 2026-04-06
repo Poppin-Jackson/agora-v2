@@ -3361,6 +3361,137 @@ class TestRisks:
         resp = httpx.get(f"{API_BASE}/plans/{fake_plan}/versions/{version}/risks/{fake_id}", timeout=TIMEOUT)
         assert resp.status_code == 404
 
+    def test_create_risk_empty_title(self):
+        """创建风险时 title 为空字符串返回 422（min_length=1 验证）"""
+        plan_payload = {"title": "测试-空标题", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/risks",
+            json={"title": "", "probability": "medium", "impact": "medium"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_risk_invalid_probability(self):
+        """创建风险时 probability 为无效枚举值返回 422"""
+        plan_payload = {"title": "测试-无效概率", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/risks",
+            json={"title": "测试风险", "probability": "very_high", "impact": "medium"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_risk_invalid_impact(self):
+        """创建风险时 impact 为无效枚举值返回 422"""
+        plan_payload = {"title": "测试-无效影响", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/risks",
+            json={"title": "测试风险", "probability": "medium", "impact": "critical"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_risk_invalid_status(self):
+        """创建风险时 status 为无效枚举值返回 422"""
+        plan_payload = {"title": "测试-无效状态", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/risks",
+            json={"title": "测试风险", "probability": "medium", "impact": "medium", "status": "closed"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_risk_plan_not_found(self):
+        """创建风险时 plan 不存在返回 404"""
+        fake_plan = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan}/versions/v1.0/risks",
+            json={"title": "测试风险", "probability": "medium", "impact": "medium"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_create_risk_version_not_found(self):
+        """创建风险时 version 不存在返回 404"""
+        plan_payload = {"title": "测试-版本不存在", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.0/risks",
+            json={"title": "测试风险", "probability": "medium", "impact": "medium"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_list_risks_plan_not_found(self):
+        """列出风险时 plan 不存在返回 404"""
+        fake_plan = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan}/versions/v1.0/risks", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_risks_version_not_found(self):
+        """列出风险时 version 不存在返回 404"""
+        plan_payload = {"title": "测试-列出版本404", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/versions/v99.0/risks", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_risk_plan_not_found(self):
+        """更新风险时 plan 不存在返回 404"""
+        fake_plan = str(uuid.uuid4())
+        fake_risk = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{fake_plan}/versions/v1.0/risks/{fake_risk}",
+            json={"status": "mitigated"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_risk_version_not_found(self):
+        """更新风险时 version 不存在返回 404"""
+        plan_payload = {"title": "测试-更新版本404", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = "v1.0"
+
+        r = {"title": "测试风险", "probability": "low", "impact": "low"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/versions/{version}/risks", json=r, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        risk_id = resp.json()["risk_id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.0/risks/{risk_id}",
+            json={"status": "mitigated"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
 
 class TestPlanJsonEnrichment:
     """测试 plan.json 和 version plan.json 包含 constraints/stakeholders/risks"""

@@ -2801,3 +2801,35 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 106（版本 v2.56）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 107 (2026-04-06)
+**版本**: v2.57 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Risks API 添加边界测试覆盖
+
+背景：Risks API（Version 风险）是风险管理核心功能，包含 5 个端点（create/list/get/update/delete）。此前仅有 3 个基础测试（创建+列表/更新+删除/404），缺少空标题验证、无效枚举值（probability/impact/status）、plan/version 不存在等边界测试。与 Step 84-106 的补全模式对齐。
+
+### Do
+新增 10 个 Risks 边界测试用例（TestRisks 类从 3 → 13 个）：
+
+1. **`test_create_risk_empty_title`** — 创建风险时 title="" 返回 422（min_length=1 验证）
+2. **`test_create_risk_invalid_probability`** — 创建风险时 probability="very_high" 返回 422（enum 验证）
+3. **`test_create_risk_invalid_impact`** — 创建风险时 impact="critical" 返回 422（enum 验证）
+4. **`test_create_risk_invalid_status`** — 创建风险时 status="closed" 返回 422（enum 验证）
+5. **`test_create_risk_plan_not_found`** — 创建风险时 plan 不存在返回 404
+6. **`test_create_risk_version_not_found`** — 创建风险时 version 不存在返回 404
+7. **`test_list_risks_plan_not_found`** — 列出风险时 plan 不存在返回 404
+8. **`test_list_risks_version_not_found`** — 列出风险时 version 不存在返回 404
+9. **`test_update_risk_plan_not_found`** — 更新风险时 plan 不存在返回 404
+10. **`test_update_risk_version_not_found`** — 更新风险时 version 不存在返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRisks 13/13 passed（+10 new tests）
+- ✅ pytest 395/395 passed（+10 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 107（版本 v2.57）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
