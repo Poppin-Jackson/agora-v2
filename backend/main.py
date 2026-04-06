@@ -2276,6 +2276,12 @@ async def copy_plan(plan_id: str, data: dict = None):
     新计划创建 v1.0 配套 Room
     来源: 08-Data-Models-Details.md §2.1 Plan 复制
     """
+    # Validate plan_id is a valid UUID format
+    try:
+        uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid plan_id format")
+
     original = await crud.get_plan(plan_id)
     if not original:
         raise HTTPException(status_code=404, detail="Plan not found")

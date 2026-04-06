@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.52 | 日期：2026-04-06（Step 102 - Snapshot API 边界测试覆盖）
+> 版本：v2.53 | 日期：2026-04-06（Step 103 - PlanCopy API 边界测试覆盖）
 > 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
 > 版本：v2.50 | 日期：2026-04-06（Step 100 - Requirements API 边界测试覆盖）
 > 版本：v2.48 | 日期：2026-04-06（Step 98 - Plan Search API 边界测试覆盖）
@@ -2649,4 +2649,37 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 102（版本 v2.52）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 103 (2026-04-06)
+**版本**: v2.53 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 PlanCopy API 添加边界测试覆盖
+
+背景：PlanCopy API（计划复制）是计划管理的核心功能，包含 `POST /plans/{plan_id}/copy`。此前仅有 4 个基础测试（基本复制/404/创建Room/元数据保留），缺少标题精确格式验证、多次复制唯一性、room vs plan 字段一致性、UUID格式校验等边界测试。
+
+### Do
+新增 9 个 PlanCopy 边界测试用例（TestPlanCopy 类从 4 → 13 个）：
+
+1. **`test_copy_plan_title_exactly_copy_of_prefix`** — 复制后标题精确为 "Copy of {原标题}"（验证空格和内容）
+2. **`test_copy_plan_multiple_copies_different_ids`** — 连续复制3次，验证所有 plan_id/room_id/plan_number 均不同
+3. **`test_copy_plan_room_topic_matches_copy_title`** — room 的 topic 应与新 plan 的 title 完全一致
+4. **`test_copy_plan_versions_list_contains_v1_0`** — 复制后 versions 列表包含 "v1.0"
+5. **`test_copy_plan_room_purpose_and_mode_preserved`** — room 的 purpose 和 mode 保留原计划值
+6. **`test_copy_plan_invalid_uuid_format`** — 无效UUID格式返回 422（非500）
+   - **Backend Fix**：`copy_plan` 函数新增 UUID 格式校验 `uuid.UUID(plan_id)`，无效格式返回 422
+7. **`test_copy_plan_room_in_selecting_phase`** — 新建 room 的 phase 必须为 selecting
+8. **`test_copy_plan_coordinator_is_system`** — 新建 room 的 coordinator_id 为 'coordinator'
+9. **`test_copy_plan_room_version_matches_plan`** — room 和 plan 的 current_version 均一致为 "v1.0"
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestPlanCopy 13/13 passed（+9 new tests）
+- ✅ pytest 359/359 passed（+9 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 103（版本 v2.53）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

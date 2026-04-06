@@ -6376,6 +6376,135 @@ class TestPlanCopy:
         # topic 应该被保留
         assert "topic" in new_plan
 
+    def test_copy_plan_title_exactly_copy_of_prefix(self, room_info):
+        """验证复制后标题格式为 'Copy of <原标题>'（精确前缀）"""
+        plan_id = room_info["plan_id"]
+
+        # 获取原计划标题
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        original_title = resp.json()["title"]
+
+        # 复制计划
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_title = resp.json()["plan"]["title"]
+
+        # 精确验证：必须以 "Copy of " 开头（注意空格）
+        assert new_title.startswith("Copy of "), f"标题应为 'Copy of ' 开头，实际: {new_title}"
+        assert new_title[len("Copy of "):] == original_title, \
+            f"复制后标题应为 'Copy of {original_title}'，实际: {new_title}"
+
+    def test_copy_plan_multiple_copies_different_ids(self, room_info):
+        """连续复制同一计划，每次都生成不同的 plan_id 和 room_id"""
+        plan_id = room_info["plan_id"]
+        plan_ids = []
+        room_ids = []
+        plan_numbers = []
+
+        for i in range(3):
+            resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+            assert resp.status_code == 201, f"第{i+1}次复制失败: {resp.text}"
+            data = resp.json()
+            plan_ids.append(data["plan"]["plan_id"])
+            room_ids.append(data["room"]["room_id"])
+            plan_numbers.append(data["plan"]["plan_number"])
+
+        # 所有 plan_id 必须互不相同
+        assert len(set(plan_ids)) == 3, f"三次复制应产生3个不同plan_id，实际: {plan_ids}"
+        # 所有 room_id 必须互不相同
+        assert len(set(room_ids)) == 3, f"三次复制应产生3个不同room_id，实际: {room_ids}"
+        # 所有 plan_number 必须互不相同
+        assert len(set(plan_numbers)) == 3, f"三次复制应产生3个不同plan_number，实际: {plan_numbers}"
+
+    def test_copy_plan_room_topic_matches_copy_title(self, room_info):
+        """复制后 room 的 topic 应与新 plan 的 title 一致"""
+        plan_id = room_info["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        new_plan_title = data["plan"]["title"]
+        new_room_topic = data["room"]["topic"]
+
+        assert new_room_topic == new_plan_title, \
+            f"房间topic应等于计划title，实际: room_topic={new_room_topic}, plan_title={new_plan_title}"
+
+    def test_copy_plan_versions_list_contains_v1_0(self, room_info):
+        """复制后 versions 列表应包含 'v1.0'"""
+        plan_id = room_info["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_plan = resp.json()["plan"]
+
+        assert "versions" in new_plan
+        assert "v1.0" in new_plan["versions"], f"versions应包含v1.0，实际: {new_plan['versions']}"
+        assert new_plan["current_version"] == "v1.0"
+
+    def test_copy_plan_room_purpose_and_mode_preserved(self, room_info):
+        """复制后 room 的 purpose 和 mode 应保留原计划的值"""
+        plan_id = room_info["plan_id"]
+
+        # 获取原计划
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        original_plan = resp.json()
+
+        # 复制计划
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_room = resp.json()["room"]
+
+        # purpose 和 mode 应保留（默认为 initial_discussion / hierarchical）
+        assert "purpose" in new_room
+        assert "mode" in new_room
+        assert new_room["purpose"] == original_plan.get("purpose", "initial_discussion")
+        assert new_room["mode"] == original_plan.get("mode", "hierarchical")
+
+    def test_copy_plan_invalid_uuid_format(self):
+        """无效格式的 plan_id（非UUID）应返回 422"""
+        # 尝试用明显无效的ID复制
+        resp = httpx.post(f"{API_BASE}/plans/invalid-plan-id-12345/copy", timeout=TIMEOUT)
+        # 无效UUID格式应返回 422，而非 500
+        assert resp.status_code == 422, f"无效UUID应返回422，实际: {resp.status_code} — {resp.text}"
+        assert "Invalid plan_id format" in resp.json()["detail"]
+
+    def test_copy_plan_room_in_selecting_phase(self, room_info):
+        """复制创建的 room phase 必须为 selecting"""
+        plan_id = room_info["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_room = resp.json()["room"]
+
+        assert new_room["phase"] == "selecting", \
+            f"新房间phase应为selecting，实际: {new_room['phase']}"
+
+    def test_copy_plan_coordinator_is_system(self, room_info):
+        """复制创建的 room coordinator_id 应为 'coordinator'"""
+        plan_id = room_info["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        new_room = resp.json()["room"]
+
+        assert new_room["coordinator_id"] == "coordinator", \
+            f"coordinator_id应为coordinator，实际: {new_room['coordinator_id']}"
+
+    def test_copy_plan_room_version_matches_plan(self, room_info):
+        """复制后 room 的 current_version 应与 plan 的 current_version 一致（均为 v1.0）"""
+        plan_id = room_info["plan_id"]
+
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/copy", timeout=TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        new_plan_version = data["plan"]["current_version"]
+        new_room_version = data["room"]["current_version"]
+
+        assert new_plan_version == new_room_version == "v1.0", \
+            f"plan和room的version均应为v1.0，实际: plan={new_plan_version}, room={new_room_version}"
+
 
 # ========================
 # Decisions API (Step 87)
