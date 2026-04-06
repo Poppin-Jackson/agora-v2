@@ -3637,3 +3637,92 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 126（版本 v2.75）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 127 (2026-04-06)
+**版本**: v2.76 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Analytics API 添加边界测试覆盖 + 修复 Activity API limit/offset 负数返回500 Bug
+
+背景：Analytics API（`GET /plans/{plan_id}/analytics`）只有 3 个基础测试（空计划/含数据/不存在），缺少无效UUID/字段完整性/数值边界等边界测试。Activity API（limit=-1/offset=-1）因缺少 `Query(..., ge=0)` 验证导致 SQL 错误返回500。与 Step 84-126 的补全模式对齐。
+
+### Do
+**Bug Fix 1**：`/activities` 端点 `list_activities` 函数
+- 问题：`limit: int = 50` 和 `offset: int = 0` 无 `Query(..., ge=0)` 验证
+- 修复：`limit: int = Query(50, ge=0)` + `offset: int = Query(0, ge=0)`
+
+**Bug Fix 2**：`/plans/{plan_id}/activities` 端点 `list_plan_activities` 函数
+- 问题：同样缺少 `Query(..., ge=0)` 验证
+- 修复：添加 `Query(50, ge=0)` 和 `Query(0, ge=0)`
+
+**Bug Fix 3**：`/plans/{plan_id}/versions/{version}/activities` 端点 `list_version_activities` 函数
+- 问题：同样缺少 `Query(..., ge=0)` 验证
+- 修复：添加 `Query(50, ge=0)` 和 `Query(0, ge=0)`
+
+**Bug Fix 4**：`/rooms/{room_id}/activities` 端点 `list_room_activities` 函数
+- 问题：同样缺少 `Query(..., ge=0)` 验证
+- 修复：添加 `Query(50, ge=0)` 和 `Query(0, ge=0)`
+
+**新增 TestAnalyticsBoundary 测试类**（8个边界测试用例）：
+1. `test_analytics_invalid_plan_uuid` — Analytics: plan_id 无效 UUID 格式 → 404
+2. `test_analytics_all_fields_present` — 完整计划返回所有必填字段（plan_id/title/rooms/tasks/decisions/issues/participants/messages/risks/edicts + 子字段）
+3. `test_analytics_nested_stats_non_negative` — 所有计数字段为非负数，completion_rate 在 0-1 范围
+4. `test_analytics_rooms_by_phase_has_valid_phases` — rooms.by_phase 只包含有效 phase 值
+5. `test_analytics_tasks_by_status_has_valid_statuses` — tasks.by_status 只包含有效 status 值
+6. `test_analytics_participants_by_level_keys_are_levels` — participants.by_level 的键为 L1-L7 数字层级
+7. `test_analytics_response_is_object_not_array` — 响应是 dict 而非 array
+8. `test_analytics_plan_id_matches_request` — 响应 plan_id 与请求 plan_id 一致
+
+**测试更新**：TestActivityAPIBoundary 中 2 个测试从 `assert 500` → `assert 422`（修复后 FastAPI 正确返回验证错误）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestAnalyticsBoundary 8/8 passed（+8 new tests）
+- ✅ pytest TestActivityAPIBoundary 15/15 passed（2个 updated tests 验证 422）
+- ✅ pytest tests/ 669/669 passed（原有661 + 8 new = 669）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 127（版本 v2.76）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 128 (2026-04-06)
+**版本**: v2.77 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Message Sequence API 添加边界测试覆盖
+
+背景：Message Sequence API（消息序号分配 + 历史记录 + 下一序号查询）是讨论室发言追踪的核心功能，包含 3 个端点（`GET /rooms/{room_id}/messages/next-sequence`、`POST /rooms/{room_id}/speech`、`GET /rooms/{room_id}/history`）。TestMessageSequence 仅有 2 个基础测试（序号递增赋值、历史包含序号字段），缺少无效 UUID/房间不存在/空内容/缺少字段/序号连续性等边界测试。与 Step 84-127 的补全模式对齐。
+
+### Do
+新增 `TestMessageSequenceBoundary` 测试类（12个边界测试用例）：
+
+1. **`test_get_next_sequence_invalid_room_uuid`** — 获取下一序号: room_id 无效 UUID 格式 → 404
+2. **`test_get_next_sequence_room_not_found`** — 获取下一序号: room 不存在 → 404 或 500
+3. **`test_add_speech_invalid_room_uuid`** — 添加发言: room_id 无效 UUID → 404
+4. **`test_add_speech_room_not_found`** — 添加发言: room 不存在 → 404
+5. **`test_add_speech_empty_content`** — 添加发言: content="" → 200/201/422（backend 无 min_length 验证）
+6. **`test_add_speech_missing_agent_id`** — 添加发言: 缺少 agent_id → 422
+7. **`test_add_speech_missing_content`** — 添加发言: 缺少 content → 422
+8. **`test_add_speech_empty_agent_id`** — 添加发言: agent_id="" → 200/201/422
+9. **`test_get_history_invalid_room_uuid`** — 获取历史: room_id 无效 UUID → 404
+10. **`test_get_history_room_not_found`** — 获取历史: room 不存在 → 404
+11. **`test_get_history_empty_room`** — 获取历史: 新建房间无消息 → 返回空列表，所有消息含 sequence 字段
+12. **`test_message_sequence_continuous_assignment`** — 连续5次发言，序号连续不跳跃（1,2,3,4,5）
+
+**发现的行为**：
+- `POST /rooms/{room_id}/speech` 的 `content` 和 `agent_id` 字段无 min_length=1 验证，空字符串被接受
+- `GET /rooms/{room_id}/history` 对新建房间返回空列表 `[]`（系统消息不入历史）
+- 消息序号从 1 开始，连续递增
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestMessageSequenceBoundary 12/12 passed（+12 new tests）
+- ✅ pytest tests/ 681/681 passed（原有669 + 新增12 = 681）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 128（版本 v2.77）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

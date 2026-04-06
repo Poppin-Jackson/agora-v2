@@ -7286,8 +7286,8 @@ async def list_activities(
     version: Optional[str] = None,
     action_type: Optional[str] = None,
     actor_id: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
 ):
     """
     列出活动日志（支持多维过滤）
@@ -7353,8 +7353,8 @@ async def list_plan_activities(
     plan_id: str,
     version: Optional[str] = None,
     action_type: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
 ):
     """列出计划的所有活动日志"""
     if plan_id not in _plans:
@@ -7376,8 +7376,8 @@ async def list_version_activities(
     plan_id: str,
     version: str,
     action_type: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
 ):
     """列出版本的所有活动日志"""
     if plan_id not in _plans:
@@ -7402,8 +7402,8 @@ async def list_version_activities(
 async def list_room_activities(
     room_id: str,
     action_type: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
 ):
     """列出房间的所有活动日志"""
     if room_id not in _rooms:

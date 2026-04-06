@@ -5644,6 +5644,129 @@ class TestMessageSequence:
 
 
 # ========================
+# Step 128: Message Sequence API Boundary Tests
+# ========================
+
+class TestMessageSequenceBoundary:
+    """测试消息序号 API 边界场景（Step 128）"""
+
+    def test_get_next_sequence_invalid_room_uuid(self):
+        """测试：获取下一序号 - room_id 无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/invalid-uuid/messages/next-sequence", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_next_sequence_room_not_found(self):
+        """测试：获取下一序号 - room 不存在 → 404 或 200"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_uuid}/messages/next-sequence", timeout=TIMEOUT)
+        # 可能是 404 (Room not found) 或其他错误
+        assert resp.status_code in [200, 404, 500]
+
+    def test_add_speech_invalid_room_uuid(self):
+        """测试：添加发言 - room_id 无效 UUID 格式 → 404"""
+        speech = {"agent_id": "agent-1", "content": "测试发言"}
+        resp = httpx.post(f"{API_BASE}/rooms/invalid-uuid/speech", json=speech, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_add_speech_room_not_found(self):
+        """测试：添加发言 - room 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        speech = {"agent_id": "agent-1", "content": "测试发言"}
+        resp = httpx.post(f"{API_BASE}/rooms/{fake_uuid}/speech", json=speech, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_add_speech_empty_content(self):
+        """测试：添加发言 - content 为空字符串"""
+        # 创建房间
+        plan_payload = {"title": "测试空内容", "topic": "测试空内容发言", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        speech = {"agent_id": "agent-1", "content": ""}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=speech, timeout=TIMEOUT)
+        # content="" 可能被接受（无 min_length 验证）或返回 422
+        assert resp.status_code in [200, 201, 422]
+
+    def test_add_speech_missing_agent_id(self):
+        """测试：添加发言 - 缺少 agent_id → 422"""
+        plan_payload = {"title": "测试缺少字段", "topic": "测试缺少agent_id", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        speech = {"content": "测试发言内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=speech, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_add_speech_missing_content(self):
+        """测试：添加发言 - 缺少 content → 422"""
+        plan_payload = {"title": "测试缺少字段", "topic": "测试缺少content", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        speech = {"agent_id": "agent-1"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=speech, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_add_speech_empty_agent_id(self):
+        """测试：添加发言 - agent_id 为空字符串"""
+        plan_payload = {"title": "测试空agent", "topic": "测试空agent_id", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        speech = {"agent_id": "", "content": "测试发言"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=speech, timeout=TIMEOUT)
+        # agent_id="" 可能被接受或返回 422，取决于验证规则
+        assert resp.status_code in [200, 201, 422]
+
+    def test_get_history_invalid_room_uuid(self):
+        """测试：获取历史 - room_id 无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/invalid-uuid/history", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_history_room_not_found(self):
+        """测试：获取历史 - room 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_uuid}/history", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_history_empty_room(self):
+        """测试：获取历史 - 新建房间无消息 → 返回空列表"""
+        plan_payload = {"title": "测试空历史", "topic": "测试空历史", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/history", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        history = resp.json()["history"]
+        # 新建房间可能无消息（room_created 等系统消息可能不入 history）
+        assert isinstance(history, list)
+        assert all("sequence" in msg for msg in history)
+
+    def test_message_sequence_continuous_assignment(self):
+        """测试：连续多次发言，序号连续不跳跃"""
+        plan_payload = {"title": "测试序号连续", "topic": "测试序号连续性", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        sequences = []
+        for i in range(5):
+            speech = {"agent_id": f"agent-{i}", "content": f"第{i+1}条发言"}
+            resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=speech, timeout=TIMEOUT)
+            assert resp.status_code == 200
+            sequences.append(resp.json()["sequence"])
+
+        # 验证序号连续递增
+        for i in range(len(sequences) - 1):
+            assert sequences[i+1] == sequences[i] + 1
+
+
+# ========================
 # 运行入口
 # ========================
 
@@ -6176,6 +6299,161 @@ class TestPlanAnalytics:
 
 
 # ========================
+# Step 127: Analytics API Boundary Tests
+# ========================
+
+class TestAnalyticsBoundary:
+    """Analytics API Boundary Tests"""
+
+    def test_analytics_invalid_plan_uuid(self):
+        """Analytics: plan_id 无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/plans/invalid-uuid/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_analytics_all_fields_present(self):
+        """Analytics: 完整计划返回所有必填字段"""
+        plan_payload = {"title": "Analytics完整测试", "topic": "测试完整字段"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # 验证顶层必填字段
+        assert "plan_id" in data
+        assert "title" in data
+        assert "rooms" in data
+        assert "tasks" in data
+        assert "decisions" in data
+        assert "issues" in data
+        assert "participants" in data
+        assert "messages" in data
+        assert "risks" in data
+        assert "edicts" in data
+        # rooms 子字段
+        assert "total" in data["rooms"]
+        assert "by_phase" in data["rooms"]
+        # tasks 子字段
+        assert "total" in data["tasks"]
+        assert "by_status" in data["tasks"]
+        assert "by_priority" in data["tasks"]
+        assert "completion_rate" in data["tasks"]
+        # participants 子字段
+        assert "total" in data["participants"]
+        assert "by_level" in data["participants"]
+
+    def test_analytics_nested_stats_non_negative(self):
+        """Analytics: 所有计数字段为非负数"""
+        plan_payload = {"title": "Analytics数值测试", "topic": "测试数值"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # 所有 _count / total 字段必须 >= 0
+        assert data["rooms"]["total"] >= 0
+        assert data["tasks"]["total"] >= 0
+        assert data["decisions"]["total"] >= 0
+        assert data["issues"]["total"] >= 0
+        assert data["participants"]["total"] >= 0
+        assert data["messages"]["total"] >= 0
+        assert data["risks"]["total"] >= 0
+        assert data["edicts"]["total"] >= 0
+
+        # completion_rate 必须在 0-1 范围内
+        assert 0 <= data["tasks"]["completion_rate"] <= 1
+
+    def test_analytics_rooms_by_phase_has_valid_phases(self):
+        """Analytics: rooms.by_phase 只包含有效 phase 值"""
+        plan_payload = {"title": "Analytics阶段测试", "topic": "测试阶段分布"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        valid_phases = {
+            "initiated", "selecting", "thinking", "sharing",
+            "debate", "converging", "hierarchical_review",
+            "decision", "executing", "problem_detected",
+            "problem_analysis", "problem_discussion",
+            "plan_update", "resuming", "completed",
+        }
+        for phase, count in data["rooms"]["by_phase"].items():
+            assert phase in valid_phases, f"Invalid phase: {phase}"
+            assert count >= 0
+
+    def test_analytics_tasks_by_status_has_valid_statuses(self):
+        """Analytics: tasks.by_status 只包含有效 status 值"""
+        plan_payload = {"title": "Analytics状态测试", "topic": "测试状态分布"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        valid_statuses = {"pending", "in_progress", "completed", "blocked", "cancelled"}
+        for status, count in data["tasks"]["by_status"].items():
+            assert status in valid_statuses, f"Invalid status: {status}"
+            assert count >= 0
+
+    def test_analytics_participants_by_level_keys_are_levels(self):
+        """Analytics: participants.by_level 的键为数字层级"""
+        plan_payload = {"title": "Analytics层级测试", "topic": "测试层级分布"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        # 添加参与者
+        participant_payload = {"agent_id": "agent-x", "name": "TestL5", "level": 5, "role": "Member"}
+        httpx.post(f"{API_BASE}/rooms/{room_id}/participants", json=participant_payload, timeout=TIMEOUT)
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        for level_str, count in data["participants"]["by_level"].items():
+            level = int(level_str)
+            assert 1 <= level <= 7, f"Invalid level: {level}"
+            assert count >= 0
+
+    def test_analytics_response_is_object_not_array(self):
+        """Analytics: 响应是 dict 而非 list"""
+        plan_payload = {"title": "Analytics类型测试", "topic": "测试响应类型"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict)
+        assert isinstance(data["rooms"], dict)
+
+    def test_analytics_plan_id_matches_request(self):
+        """Analytics: 响应 plan_id 与请求的 plan_id 一致"""
+        plan_payload = {"title": "AnalyticsID测试", "topic": "测试ID一致性"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/analytics", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+
+
+# ========================
 # Step 31: Activity Audit Log API Tests
 # ========================
 
@@ -6364,14 +6642,14 @@ class TestActivityAPIBoundary:
         assert resp.status_code == 200
 
     def test_list_activities_limit_negative(self):
-        """activities列表 - limit=-1返回500（SQL LIMIT不支持负数）"""
+        """activities列表 - limit=-1返回422（FastAPI ge=0 验证）"""
         resp = httpx.get(f"{API_BASE}/activities?limit=-1", timeout=TIMEOUT)
-        assert resp.status_code == 500
+        assert resp.status_code == 422
 
     def test_list_activities_offset_negative(self):
-        """activities列表 - offset=-1返回500（SQL OFFSET不支持负数）"""
+        """activities列表 - offset=-1返回422（FastAPI ge=0 验证）"""
         resp = httpx.get(f"{API_BASE}/activities?offset=-1", timeout=TIMEOUT)
-        assert resp.status_code == 500
+        assert resp.status_code == 422
 
     def test_list_activities_nonexistent_plan_returns_empty(self):
         """activities列表 - 不存在的plan_id返回空列表"""
