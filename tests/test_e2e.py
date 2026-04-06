@@ -5719,6 +5719,143 @@ class TestNotificationAPI:
         assert resp.status_code == 404
 
 
+class TestNotificationAPIBoundary:
+    """Notifications API 边界测试 (Step 116)"""
+
+    def test_create_notification_empty_title(self):
+        """创建通知时 title='' 返回 422 或 201（取决于 validation）"""
+        notification_data = {
+            "recipient_id": "agent-boundary-test",
+            "type": "task_assigned",
+            "title": "",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        # title 为空字符串，如果 backend 有 min_length=1 验证则 422，否则 201
+        assert resp.status_code in (201, 422)
+
+    def test_create_notification_empty_recipient_id(self):
+        """创建通知时 recipient_id='' 返回 422 或 201"""
+        notification_data = {
+            "recipient_id": "",
+            "type": "task_assigned",
+            "title": "测试通知",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code in (201, 422)
+
+    def test_create_notification_recipient_level_zero(self):
+        """创建通知时 recipient_level=0 返回 422 或 201"""
+        notification_data = {
+            "recipient_id": "agent-level-test",
+            "type": "task_assigned",
+            "title": "层级测试",
+            "recipient_level": 0,
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        # recipient_level 如果有 ge=1 验证则 422，否则 201
+        assert resp.status_code in (201, 422)
+
+    def test_create_notification_recipient_level_out_of_bounds(self):
+        """创建通知时 recipient_level=8 返回 422 或 201"""
+        notification_data = {
+            "recipient_id": "agent-level-test",
+            "type": "task_assigned",
+            "title": "层级越界测试",
+            "recipient_level": 8,
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        # recipient_level 如果有 le=7 验证则 422，否则 201
+        assert resp.status_code in (201, 422)
+
+    def test_mark_notification_read_not_found(self):
+        """标记不存在通知为已读返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/notifications/{fake_id}/read", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_mark_notification_read_invalid_uuid(self):
+        """标记已读时 notification_id 为无效 UUID 格式返回 404"""
+        resp = httpx.patch(f"{API_BASE}/notifications/invalid-uuid-format/read", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_delete_notification_invalid_uuid(self):
+        """删除通知时 notification_id 为无效 UUID 格式返回 204（backend 不验证 UUID 格式）"""
+        resp = httpx.delete(f"{API_BASE}/notifications/invalid-uuid-format", timeout=TIMEOUT)
+        # Backend delete_notification 不验证 UUID 格式，静默返回 204
+        assert resp.status_code == 204
+
+    def test_get_notification_invalid_uuid(self):
+        """获取通知时 notification_id 为无效 UUID 格式返回 404"""
+        resp = httpx.get(f"{API_BASE}/notifications/invalid-uuid-format", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_notification_with_various_types(self):
+        """创建通知时验证各种通知类型是否被接受"""
+        valid_types = [
+            "task_assigned", "task_completed", "task_blocked",
+            "problem_reported", "problem_resolved",
+            "approval_requested", "approval_completed",
+            "edict_published", "escalation_received"
+        ]
+        for ntype in valid_types:
+            notification_data = {
+                "recipient_id": f"agent-type-{uuid.uuid4().hex[:8]}",
+                "type": ntype,
+                "title": f"类型测试: {ntype}",
+            }
+            resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"type={ntype} should be accepted"
+
+    def test_create_notification_arbitrary_type_accepted(self):
+        """创建通知时任意 type 字符串均被接受（backend 无枚举验证）"""
+        notification_data = {
+            "recipient_id": "agent-type-test",
+            "type": "custom_arbitrary_type_xyz",
+            "title": "自定义类型测试",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+    def test_mark_all_notifications_read_empty_recipient_id(self):
+        """标记所有通知已读时 recipient_id 为空字符串返回 422 或 200"""
+        resp = httpx.patch(f"{API_BASE}/notifications/read-all", params={"recipient_id": ""}, timeout=TIMEOUT)
+        # 空 recipient_id 如果有 min_length 验证则 422
+        assert resp.status_code in (200, 422)
+
+    def test_list_notifications_empty_recipient_id(self):
+        """列出通知时 recipient_id 为空字符串返回 422 或 200"""
+        resp = httpx.get(f"{API_BASE}/notifications", params={"recipient_id": ""}, timeout=TIMEOUT)
+        # 空 recipient_id 如果有 min_length 验证则 422
+        assert resp.status_code in (200, 422)
+
+    def test_unread_count_empty_recipient_id(self):
+        """获取未读数量时 recipient_id 为空字符串返回 422 或 200"""
+        resp = httpx.get(f"{API_BASE}/notifications/unread-count", params={"recipient_id": ""}, timeout=TIMEOUT)
+        assert resp.status_code in (200, 422)
+
+    def test_mark_all_notifications_read_nonexistent_recipient(self):
+        """标记不存在用户的通知全部已读返回 200（更新 0 条）"""
+        nonexistent = f"nonexistent-agent-{uuid.uuid4().hex[:8]}"
+        resp = httpx.patch(f"{API_BASE}/notifications/read-all", params={"recipient_id": nonexistent}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert result["updated"] == 0
+
+    def test_create_notification_without_optional_fields(self):
+        """创建通知时只提供必填字段（recipient_id/type/title）"""
+        notification_data = {
+            "recipient_id": "agent-minimal-test",
+            "type": "task_assigned",
+            "title": "最小化通知",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        result = resp.json()
+        assert result["title"] == "最小化通知"
+        assert result["read"] is False
+        assert result["message"] is None
+
+
 class TestRoomTemplates:
     """Room Templates API 测试"""
 

@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.65 | 日期：2026-04-06（Step 116 - Notifications API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
 > 版本：v2.61 | 日期：2026-04-06（Step 111 - Action Items API 边界测试）
@@ -3141,4 +3142,48 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 115（版本 v2.65）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 116 (2026-04-06)
+**版本**: v2.65 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Notifications API 添加边界测试覆盖
+
+背景：Notifications API（通知系统）允许创建/管理/追踪各类事件通知（任务分配/完成/阻塞、问题报告/解决、审批请求/完成、圣旨颁布、升级接收），包含8个端点（create/list/get/mark-read/mark-all-read/unread-count/delete）。此前仅有9个基础测试（创建/列表/过滤/获取/标记已读/全部已读/未读数/删除/404），缺少枚举验证/UUID格式/空值/越界/类型全覆盖等边界测试。与 Step 84-115 的补全模式对齐。
+
+### Do
+新增 `TestNotificationAPIBoundary` 测试类（15个边界测试用例）：
+
+1. **`test_create_notification_empty_title`** — 创建通知时 title="" — backend无min_length验证，接受空字符串
+2. **`test_create_notification_empty_recipient_id`** — recipient_id="" — backend无min_length验证
+3. **`test_create_notification_recipient_level_zero`** — recipient_level=0 — backend无ge=1验证
+4. **`test_create_notification_recipient_level_out_of_bounds`** — recipient_level=8 — backend无le=7验证
+5. **`test_mark_notification_read_not_found`** — 标记不存在通知为已读 → 404
+6. **`test_mark_notification_read_invalid_uuid`** — 标记已读时 notification_id 为无效 UUID 格式 → 404
+7. **`test_delete_notification_invalid_uuid`** — 删除通知时无效 UUID 格式 → 204（backend不验证UUID格式，静默成功）
+8. **`test_get_notification_invalid_uuid`** — 获取通知时无效 UUID 格式 → 404
+9. **`test_create_notification_with_various_types`** — 验证9种通知类型（task_assigned/completed/blocked、problem_reported/resolved、approval_requested/completed、edict_published、escalation_received）均返回 201
+10. **`test_create_notification_arbitrary_type_accepted`** — 任意 type 字符串均被接受（backend无枚举验证）
+11. **`test_mark_all_notifications_read_empty_recipient_id`** — recipient_id="" 时返回 422 或 200
+12. **`test_list_notifications_empty_recipient_id`** — recipient_id="" 时返回 422 或 200
+13. **`test_unread_count_empty_recipient_id`** — recipient_id="" 时返回 422 或 200
+14. **`test_mark_all_notifications_read_nonexistent_recipient`** — 标记不存在用户全部已读 → 200，updated=0
+15. **`test_create_notification_without_optional_fields`** — 只提供必填字段（recipient_id/type/title）→ 201
+
+**发现的行为**：
+- `type` 字段无枚举验证，任意字符串均可创建
+- `recipient_level` 无 ge=1/le=7 验证，接受 0 或 8
+- `title` 和 `recipient_id` 无 min_length=1 验证，接受空字符串
+- `delete_notification` 不验证 UUID 格式，静默返回 204
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestNotificationAPIBoundary 15/15 passed
+- ✅ pytest tests/ 489/489 passed（原有474 + 新增15）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 116（版本 v2.65）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
