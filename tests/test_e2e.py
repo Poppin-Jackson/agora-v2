@@ -6399,6 +6399,55 @@ class TestPlanSearch:
         resp = httpx.get(f"{API_BASE}/plans/search?q=", timeout=TIMEOUT)
         assert resp.status_code == 422  # min_length=1
 
+    def test_search_plans_whitespace_query_returns_results(self, ensure_api):
+        """仅空格查询返回200（min_length=1不过滤空格，3字符满足min_length）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=   ", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"仅空格 query 应返回 200，实际: {resp.status_code}"
+        data = resp.json()
+        assert "plans" in data
+
+    def test_search_plans_limit_zero(self, ensure_api):
+        """limit=0 返回422（ge=1验证）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&limit=0", timeout=TIMEOUT)
+        assert resp.status_code == 422, f"limit=0 应返回 422，实际: {resp.status_code}"
+
+    def test_search_plans_limit_negative(self, ensure_api):
+        """limit=-1 返回422（ge=1验证）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&limit=-1", timeout=TIMEOUT)
+        assert resp.status_code == 422, f"limit=-1 应返回 422，实际: {resp.status_code}"
+
+    def test_search_plans_limit_exceeds_max(self, ensure_api):
+        """limit=101 返回422（le=100验证）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&limit=101", timeout=TIMEOUT)
+        assert resp.status_code == 422, f"limit=101 应返回 422，实际: {resp.status_code}"
+
+    def test_search_plans_limit_at_max_boundary(self, ensure_api):
+        """limit=100（边界值）返回200"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&limit=100", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"limit=100 应返回 200，实际: {resp.status_code}"
+        data = resp.json()
+        assert data["limit"] == 100
+
+    def test_search_plans_offset_negative(self, ensure_api):
+        """offset=-1 返回422（ge=0验证）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&offset=-1", timeout=TIMEOUT)
+        assert resp.status_code == 422, f"offset=-1 应返回 422，实际: {resp.status_code}"
+
+    def test_search_plans_invalid_status_returns_empty(self, ensure_api):
+        """无效status值返回200（无枚举验证，过滤结果为空）"""
+        resp = httpx.get(f"{API_BASE}/plans/search?q=test&status=invalid_status_xyz", timeout=TIMEOUT)
+        assert resp.status_code == 200, f"无效 status 应返回 200，实际: {resp.status_code}"
+        data = resp.json()
+        # 无效status过滤结果为空
+        assert data["count"] == 0 or data.get("plans") == []
+
+    def test_search_plans_all_valid_statuses(self, ensure_api):
+        """验证全部7种PlanStatus枚举值均被接受（返回200）"""
+        valid_statuses = ["draft", "initiated", "in_review", "approved", "executing", "completed", "cancelled"]
+        for status in valid_statuses:
+            resp = httpx.get(f"{API_BASE}/plans/search?q=test&status={status}", timeout=TIMEOUT)
+            assert resp.status_code == 200, f"status={status} 应返回 200，实际: {resp.status_code}"
+
 
 class TestRoomSearch:
     """Step 89: Room Search API Tests — 讨论室搜索功能"""

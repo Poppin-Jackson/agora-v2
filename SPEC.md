@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.48 | 日期：2026-04-06（Step 98 - Plan Search API 边界测试覆盖）
 > 版本：v2.47 | 日期：2026-04-06（Step 97 - Constraints API 边界测试覆盖）
 > 版本：v2.46 | 日期：2026-04-06（Step 95 - Escalation API 边界测试覆盖）
 > 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
@@ -2459,4 +2460,36 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 97（版本 v2.47）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 98 (2026-04-06)
+**版本**: v2.48 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Plan Search API 添加边界测试覆盖
+
+背景：Plan Search API 当前有 5 个基础测试（基本搜索/topic搜索/status过滤/分页/空查询），缺少 limit/offset 边界值验证（ge=1/le=100/ge=0）、whitespace 查询行为验证、无效 status 行为验证、全部 7 种 PlanStatus 枚举验证等边界测试。与 Step 95-97 的补全模式对齐。
+
+### Do
+新增 8 个 Plan Search 边界测试用例（TestPlanSearch 类从 5 → 13 个）：
+
+1. **`test_search_plans_whitespace_query_returns_results`** — q="   "（仅空格）返回 200（min_length=1 不过滤空格，3字符满足验证）
+2. **`test_search_plans_limit_zero`** — limit=0 返回 422（ge=1 验证）
+3. **`test_search_plans_limit_negative`** — limit=-1 返回 422（ge=1 验证）
+4. **`test_search_plans_limit_exceeds_max`** — limit=101 返回 422（le=100 验证）
+5. **`test_search_plans_limit_at_max_boundary`** — limit=100（边界值）返回 200
+6. **`test_search_plans_offset_negative`** — offset=-1 返回 422（ge=0 验证）
+7. **`test_search_plans_invalid_status_returns_empty`** — status="invalid_status_xyz" 返回 200（无枚举验证，结果为空）
+8. **`test_search_plans_all_valid_statuses`** — 验证全部 7 种 PlanStatus 枚举（draft/initiated/in_review/approved/executing/completed/cancelled）均返回 200
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestPlanSearch 13/13 passed
+- ✅ pytest 317/317 passed（+8 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 98（版本 v2.48）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
