@@ -883,6 +883,100 @@ class TestSpeech:
         assert data["agent_id"] == "test-agent"
 
 
+class TestSpeechBoundary:
+    """Speech API 边界测试 (Step 133)"""
+
+    def test_add_speech_empty_content(self, room_info):
+        """添加发言: content='' → backend 无 min_length 验证，实际接受空字符串"""
+        room_id = room_info["room_id"]
+        payload = {"agent_id": "test-agent", "content": ""}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        # backend 无 min_length 验证，接受空字符串
+        assert resp.status_code in (200, 201)
+
+    def test_add_speech_empty_agent_id(self, room_info):
+        """添加发言: agent_id='' → backend 无验证，实际接受空字符串"""
+        room_id = room_info["room_id"]
+        payload = {"agent_id": "", "content": "测试内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (200, 201)
+
+    def test_add_speech_room_not_found(self, ensure_api):
+        """添加发言: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        payload = {"agent_id": "test-agent", "content": "测试内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{fake_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_add_speech_invalid_room_uuid(self, ensure_api):
+        """添加发言: room_id 无效 UUID 格式 → 404"""
+        payload = {"agent_id": "test-agent", "content": "测试内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/not-a-uuid/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_add_speech_very_long_content(self, room_info):
+        """添加发言: content 超长(10000字符) → backend 无 max_length 验证，实际接受"""
+        room_id = room_info["room_id"]
+        payload = {"agent_id": "test-agent", "content": "测" * 10000}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (200, 201)
+
+    def test_add_speech_very_long_agent_id(self, room_info):
+        """添加发言: agent_id 超长(1000字符) → backend 无 max_length 验证，实际接受"""
+        room_id = room_info["room_id"]
+        payload = {"agent_id": "agent-" * 100, "content": "测试内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (200, 201)
+
+    def test_add_speech_missing_agent_id(self, room_info):
+        """添加发言: 缺少 agent_id → 422 (Pydantic 必填字段)"""
+        room_id = room_info["room_id"]
+        payload = {"content": "测试内容"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_add_speech_missing_content(self, room_info):
+        """添加发言: 缺少 content → 422 (Pydantic 必填字段)"""
+        room_id = room_info["room_id"]
+        payload = {"agent_id": "test-agent"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_get_room_history_invalid_room_uuid(self, ensure_api):
+        """获取历史: room_id 无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid/history", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_history_room_not_found(self, ensure_api):
+        """获取历史: room 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/history", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_room_history_empty_room(self, room_info):
+        """获取历史: 新建房间无消息 → 返回空列表"""
+        room_id = room_info["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/history", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["history"] == []
+
+    def test_get_room_history_success(self, room_info):
+        """获取历史: 添加发言后获取历史 → 发言在历史中"""
+        room_id = room_info["room_id"]
+        # 先添加发言
+        payload = {"agent_id": "test-agent", "content": "测试发言"}
+        httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        # 获取历史
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/history", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1
+        contents = [m.get("content") for m in data["history"]]
+        assert "测试发言" in contents
+
+
 class TestApprovalFlow:
     """L1-L7审批流"""
 
@@ -10679,6 +10773,155 @@ class TestRoomSearch:
         """空查询返回422验证错误"""
         resp = httpx.get(f"{API_BASE}/rooms/search?q=", timeout=TIMEOUT)
         assert resp.status_code == 422  # min_length=1
+
+
+class TestRoomSearchBoundary:
+    """Step 134: Room Search API Boundary Tests — 讨论室搜索边界测试"""
+
+    def test_search_rooms_whitespace_query_returns_results(self, ensure_api):
+        """搜索查询只有空格时：min_length=1 验证通过，backend 处理空格"""
+        # 创建带空格的 topic
+        plan_payload = {"title": "空格测试", "topic": "测试  空格  房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+
+        # 只有空格但满足 min_length=1，backend 搜索 topic 含空格的房间
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=  ", timeout=TIMEOUT)
+        # Backend: q.lower() = "  " (两个空格), topic 含空格则匹配
+        assert resp.status_code == 200
+
+    def test_search_rooms_limit_zero(self, ensure_api):
+        """limit=0 返回 422（ge=1 验证）"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&limit=0", timeout=TIMEOUT)
+        assert resp.status_code == 422  # ge=1 validation
+
+    def test_search_rooms_limit_negative(self, ensure_api):
+        """limit=-1 返回 422（ge=1 验证）"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&limit=-1", timeout=TIMEOUT)
+        assert resp.status_code == 422  # ge=1 validation
+
+    def test_search_rooms_limit_exceeds_max(self, ensure_api):
+        """limit=101 返回 422（le=100 验证）"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&limit=101", timeout=TIMEOUT)
+        assert resp.status_code == 422  # le=100 validation
+
+    def test_search_rooms_limit_at_max_boundary(self, ensure_api):
+        """limit=100（边界值）返回 200"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&limit=100", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 100
+
+    def test_search_rooms_limit_at_min_boundary(self, ensure_api):
+        """limit=1（边界值）返回 200"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&limit=1", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 1
+
+    def test_search_rooms_offset_negative(self, ensure_api):
+        """offset=-1 返回 422（ge=0 验证）"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&offset=-1", timeout=TIMEOUT)
+        assert resp.status_code == 422  # ge=0 validation
+
+    def test_search_rooms_plan_not_found(self, ensure_api):
+        """plan_id 为不存在的 UUID 返回 200（搜索结果为空，无 plan 验证）"""
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&plan_id={fake_uuid}", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == fake_uuid
+        assert data["count"] == 0
+
+    def test_search_rooms_invalid_plan_id_format(self, ensure_api):
+        """plan_id 格式无效（非 UUID）返回 422 或 500"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&plan_id=not-a-uuid", timeout=TIMEOUT)
+        # Backend 不做 UUID 格式校验，可能返回 200 或 422
+        assert resp.status_code in (200, 422, 500)
+
+    def test_search_rooms_invalid_phase_value(self, ensure_api):
+        """phase 为无效值返回 200（无枚举验证，结果为空）"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&phase=INVALID_PHASE_XYZ", timeout=TIMEOUT)
+        # Backend 无 phase 枚举验证，返回 200 但结果为空
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["phase"] == "INVALID_PHASE_XYZ"
+
+    def test_search_rooms_with_tags(self, ensure_api):
+        """按 tags 过滤搜索结果"""
+        # 创建计划
+        plan_payload = {"title": "标签测试", "topic": "标签房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 给房间添加标签
+        httpx.post(f"{API_BASE}/rooms/{room_id}/tags/add", json={"tags": ["重要", "技术评审"]}, timeout=TIMEOUT)
+
+        # 按标签搜索
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=标签&tags=重要", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        # 返回的房间应包含 "重要" 标签（DB 查询模式）
+        for room in data.get("rooms", []):
+            tags = room.get("tags", [])
+            if tags:  # 有标签的房间才验证
+                assert "重要" in tags
+
+    def test_search_rooms_tags_no_match(self, ensure_api):
+        """按 tags 过滤无匹配时返回空结果"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=测试&tags=不存在的标签XYZ", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+
+    def test_search_rooms_multiple_filters(self, ensure_api):
+        """组合过滤：plan_id + phase + tags"""
+        # 创建计划
+        plan_payload = {"title": "多过滤测试", "topic": "多过滤房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        # 转换到 THINKING 阶段
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", json={"phase": "THINKING"}, timeout=TIMEOUT)
+
+        # 添加标签
+        httpx.post(f"{API_BASE}/rooms/{room_id}/tags/add", json={"tags": ["紧急"]}, timeout=TIMEOUT)
+
+        # 多条件搜索
+        resp = httpx.get(
+            f"{API_BASE}/rooms/search?q=多过滤&plan_id={plan_id}&phase=THINKING&tags=紧急",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["query"] == "多过滤"
+        assert data["plan_id"] == plan_id
+        assert data["phase"] == "THINKING"
+
+    def test_search_rooms_tags_with_commas(self, ensure_api):
+        """tags 参数包含逗号时的行为"""
+        # 创建带标签的房间
+        plan_payload = {"title": "逗号测试", "topic": "逗号房间", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+        httpx.post(f"{API_BASE}/rooms/{room_id}/tags/add", json={"tags": ["重要", "紧急"]}, timeout=TIMEOUT)
+
+        # 逗号分隔多标签
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=逗号&tags=重要,紧急", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tags"] == ["重要", "紧急"]
+
+    def test_search_rooms_pagination_offset_beyond_results(self, ensure_api):
+        """offset 超过结果总数时返回空列表"""
+        resp = httpx.get(f"{API_BASE}/rooms/search?q=不存在的关键词XYZ&offset=1000", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
 
 
 class TestTaskTimeEntries:

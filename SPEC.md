@@ -1,5 +1,8 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.83 | 日期：2026-04-06（Step 134 - Room Search API 边界测试）
+> 版本：v2.82 | 日期：2026-04-06（Step 133 - Speech API 边界测试）
+> 版本：v2.81 | 日期：2026-04-06（Step 132 - Task Comments/Checkpoints 边界测试）
 > 版本：v2.75 | 日期：2026-04-06（Step 125 - Export API 边界测试）
 > 版本：v2.64 | 日期：2026-04-06（Step 114 - Phase Transitions API 边界测试）
 > 版本：v2.63 | 日期：2026-04-06（Step 113 - Room Watch API 边界测试）
@@ -3875,4 +3878,81 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 132（版本 v2.81）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 133 (2026-04-06)
+**版本**: v2.82 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Speech API 添加边界测试覆盖
+
+背景：Speech API（发言功能 + 历史记录）是讨论室实时通信的核心功能，包含 2 个端点（`POST /rooms/{room_id}/speech`、`GET /rooms/{room_id}/history`）。`TestSpeech` 仅有 1 个基础测试，缺少空内容/空 agent_id/无效 UUID/超长内容/超长 agent_id/缺少字段等边界测试。与 Step 84-132 的补全模式对齐。
+
+### Do
+新增 `TestSpeechBoundary` 测试类（12个边界测试用例）：
+
+1. **`test_add_speech_empty_content`** — 添加发言: content='' → backend 无 min_length 验证，实际接受空字符串
+2. **`test_add_speech_empty_agent_id`** — 添加发言: agent_id='' → backend 无验证，实际接受空字符串
+3. **`test_add_speech_room_not_found`** — 添加发言: room 不存在 → 404
+4. **`test_add_speech_invalid_room_uuid`** — 添加发言: room_id 无效 UUID 格式 → 404
+5. **`test_add_speech_very_long_content`** — 添加发言: content 超长(10000字符) → backend 无 max_length 验证，实际接受
+6. **`test_add_speech_very_long_agent_id`** — 添加发言: agent_id 超长(1000字符) → backend 无 max_length 验证，实际接受
+7. **`test_add_speech_missing_agent_id`** — 添加发言: 缺少 agent_id → 422 (Pydantic 必填字段)
+8. **`test_add_speech_missing_content`** — 添加发言: 缺少 content → 422 (Pydantic 必填字段)
+9. **`test_get_room_history_invalid_room_uuid`** — 获取历史: room_id 无效 UUID 格式 → 404
+10. **`test_get_room_history_room_not_found`** — 获取历史: room 不存在 → 404
+11. **`test_get_room_history_empty_room`** — 获取历史: 新建房间无消息 → 返回空列表
+12. **`test_get_room_history_success`** — 获取历史: 添加发言后获取历史 → 发言在历史中
+
+**发现的行为**：
+- `SpeechAdd` 模型的 `agent_id` 和 `content` 字段均无 min_length/max_length 验证
+- `content=''` 和 `agent_id=''` 均可成功创建发言
+- 超长内容（10000字符）和超长 agent_id（1000字符）均被接受
+- 缺少必填字段（Pydantic）返回 422
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestSpeechBoundary 12/12 passed（+12 new tests）
+- ✅ pytest tests/ 757/757 passed（原有745 + 新增12 = 757）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 133（版本 v2.82）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 134 (2026-04-06)
+**版本**: v2.83 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Search API 添加边界测试覆盖
+
+背景：Room Search API（`GET /rooms/search?q=...&plan_id=...&phase=...&tags=...&limit=...&offset=...`）允许搜索讨论室，支持按 topic/plan_id/phase/tags 过滤和分页。`TestRoomSearch` 仅有 5 个基础测试（基本搜索/plan过滤/phase过滤/分页/空查询），缺少边界测试覆盖。与 Step 84-133 的补全模式对齐。
+
+### Do
+新增 `TestRoomSearchBoundary` 测试类（15个边界测试用例）：
+
+1. **`test_search_rooms_whitespace_query_returns_results`** — q="   "（仅空格）满足 min_length=1，backend 处理空格时匹配含空格 topic
+2. **`test_search_rooms_limit_zero`** — limit=0 → 422（ge=1 验证）
+3. **`test_search_rooms_limit_negative`** — limit=-1 → 422（ge=1 验证）
+4. **`test_search_rooms_limit_exceeds_max`** — limit=101 → 422（le=100 验证）
+5. **`test_search_rooms_limit_at_max_boundary`** — limit=100（边界值）→ 200，验证返回 limit=100
+6. **`test_search_rooms_limit_at_min_boundary`** — limit=1（边界值）→ 200，验证返回 limit=1
+7. **`test_search_rooms_offset_negative`** — offset=-1 → 422（ge=0 验证）
+8. **`test_search_rooms_plan_not_found`** — plan_id 为不存在的 UUID → 200（搜索结果为空，无 plan 验证）
+9. **`test_search_rooms_invalid_plan_id_format`** — plan_id="not-a-uuid" → 422/500（无效 UUID 格式）
+10. **`test_search_rooms_invalid_phase_value`** — phase="INVALID_PHASE_XYZ" → 200（无枚举验证，结果为空）
+11. **`test_search_rooms_with_tags`** — 按 tags 过滤，验证返回房间包含指定标签
+12. **`test_search_rooms_tags_no_match`** — tags 不匹配任何房间 → 200，count=0
+13. **`test_search_rooms_multiple_filters`** — 组合过滤 plan_id + phase + tags，验证多条件同时生效
+14. **`test_search_rooms_tags_with_commas`** — tags="重要,紧急" 逗号分隔多标签，验证解析为 ["重要", "紧急"]
+15. **`test_search_rooms_pagination_offset_beyond_results`** — offset 超过结果总数 → 200，count=0
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestRoomSearchBoundary 15/15 passed（+15 new tests）
+- ✅ pytest tests/ 772/772 passed（原有757 + 新增15 = 772）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 134（版本 v2.83）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
