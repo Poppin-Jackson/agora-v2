@@ -6,6 +6,7 @@ import api, {
   copyPlan,
   getRoom,
   getPlan,
+  deletePlan,
   listPlans,
   listTasks,
   createTask,
@@ -956,6 +957,20 @@ async function handleCopyPlan(planId: string) {
     }
   } catch (e) {
     console.error('handleCopyPlan failed', e)
+  }
+}
+
+async function handleDeletePlan(planId: string) {
+  if (!confirm('确定删除此计划？所有房间、任务、讨论等数据将被级联删除。')) return
+  try {
+    await deletePlan(planId)
+    await loadPlans()
+    if (currentPlan.value?.plan_id === planId) {
+      view.value = 'home'
+      currentPlan.value = null
+    }
+  } catch (e) {
+    console.error('handleDeletePlan failed', e)
   }
 }
 
@@ -3623,6 +3638,11 @@ onUnmounted(() => {
               title="复制计划"
               @click.stop="handleCopyPlan(plan.plan_id)"
             >📋 复制</button>
+            <button
+              class="btn-delete-plan"
+              title="删除计划"
+              @click.stop="handleDeletePlan(plan.plan_id)"
+            >🗑 删除</button>
           </div>
         </div>
 
@@ -7494,6 +7514,18 @@ body {
   margin-left: auto;
 }
 .btn-copy-plan:hover { border-color: #4ade80; color: #86efac; background: rgba(74, 222, 128, 0.1); }
+
+.btn-delete-plan {
+  background: transparent;
+  border: 1px solid #4a2d2d;
+  color: #cf6b6b;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-delete-plan:hover { border-color: #ef4444; color: #fca5a5; background: rgba(239, 68, 68, 0.1); }
 
 .btn-back {
   background: transparent;

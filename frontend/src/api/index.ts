@@ -19,6 +19,9 @@ export const copyPlan = (planId: string, data?: { performed_by?: string }) =>
 export const getPlan = (planId: string) =>
   api.get(`/plans/${planId}`)
 
+export const deletePlan = (planId: string) =>
+  api.delete(`/plans/${planId}`)
+
 export const listPlans = () =>
   api.get('/plans')
 

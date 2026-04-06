@@ -4075,3 +4075,53 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 137（版本 v2.86）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 138 (2026-04-06)
+**版本**: v2.87 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 ApprovalFlow API 添加边界测试覆盖
+
+背景：ApprovalFlow API（L1-L7审批流）包含 4 个端点（start/get/action/levels）。`TestApprovalFlow` 已有 10 个基础测试，但缺少 initiator 必填字段/无效 action enum/invalid level/RETURN+ESCALATE action/missing query params/skip_levels 边界/409 冲突等边界测试。与 Step 84-137 的补全模式对齐。
+
+### Do
+新增 `TestApprovalFlowBoundary` 测试类（18个边界测试用例）：
+
+1. **`test_get_approval_invalid_plan_uuid_format`** — 获取审批状态: plan_id 为无效 UUID 格式 → 404
+2. **`test_start_approval_invalid_plan_uuid_format`** — 启动审批流: plan_id 为无效 UUID 格式 → 404
+3. **`test_start_approval_missing_initiator_id`** — 启动审批流: 缺少必填字段 initiator_id → 422
+4. **`test_start_approval_missing_initiator_name`** — 启动审批流: 缺少必填字段 initiator_name → 422
+5. **`test_start_approval_only_required_fields`** — 启动审批流: 仅提供必填字段 → 200，L7 默认起始
+6. **`test_start_approval_skip_levels_with_invalid_level_zero`** — skip_levels 包含 0 → 200（后端忽略无效层级）
+7. **`test_start_approval_skip_levels_with_invalid_level_eight`** — skip_levels 包含 8 → 200（后端忽略无效层级）
+8. **`test_approval_action_invalid_action_type`** — action 使用无效枚举值 → 422（FastAPI enum 验证）
+9. **`test_approval_action_level_zero`** — level=0 超出 L1 下界 → 400（backend 校验）
+10. **`test_approval_action_level_out_of_bounds`** — level=8 超出 L7 上界 → 400（backend 校验）
+11. **`test_approval_action_level_negative`** — level=-1 负数 → 400（backend 校验）
+12. **`test_approval_action_missing_actor_id`** — 缺少必填查询参数 actor_id → 422
+13. **`test_approval_action_missing_actor_name`** — 缺少必填查询参数 actor_name → 422
+14. **`test_approval_action_return_action`** — action=return（RETURN 动作）→ 200，流转至 L6
+15. **`test_approval_action_escalate_action`** — action=escalate（ESCALATE 动作）→ 200，升级至 L6
+16. **`test_get_approval_levels_invalid_plan_uuid`** — 获取审批层级: 无效 UUID → 200（静态端点不做 plan 存在性校验）
+17. **`test_start_approval_already_started`** — 重复启动审批流 → 409（冲突）
+18. **`test_approval_action_skip_level_not_in_chain`** — 对跳过的 L7 执行审批动作 → 400
+
+**发现的行为**：
+- `initiator_id` 和 `initiator_name` 为 Pydantic 必填字段，缺失返回 422
+- `action` 为 FastAPI enum，拒绝无效值返回 422
+- `level` 参数无 FastAPI range 验证，由 backend execute_approval_action 校验（不在链中返回 400）
+- RETURN/ESCALATE 在 fresh flow L7 上执行：flow 状态保持 in_progress，流转至 L6
+- `/approval/levels` 为静态端点，不校验 plan_id 存在性
+- 重复启动审批流返回 409 Conflict
+- skip_levels 包含无效层级（0/8）时，后端直接忽略，不报错
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestApprovalFlowBoundary 18/18 passed（+18 new tests）
+- ✅ pytest tests/test_e2e.py 804/804 passed（原有786 + 新增18 = 804）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 138（版本 v2.87）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

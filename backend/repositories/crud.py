@@ -72,6 +72,16 @@ async def update_plan(plan_id: str, **fields) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def delete_plan(plan_id: str) -> bool:
+    """删除计划（级联删除所有关联数据）"""
+    async with get_connection() as conn:
+        result = await conn.execute(
+            "DELETE FROM plans WHERE plan_id = $1",
+            plan_id,
+        )
+        return result == "DELETE 1"
+
+
 async def list_plans() -> List[Dict[str, Any]]:
     async with get_connection() as conn:
         rows = await conn.fetch("SELECT * FROM plans ORDER BY created_at DESC")

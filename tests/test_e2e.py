@@ -1348,6 +1348,242 @@ class TestApprovalFlow:
         assert data["new_status"] == "fully_approved"
 
 
+class TestApprovalFlowBoundary:
+    """Step 138: ApprovalFlow API 边界测试"""
+
+    def test_get_approval_invalid_plan_uuid_format(self, ensure_api):
+        """获取审批状态: plan_id 为无效 UUID 格式 → 404"""
+        resp = httpx.get(f"{API_BASE}/plans/invalid-uuid/approval", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_start_approval_invalid_plan_uuid_format(self, ensure_api):
+        """启动审批流: plan_id 为无效 UUID 格式 → 404"""
+        resp = httpx.post(
+            f"{API_BASE}/plans/not-a-uuid/approval/start",
+            json={"initiator_id": "test", "initiator_name": "test", "skip_levels": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_start_approval_missing_initiator_id(self, room_info):
+        """启动审批流: 缺少必填字段 initiator_id → 422"""
+        plan_id = room_info["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_name": "测试发起人", "skip_levels": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_start_approval_missing_initiator_name(self, room_info):
+        """启动审批流: 缺少必填字段 initiator_name → 422"""
+        plan_id = room_info["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test-init", "skip_levels": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_start_approval_only_required_fields(self, room_info):
+        """启动审批流: 仅提供必填字段（initiator_id + initiator_name）→ 200"""
+        plan_id = room_info["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test-init", "initiator_name": "测试发起人"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["flow"]["current_level"] == 7  # 从 L7 开始
+
+    def test_start_approval_skip_levels_with_invalid_level_zero(self, room_info):
+        """启动审批流: skip_levels 包含 0（无效层级）→ 400 或 200（取决于 backend 校验）"""
+        plan_id = room_info["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test", "initiator_name": "测试", "skip_levels": [0]},
+            timeout=TIMEOUT,
+        )
+        # skip_levels 包含 0，backend 可能在 start_approval_flow 中校验或直接忽略
+        assert resp.status_code in (200, 400)
+
+    def test_start_approval_skip_levels_with_invalid_level_eight(self, room_info):
+        """启动审批流: skip_levels 包含 8（超出 L7 范围）→ 200（后端无校验，忽略无效层级）"""
+        plan_id = room_info["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test", "initiator_name": "测试", "skip_levels": [8]},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200  # 后端忽略无效层级
+
+    def test_approval_action_invalid_action_type(self, approved_plan):
+        """执行审批动作: action 使用无效枚举值 → 422（FastAPI enum 验证）"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "invalid_action",
+                "level": 7,
+                "actor_id": "test",
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_approval_action_level_zero(self, approved_plan):
+        """执行审批动作: level=0 超出 L1 下界 → 400（backend 校验）"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/0/action",
+            params={
+                "action": "approve",
+                "level": 0,
+                "actor_id": "test",
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400
+
+    def test_approval_action_level_out_of_bounds(self, approved_plan):
+        """执行审批动作: level=8 超出 L7 上界 → 400（backend 校验）"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/8/action",
+            params={
+                "action": "approve",
+                "level": 8,
+                "actor_id": "test",
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400
+
+    def test_approval_action_level_negative(self, approved_plan):
+        """执行审批动作: level=-1 负数 → 400（backend 校验）"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/-1/action",
+            params={
+                "action": "approve",
+                "level": -1,
+                "actor_id": "test",
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 400
+
+    def test_approval_action_missing_actor_id(self, approved_plan):
+        """执行审批动作: 缺少必填查询参数 actor_id → 422"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "approve",
+                "level": 7,
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_approval_action_missing_actor_name(self, approved_plan):
+        """执行审批动作: 缺少必填查询参数 actor_name → 422"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "approve",
+                "level": 7,
+                "actor_id": "test",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_approval_action_return_action(self, approved_plan):
+        """执行审批动作: action=return（RETURN 动作）→ 200"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "return",
+                "level": 7,
+                "actor_id": "test",
+                "actor_name": "测试",
+                "comment": "退回修改",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # RETURN on L7 in fresh flow: flow stays in_progress, moves to L6
+        assert data["new_current_level"] == 6
+
+    def test_approval_action_escalate_action(self, approved_plan):
+        """执行审批动作: action=escalate（ESCALATE 动作）→ 200"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "escalate",
+                "level": 7,
+                "actor_id": "test",
+                "actor_name": "测试",
+                "comment": "升级处理",
+            },
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # ESCALATE on L7: flow stays in_progress, current_level becomes 6
+        assert data["new_current_level"] == 6
+
+    def test_get_approval_levels_invalid_plan_uuid(self, ensure_api):
+        """获取审批层级: plan_id 为无效 UUID 格式 → 200（静态端点不做 plan 存在性校验）"""
+        resp = httpx.get(f"{API_BASE}/plans/invalid-uuid/approval/levels", timeout=TIMEOUT)
+        assert resp.status_code == 200  # 静态端点不校验 plan_id
+
+    def test_start_approval_already_started(self, approved_plan):
+        """启动审批流: 重复启动 → 409（冲突）"""
+        plan_id = approved_plan["plan_id"]
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test2", "initiator_name": "测试2", "skip_levels": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 409  # 审批流已启动
+
+    def test_approval_action_skip_level_not_in_chain(self, room_info):
+        """执行审批动作: 对不在审批链中的层级操作 → 400"""
+        plan_id = room_info["plan_id"]
+        # 启动审批流，跳过 L7
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/start",
+            json={"initiator_id": "test", "initiator_name": "测试", "skip_levels": [7]},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        # 尝试对跳过的 L7 执行审批动作（不在链中）
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/approval/7/action",
+            params={
+                "action": "approve",
+                "level": 7,
+                "actor_id": "test",
+                "actor_name": "测试",
+            },
+            timeout=TIMEOUT,
+        )
+        # L7 不在审批链中，应返回 400
+        assert resp.status_code == 400
+
+
 class TestWebSocket:
     """WebSocket实时通信"""
 

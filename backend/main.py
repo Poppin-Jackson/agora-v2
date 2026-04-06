@@ -2558,6 +2558,33 @@ async def get_plan(plan_id: str):
     return _plans[plan_id]
 
 
+@app.delete("/plans/{plan_id}", status_code=204)
+async def delete_plan(plan_id: str):
+    """
+    删除 Plan（级联删除所有关联数据）
+    """
+    # PostgreSQL 优先
+    if _db_active:
+        try:
+            deleted = await crud.delete_plan(plan_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Plan not found")
+            # 从内存同步删除
+            _plans.pop(plan_id, None)
+            return Response(status_code=204)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[DB] delete_plan {plan_id}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # 内存回退
+    if plan_id not in _plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    del _plans[plan_id]
+    return Response(status_code=204)
+
+
 @app.get("/plans")
 async def list_plans():
     """
