@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 
 from gateway_client import (
@@ -263,6 +263,12 @@ class RoomLinkRequest(BaseModel):
     """关联讨论室请求（建立父子/关联关系）"""
     parent_room_id: Optional[str] = None
     related_room_ids: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def check_at_least_one(self):
+        if not self.parent_room_id and not self.related_room_ids:
+            raise ValueError("At least one of parent_room_id or related_room_ids must be provided")
+        return self
 
 
 class ParticipantContributionUpdate(BaseModel):
@@ -4071,6 +4077,21 @@ async def link_room(room_id: str, data: RoomLinkRequest):
     if room_id not in _rooms:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    # 防止自引用
+    if data.parent_room_id and data.parent_room_id == room_id:
+        raise HTTPException(status_code=400, detail="Cannot link room to itself")
+    # 验证 parent_room_id 存在
+    if data.parent_room_id:
+        parent_exists = await crud.get_room(data.parent_room_id)
+        if not parent_exists:
+            raise HTTPException(status_code=404, detail="Parent room not found")
+    # 验证 related_room_ids 都存在
+    if data.related_room_ids:
+        for rel_id in data.related_room_ids:
+            rel_exists = await crud.get_room(rel_id)
+            if not rel_exists:
+                raise HTTPException(status_code=404, detail=f"Related room {rel_id} not found")
+
     updated = await crud.link_rooms(
         room_id=room_id,
         parent_room_id=data.parent_room_id,
@@ -4122,6 +4143,7 @@ async def get_room_hierarchy(room_id: str):
         "parent": parent_summary,
         "children": children,
         "related": related,
+        "ended_at": room.get("ended_at"),
     }
 
 
@@ -8010,7 +8032,7 @@ class SnapshotCreate(BaseModel):
     version: str
     room_id: str
     phase: str
-    context_summary: str
+    context_summary: str = Field(..., min_length=1)
     participants: List[str] = Field(default_factory=list)
     messages_summary: List[dict] = Field(default_factory=list)
 

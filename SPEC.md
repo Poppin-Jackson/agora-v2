@@ -1,6 +1,8 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.49 | 日期：2026-04-06（Step 99 - Version Management API 测试覆盖）
+> 版本：v2.52 | 日期：2026-04-06（Step 102 - Snapshot API 边界测试覆盖）
+> 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
+> 版本：v2.50 | 日期：2026-04-06（Step 100 - Requirements API 边界测试覆盖）
 > 版本：v2.48 | 日期：2026-04-06（Step 98 - Plan Search API 边界测试覆盖）
 > 版本：v2.47 | 日期：2026-04-06（Step 97 - Constraints API 边界测试覆盖）
 > 版本：v2.46 | 日期：2026-04-06（Step 95 - Escalation API 边界测试覆盖）
@@ -2567,4 +2569,84 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 100（版本 v2.50）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 101 (2026-04-06)
+**版本**: v2.51 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 RoomHierarchy API 添加边界测试覆盖
+
+背景：RoomHierarchy API（讨论室层级关系）是讨论室结构化管理的核心功能，包含 3 个端点（link_room/get_room_hierarchy/conclude_room）。此前仅有 3 个基础测试（link父子/link关联/conclude），缺少 404 场景、自引用校验、空载荷校验、层级响应 ended_at 字段等边界测试。
+
+### Do
+新增 6 个 RoomHierarchy 边界测试用例（TestRoomHierarchy 类从 3 → 9 个）：
+
+1. **`test_link_room_not_found`** — 链接到不存在的父/关联讨论室返回 404
+   - 验证 `POST /rooms/{room_id}/link` parent_room_id 不存在 → 404
+   - 验证 related_room_ids 包含不存在房间 → 404
+
+2. **`test_link_room_self_reference`** — 讨论室不能链接到自己（parent_room_id == room_id）返回 400
+   - **Backend Fix**：`link_room` 函数新增自引用校验 `if data.parent_room_id == room_id: raise 400`
+
+3. **`test_link_room_invalid_payload`** — 既无 parent_room_id 也无 related_room_ids 时返回 422
+   - **Backend Fix**：`RoomLinkRequest` 新增 `model_validator` 校验至少提供一个关联字段
+
+4. **`test_get_room_hierarchy_not_found`** — 获取不存在讨论室的层级关系返回 404
+
+5. **`test_conclude_room_not_found`** — 结束不存在的讨论室返回 404
+
+6. **`test_hierarchy_shows_ended_at_after_conclude`** — 讨论室结束后，层级关系响应包含 ended_at 字段
+   - **Backend Fix**：`get_room_hierarchy` 响应增加 `"ended_at": room.get("ended_at")`
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRoomHierarchy 9/9 passed（+6 new tests）
+- ✅ pytest 342/342 passed（+6 new tests）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+
+### Act
+- 更新 SPEC.md 完成 Step 101（版本 v2.51）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 102 (2026-04-06)
+**版本**: v2.52 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Snapshot API 添加边界测试覆盖
+
+背景：Snapshot API（上下文快照）是讨论状态持久化的核心功能，包含 3 个端点（create/list/get）。此前仅有 3 个基础测试（创建/列表/获取详情），缺少 context_summary 验证、plan/version 不存在、各操作 404 场景等边界测试。与 Step 84-101 的补全模式对齐。
+
+### Do
+新增 8 个 SnapshotAPI 边界测试用例（TestSnapshotAPI 类从 3 → 11 个）：
+
+1. **`test_create_snapshot_empty_context_summary`** — 创建快照时 context_summary 为空字符串返回 422
+   - **Backend Fix**：`SnapshotCreate.context_summary` 添加 `Field(..., min_length=1)` 验证
+
+2. **`test_create_snapshot_plan_not_found`** — 创建快照时 plan 不存在返回 404
+
+3. **`test_create_snapshot_version_not_found`** — 创建快照时 version 不存在返回 404
+
+4. **`test_get_snapshot_not_found`** — 获取不存在的快照返回 404（假 UUID）
+
+5. **`test_get_snapshot_plan_not_found`** — 获取快照时 plan 不存在返回 404
+
+6. **`test_get_snapshot_version_not_found`** — 获取快照时 version 不存在返回 404
+
+7. **`test_list_snapshots_plan_not_found`** — 列出快照时 plan 不存在返回 404
+
+8. **`test_list_snapshots_version_not_found`** — 列出快照时 version 不存在返回 404
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestSnapshotAPI 11/11 passed（+8 new tests）
+- ✅ pytest 350/350 passed（+8 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 102（版本 v2.52）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

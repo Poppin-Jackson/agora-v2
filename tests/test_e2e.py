@@ -1087,6 +1087,157 @@ class TestSnapshotAPI:
         assert snapshot["snapshot_id"] == snapshot_id
         assert snapshot["phase"] == "executing"
 
+    def test_create_snapshot_empty_context_summary(self, ensure_api):
+        """创建快照时 context_summary 为空字符串返回 422"""
+        # 创建Plan
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "快照边界测试", "topic": "测试空摘要", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        # context_summary min_length=1，空字符串应返回 422
+        snapshot_payload = {
+            "plan_id": plan_id,
+            "version": "v1.0",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "",
+            "participants": [],
+            "messages_summary": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/",
+            json=snapshot_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_snapshot_plan_not_found(self, ensure_api):
+        """创建快照时 plan 不存在返回 404"""
+        fake_id = str(uuid.uuid4())
+        snapshot_payload = {
+            "plan_id": fake_id,
+            "version": "v1.0",
+            "room_id": str(uuid.uuid4()),
+            "phase": "debate",
+            "context_summary": "测试",
+            "participants": [],
+            "messages_summary": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_id}/versions/v1.0/snapshots/",
+            json=snapshot_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_snapshot_version_not_found(self, ensure_api):
+        """创建快照时 version 不存在返回 404"""
+        # 创建Plan
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "快照版本404", "topic": "测试版本不存在", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        # v99.99 版本不存在
+        snapshot_payload = {
+            "plan_id": plan_id,
+            "version": "v99.99",
+            "room_id": room_id,
+            "phase": "debate",
+            "context_summary": "测试",
+            "participants": [],
+            "messages_summary": [],
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/snapshots/",
+            json=snapshot_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_snapshot_not_found(self, ensure_api):
+        """获取不存在的快照返回 404"""
+        # 创建Plan
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "快照不存在", "topic": "测试404", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # 使用假 UUID 作为 snapshot_id
+        fake_snapshot_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v1.0/snapshots/{fake_snapshot_id}.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_snapshot_plan_not_found(self, ensure_api):
+        """获取快照时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_snapshot_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/snapshots/{fake_snapshot_id}.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_snapshot_version_not_found(self, ensure_api):
+        """获取快照时 version 不存在返回 404"""
+        # 创建Plan
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "快照版本不存在", "topic": "测试", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        fake_snapshot_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/snapshots/{fake_snapshot_id}.json",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_snapshots_plan_not_found(self, ensure_api):
+        """列出快照时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/v1.0/snapshots/",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_list_snapshots_version_not_found(self, ensure_api):
+        """列出快照时 version 不存在返回 404"""
+        # 创建Plan
+        resp = httpx.post(
+            f"{API_BASE}/plans",
+            json={"title": "列表快照版本404", "topic": "测试", "requirements": []},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # v99.99 版本不存在
+        resp = httpx.get(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/snapshots/",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
 
 # ========================
 # Level-specific Context API Tests
@@ -3480,6 +3631,83 @@ class TestRoomHierarchy:
         assert data.get("summary") == "讨论完成，达成共识"
         assert data.get("conclusion") == "方案确定"
         assert "ended_at" in data
+
+    def test_link_room_not_found(self):
+        """测试：链接不存在的讨论室返回404"""
+        # 创建源讨论室
+        plan = {"title": "测试-链接404", "topic": "源讨论室", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        fake_id = str(uuid.uuid4())
+
+        # 链接到不存在的父讨论室
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"parent_room_id": fake_id}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+        # 链接到不存在的关联讨论室
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"related_room_ids": [fake_id]}, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_link_room_self_reference(self):
+        """测试：讨论室不能链接到自己"""
+        plan = {"title": "测试-自引用", "topic": "自引用测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 尝试将自己设为父讨论室
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"parent_room_id": room_id}, timeout=TIMEOUT)
+        assert resp.status_code == 400
+
+    def test_link_room_invalid_payload(self):
+        """测试：链接请求既无parent_room_id也无related_room_ids时返回422"""
+        plan = {"title": "测试-无效载荷", "topic": "无效载荷测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 空载荷
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={}, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_get_room_hierarchy_not_found(self):
+        """测试：获取不存在的讨论室的层级关系返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_conclude_room_not_found(self):
+        """测试：结束不存在的讨论室返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_id}/conclude",
+            json={"summary": "总结", "conclusion": "结论"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_hierarchy_shows_ended_at_after_conclude(self):
+        """测试：讨论室结束后，层级关系中显示ended_at"""
+        plan = {"title": "测试-层级结束", "topic": "层级结束测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = resp.json()["room"]["room_id"]
+
+        # 结束讨论室
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/conclude",
+            json={"summary": "讨论完成", "conclusion": "结论确定"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        # 获取层级关系
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("ended_at") is not None
 
 
 class TestParticipantContributions:
