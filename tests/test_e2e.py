@@ -3726,6 +3726,263 @@ class TestStakeholders:
         assert resp.status_code == 404
 
 
+class TestStakeholdersBoundary:
+    """测试 Stakeholders API 边界情况 (Step 121)"""
+
+    def test_create_stakeholder_empty_name(self):
+        """创建干系人时 name='' 返回 422 (min_length=1 验证)"""
+        plan_payload = {"title": "测试-边界-name", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # name 为空字符串应该返回 422
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "", "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_level_zero(self):
+        """创建干系人时 level=0 返回 422 (ge=1 验证)"""
+        plan_payload = {"title": "测试-边界-level", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "测试单位", "level": 0, "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_level_out_of_bounds(self):
+        """创建干系人时 level=8 返回 422 (le=7 验证)"""
+        plan_payload = {"title": "测试-边界-level上界", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "测试单位", "level": 8, "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_level_at_boundaries(self):
+        """创建干系人时 level=1 和 level=7 (边界值) 返回 201"""
+        plan_payload = {"title": "测试-边界-level边界值", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # level=1 (下边界)
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "L1单位", "level": 1, "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert resp.json()["level"] == 1
+
+        # level=7 (上边界)
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "L7单位", "level": 7, "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        assert resp.json()["level"] == 7
+
+    def test_create_stakeholder_invalid_interest(self):
+        """创建干系人时 interest='invalid_value' 返回 422 (enum 验证)"""
+        plan_payload = {"title": "测试-边界-interest", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "测试单位", "interest": "invalid_interest", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_invalid_influence(self):
+        """创建干系人时 influence='invalid_value' 返回 422 (enum 验证)"""
+        plan_payload = {"title": "测试-边界-influence", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "测试单位", "interest": "high", "influence": "invalid_influence"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_all_valid_interest_influence(self):
+        """验证 interest/influence 所有有效枚举值均可创建"""
+        plan_payload = {"title": "测试-枚举值", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        for val in ["high", "medium", "low"]:
+            resp = httpx.post(
+                f"{API_BASE}/plans/{plan_id}/stakeholders",
+                json={"name": f"单位-{val}", "interest": val, "influence": val},
+                timeout=TIMEOUT
+            )
+            assert resp.status_code == 201, f"Failed for {val}"
+            assert resp.json()["interest"] == val
+            assert resp.json()["influence"] == val
+
+    def test_create_stakeholder_plan_not_found(self):
+        """创建干系人时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/stakeholders",
+            json={"name": "测试单位", "interest": "high", "influence": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_list_stakeholders_plan_not_found(self):
+        """列出干系人时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/stakeholders", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_stakeholder_plan_not_found(self):
+        """获取干系人时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_stakeholder_id = str(uuid.uuid4())
+
+        resp = httpx.get(
+            f"{API_BASE}/plans/{fake_plan_id}/stakeholders/{fake_stakeholder_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_stakeholder_plan_not_found(self):
+        """更新干系人时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_stakeholder_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{fake_plan_id}/stakeholders/{fake_stakeholder_id}",
+            json={"interest": "high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_delete_stakeholder_plan_not_found(self):
+        """删除干系人时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_stakeholder_id = str(uuid.uuid4())
+
+        resp = httpx.delete(
+            f"{API_BASE}/plans/{fake_plan_id}/stakeholders/{fake_stakeholder_id}",
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_update_stakeholder_invalid_level(self):
+        """更新干系人时 level=8 返回 422 (le=7 验证)"""
+        plan_payload = {"title": "测试-更新-level", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        s = {"name": "测试单位", "level": 5, "interest": "medium", "influence": "medium"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/stakeholders", json=s, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        stakeholder_id = resp.json()["stakeholder_id"]
+
+        # 更新 level=8 应该返回 422
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/stakeholders/{stakeholder_id}",
+            json={"level": 8},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_stakeholder_level_zero(self):
+        """更新干系人时 level=0 返回 422 (ge=1 验证)"""
+        plan_payload = {"title": "测试-更新-level零", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        s = {"name": "测试单位", "level": 5, "interest": "medium", "influence": "medium"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/stakeholders", json=s, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        stakeholder_id = resp.json()["stakeholder_id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/stakeholders/{stakeholder_id}",
+            json={"level": 0},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_update_stakeholder_invalid_interest(self):
+        """更新干系人时 interest='invalid' 返回 422 (enum 验证)"""
+        plan_payload = {"title": "测试-更新-interest", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        s = {"name": "测试单位", "level": 5, "interest": "medium", "influence": "medium"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/stakeholders", json=s, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        stakeholder_id = resp.json()["stakeholder_id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{plan_id}/stakeholders/{stakeholder_id}",
+            json={"interest": "super_high"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422
+
+    def test_create_stakeholder_with_optional_fields_missing(self):
+        """仅提供必填字段 (name/interest/influence) 应该返回 201"""
+        plan_payload = {"title": "测试-可选字段", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        # 只提供必填字段
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/stakeholders",
+            json={"name": "最小单位", "interest": "low", "influence": "low"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "最小单位"
+        assert data["level"] is None  # level 为 Optional，默认 None
+        assert data["description"] == ""
+
+    def test_list_stakeholders_empty(self):
+        """无干系人时返回空列表"""
+        plan_payload = {"title": "测试-空列表", "topic": "边界测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.get(f"{API_BASE}/plans/{plan_id}/stakeholders", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
 class TestRisks:
     """测试 Risks API (Version 风险)"""
 

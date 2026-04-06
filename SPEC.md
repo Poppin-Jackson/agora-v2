@@ -3369,3 +3369,43 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 118（版本 v2.67）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 121 (2026-04-06)
+**版本**: v2.70 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Stakeholders API 添加边界测试覆盖
+
+背景：Stakeholders API（Plan 干系人）包含 5 个端点（create/list/get/update/delete），只有 4 个基础测试（创建+列表/更新/删除/不存在），缺少 name min_length 验证、level 范围验证（ge=1/le=7）、interest/influence 枚举验证、plan 不存在 404、各操作 plan not found 等边界测试。与 Step 84-120 的补全模式对齐。
+
+### Do
+新增 `TestStakeholdersBoundary` 测试类（17个边界测试用例）：
+
+1. **`test_create_stakeholder_empty_name`** — 创建干系人时 name="" 返回 422（min_length=1 验证）
+2. **`test_create_stakeholder_level_zero`** — 创建干系人时 level=0 返回 422（ge=1 验证）
+3. **`test_create_stakeholder_level_out_of_bounds`** — 创建干系人时 level=8 返回 422（le=7 验证）
+4. **`test_create_stakeholder_level_at_boundaries`** — level=1 和 level=7（边界值）返回 201
+5. **`test_create_stakeholder_invalid_interest`** — interest="invalid_value" 返回 422（enum 验证）
+6. **`test_create_stakeholder_invalid_influence`** — influence="invalid_value" 返回 422（enum 验证）
+7. **`test_create_stakeholder_all_valid_interest_influence`** — 验证全部 3 种枚举值（high/medium/low）均可创建
+8. **`test_create_stakeholder_plan_not_found`** — 创建干系人时 plan 不存在返回 404
+9. **`test_list_stakeholders_plan_not_found`** — 列出干系人时 plan 不存在返回 404
+10. **`test_get_stakeholder_plan_not_found`** — 获取干系人时 plan 不存在返回 404
+11. **`test_update_stakeholder_plan_not_found`** — 更新干系人时 plan 不存在返回 404
+12. **`test_delete_stakeholder_plan_not_found`** — 删除干系人时 plan 不存在返回 404
+13. **`test_update_stakeholder_invalid_level`** — 更新干系人时 level=8 返回 422（le=7 验证）
+14. **`test_update_stakeholder_level_zero`** — 更新干系人时 level=0 返回 422（ge=1 验证）
+15. **`test_update_stakeholder_invalid_interest`** — 更新干系人时 interest="invalid" 返回 422（enum 验证）
+16. **`test_create_stakeholder_with_optional_fields_missing`** — 仅提供必填字段（name/interest/influence）返回 201
+17. **`test_list_stakeholders_empty`** — 无干系人时返回空列表
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestStakeholdersBoundary 17/17 passed
+- ✅ pytest tests/ 568/568 passed（原有551 + 新增17）
+- ✅ docker-compose config 正常
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 121（版本 v2.70）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
