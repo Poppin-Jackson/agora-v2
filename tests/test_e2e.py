@@ -2789,6 +2789,80 @@ class TestConstraints:
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Constraint not found"
 
+    def test_create_constraint_empty_value(self):
+        """创建约束时 value 为空字符串返回 422（min_length=1 验证）"""
+        plan_payload = {"title": "测试-约束空值", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        payload = {"type": "budget", "value": "", "unit": "CNY"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/constraints", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_constraint_invalid_type(self):
+        """创建约束时 type 为无效枚举值返回 422"""
+        plan_payload = {"title": "测试-约束无效类型", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        payload = {"type": "invalid_type", "value": "100"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/constraints", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_constraint_plan_not_found(self):
+        """创建约束时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        payload = {"type": "budget", "value": "50000000", "unit": "CNY"}
+        resp = httpx.post(f"{API_BASE}/plans/{fake_plan_id}/constraints", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_constraints_plan_not_found(self):
+        """列出约束时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/constraints", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_constraint_plan_not_found(self):
+        """获取约束时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_constraint_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/constraints/{fake_constraint_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_update_constraint_plan_not_found(self):
+        """更新约束时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_constraint_id = str(uuid.uuid4())
+        resp = httpx.patch(
+            f"{API_BASE}/plans/{fake_plan_id}/constraints/{fake_constraint_id}",
+            json={"value": "999"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404
+
+    def test_delete_constraint_plan_not_found(self):
+        """删除约束时 plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        fake_constraint_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/plans/{fake_plan_id}/constraints/{fake_constraint_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_create_constraint_all_types(self):
+        """创建所有 7 种约束类型，验证枚举完整性"""
+        plan_payload = {"title": "测试-约束所有类型", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        types = ["budget", "timeline", "resource", "quality", "compliance", "scope", "other"]
+        for t in types:
+            payload = {"type": t, "value": f"100-{t}"}
+            resp = httpx.post(f"{API_BASE}/plans/{plan_id}/constraints", json=payload, timeout=TIMEOUT)
+            assert resp.status_code == 201, f"type={t} should succeed"
+            assert resp.json()["type"] == t
+
 
 class TestStakeholders:
     """测试 Stakeholders API (Plan 干系人)"""
@@ -6567,6 +6641,97 @@ class TestTaskTimeEntries:
         resp = httpx.post(
             f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}/time-entries",
             json={"user_name": "张工", "hours": 1.0},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_time_entry_hours_zero(self):
+        """hours=0 时返回 422（gt=0 验证）"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": 0, "description": "无效工时"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_time_entry_hours_negative(self):
+        """负数 hours 返回 422"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": -5.0, "description": "负数工时"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_time_entry_hours_exceeds_max(self):
+        """hours>24 时返回 422（le=24 验证）"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": 25.0, "description": "超长工时"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_time_entry_hours_at_max_boundary(self):
+        """hours=24（边界值）返回 201"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": 24.0, "description": "全天工时"}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 201, f"hours=24 应返回 201，实际: {resp.status_code}"
+        data = resp.json()
+        assert data["hours"] == 24.0
+
+    def test_create_time_entry_user_name_too_long(self):
+        """user_name 超过 100 字符返回 422"""
+        plan_id, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {
+            "user_name": "A" * 101,
+            "hours": 1.0,
+            "description": "超长用户名",
+        }
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_create_time_entry_plan_not_found(self):
+        """plan 不存在返回 404"""
+        fake_plan_id = str(uuid.uuid4())
+        _, version, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": 1.0}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{fake_plan_id}/versions/{version}/tasks/{task_id}/time-entries",
+            json=entry_payload,
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_time_entry_version_not_found(self):
+        """version 不存在返回 404"""
+        plan_id, _, task_id = self._create_task_with_plan()
+
+        entry_payload = {"user_name": "张工", "hours": 1.0}
+        resp = httpx.post(
+            f"{API_BASE}/plans/{plan_id}/versions/v99.99/tasks/{task_id}/time-entries",
+            json=entry_payload,
             timeout=TIMEOUT,
         )
         assert resp.status_code == 404

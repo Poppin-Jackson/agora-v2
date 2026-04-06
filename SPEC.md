@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.47 | 日期：2026-04-06（Step 97 - Constraints API 边界测试覆盖）
 > 版本：v2.46 | 日期：2026-04-06（Step 95 - Escalation API 边界测试覆盖）
 > 版本：v2.39 | 日期：2026-04-05（Step 88 - Plan Copy API 测试覆盖）
 > 版本：v2.38 | 日期：2026-04-05（Step 86 - Constraints API 边界测试覆盖）
@@ -2377,4 +2378,85 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 93（版本 v2.44）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 96 (2026-04-06)
+**版本**: v2.47 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 TaskTimeEntries API 添加边界测试覆盖
+
+背景：TaskTimeEntries API（工时记录）当前有 7 个基础测试（创建/列表/汇总/删除/404/空汇总/task不存在），缺少 `hours` 字段的边界值测试（gt=0, le=24）以及 user_name max_length=100、plan/version 不存在等场景。与 Step 84-95 的补全模式对齐。
+
+### Do
+新增 7 个 TaskTimeEntries 边界测试用例（TestTaskTimeEntries 类从 7 → 14 个）：
+
+1. **`test_create_time_entry_hours_zero`** — hours=0 返回 422（gt=0 验证）
+   - payload: {"user_name": "张工", "hours": 0, "description": "无效工时"}
+   - 验证返回 422
+
+2. **`test_create_time_entry_hours_negative`** — 负数 hours 返回 422
+   - payload: {"user_name": "张工", "hours": -5.0}
+   - 验证返回 422
+
+3. **`test_create_time_entry_hours_exceeds_max`** — hours>24 返回 422（le=24 验证）
+   - payload: {"user_name": "张工", "hours": 25.0}
+   - 验证返回 422
+
+4. **`test_create_time_entry_hours_at_max_boundary`** — hours=24（边界值）返回 201
+   - payload: {"user_name": "张工", "hours": 24.0, "description": "全天工时"}
+   - 验证返回 201，hours=24.0
+
+5. **`test_create_time_entry_user_name_too_long`** — user_name 超过 100 字符返回 422
+   - payload: {"user_name": "A"*101, "hours": 1.0}
+   - 验证返回 422
+
+6. **`test_create_time_entry_plan_not_found`** — plan 不存在返回 404
+   - 使用假 UUID 作为 plan_id
+   - 验证返回 404
+
+7. **`test_create_time_entry_version_not_found`** — version 不存在返回 404
+   - 使用 "v99.99" 作为不存在版本
+   - 验证返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestTaskTimeEntries 14/14 passed
+- ✅ pytest 301/301 passed（+7 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 96（版本 v2.47）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 97 (2026-04-06)
+**版本**: v2.47 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Constraints API 添加边界测试覆盖
+
+背景：Constraints API（计划约束管理）当前有 3 个基础测试（创建+列表/CRUD/404），缺少 value 字段空值验证、无效 type 枚举、plan 不存在、各类型枚举完整性等边界测试。与 Step 84-96 的补全模式对齐。
+
+### Do
+新增 8 个 Constraints 边界测试用例（TestConstraints 类从 3 → 11 个）：
+
+1. **`test_create_constraint_empty_value`** — value="" 返回 422（min_length=1 验证）
+2. **`test_create_constraint_invalid_type`** — type="invalid_type" 返回 422（枚举验证）
+3. **`test_create_constraint_plan_not_found`** — plan 不存在返回 404
+4. **`test_list_constraints_plan_not_found`** — 列出约束时 plan 不存在返回 404
+5. **`test_get_constraint_plan_not_found`** — 获取约束时 plan 不存在返回 404
+6. **`test_update_constraint_plan_not_found`** — 更新约束时 plan 不存在返回 404
+7. **`test_delete_constraint_plan_not_found`** — 删除约束时 plan 不存在返回 404
+8. **`test_create_constraint_all_types`** — 验证全部 7 种约束类型枚举（budget/timeline/resource/quality/compliance/scope/other）
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestConstraints 11/11 passed
+- ✅ pytest 309/309 passed（+8 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 97（版本 v2.47）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
