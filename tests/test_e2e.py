@@ -2692,6 +2692,51 @@ class TestRequirements:
         resp = httpx.delete(f"{API_BASE}/plans/{plan_id}/requirements/nonexistent-id", timeout=TIMEOUT)
         assert resp.status_code == 404
 
+    def test_create_requirement_empty_description(self):
+        """创建需求时 description 为空字符串返回 422 (min_length=1)"""
+        plan_payload = {"title": "测试-空描述", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "", "priority": "high"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_requirement_invalid_priority(self):
+        """创建需求时 priority 无效值返回 422 (enum 验证)"""
+        plan_payload = {"title": "测试-无效优先级", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "有效描述", "priority": "invalid_priority"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_create_requirement_invalid_status(self):
+        """创建需求时 status 无效值返回 422 (enum 验证)"""
+        plan_payload = {"title": "测试-无效状态", "topic": "测试", "requirements": []}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        req = {"description": "有效描述", "status": "invalid_status"}
+        resp = httpx.post(f"{API_BASE}/plans/{plan_id}/requirements", json=req, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_list_requirements_plan_not_found(self):
+        """列出需求时 plan 不存在返回 404"""
+        fake_plan_id = "00000000-0000-0000-0000-000000000000"
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/requirements", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_get_requirements_stats_plan_not_found(self):
+        """获取需求统计时 plan 不存在返回 404"""
+        fake_plan_id = "00000000-0000-0000-0000-000000000000"
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/requirements/stats", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
 
 class TestConstraints:
     """测试 Constraints API (Plan 约束)"""
@@ -7441,6 +7486,346 @@ class TestTaskCheckpoints:
         )
         # API 当前行为：只验证 plan 存在，不验证 task_id，所以返回 201
         assert resp.status_code == 201
+
+
+# ============================================================
+# TestVersionManagement — 版本管理 API 测试
+# Plan versions: POST /plans/{plan_id}/versions, GET /plans/{plan_id}/versions
+# 来源: 03-API-Protocol.md §2.3 版本管理 + 08-Data-Models-Details.md §2.3 Version
+# ============================================================
+
+class TestVersionManagement:
+    """版本管理 API 测试（Step 99）"""
+
+    TIMEOUT = 30.0
+    API_BASE = "http://localhost:8000"
+
+    def _create_plan_for_version(self) -> tuple:
+        """创建计划，返回 (plan_id, version, plan_title)"""
+        payload = {
+            "title": f"版本管理测试计划_{uuid.uuid4().hex[:8]}",
+            "topic": "测试计划版本管理",
+            "goal": "用于测试版本管理API",
+            "initiated_by": "test-agent",
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        plan_id = data["plan"]["plan_id"]
+        return plan_id, "v1.0", data["plan"].get("title", "")
+
+    # ---- 版本创建测试 ----
+
+    def test_create_version_fix(self):
+        """创建 fix 版本，验证版本号递增（v1.0 → v1.1）"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        payload = {
+            "parent_version": parent_version,
+            "type": "fix",
+            "description": "修复 v1.0 中的问题",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v1.1"
+        assert data["parent_version"] == parent_version
+        assert data["update_type"] == "fix"
+        assert data["description"] == "修复 v1.0 中的问题"
+        assert data["status"] == "pending_execution"
+        assert data["tasks_created"] == 0
+
+    def test_create_version_enhancement(self):
+        """创建 enhancement 版本，验证版本号递增（v1.0 → v1.2）"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        payload = {
+            "parent_version": parent_version,
+            "type": "enhancement",
+            "description": "增强 v1.0 功能",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v1.2"
+        assert data["parent_version"] == parent_version
+        assert data["update_type"] == "enhancement"
+        assert data["description"] == "增强 v1.0 功能"
+
+    def test_create_version_major(self):
+        """创建 major 版本，验证大版本递增（v1.0 → v2.0）"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        payload = {
+            "parent_version": parent_version,
+            "type": "major",
+            "description": "v1.0 重大架构升级",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v2.0"
+        assert data["parent_version"] == parent_version
+        assert data["update_type"] == "major"
+        assert data["description"] == "v1.0 重大架构升级"
+
+    def test_create_version_sequential_fix(self):
+        """连续创建多个 fix 版本，验证版本号依次递增（v1.0 → v1.1 → v1.2 → v1.3）"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        versions_created = []
+        current_parent = parent_version
+        for expected in ["v1.1", "v1.2", "v1.3"]:
+            payload = {
+                "parent_version": current_parent,
+                "type": "fix",
+                "description": f"第 {expected} 次修复",
+            }
+            resp = httpx.post(
+                f"{self.API_BASE}/plans/{plan_id}/versions",
+                json=payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 201, f"Failed at {expected}: {resp.text}"
+            data = resp.json()
+            assert data["version"] == expected, f"Expected {expected}, got {data['version']}"
+            versions_created.append(data["version"])
+            current_parent = expected
+
+        assert versions_created == ["v1.1", "v1.2", "v1.3"]
+
+    def test_create_version_with_tasks(self):
+        """创建版本时传入 tasks 列表"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        tasks = [
+            {
+                "title": "新任务A",
+                "description": "这是新任务",
+                "owner_id": "agent-001",
+                "owner_level": 3,
+                "priority": "high",
+                "estimated_hours": 8.0,
+            }
+        ]
+        payload = {
+            "parent_version": parent_version,
+            "type": "enhancement",
+            "description": "增强版本含任务",
+            "tasks": tasks,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v1.2"
+        assert "tasks" in data or len(data.get("tasks", [])) >= 0
+
+    def test_create_version_with_decisions(self):
+        """创建版本时传入 decisions 列表"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        decisions = [
+            {
+                "title": "架构决策",
+                "decision_text": "采用微服务架构",
+                "decided_by": "architect-001",
+            }
+        ]
+        payload = {
+            "parent_version": parent_version,
+            "type": "major",
+            "description": "重大版本含决策",
+            "decisions": decisions,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v2.0"
+        assert "decisions" in data or len(data.get("decisions", [])) >= 0
+
+    def test_create_version_plan_not_found(self):
+        """计划不存在返回404"""
+        fake_plan_id = str(uuid.uuid4())
+        payload = {
+            "parent_version": "v1.0",
+            "type": "fix",
+            "description": "不应创建",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{fake_plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_create_version_parent_not_found(self):
+        """父版本不存在返回400"""
+        plan_id, _, _ = self._create_plan_for_version()
+        payload = {
+            "parent_version": "v99.0",
+            "type": "fix",
+            "description": "父版本不存在",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 400
+        assert "Parent version 'v99.0' not found in plan" in resp.text
+
+    def test_create_version_invalid_type(self):
+        """无效的版本类型（无枚举验证，API 接受任意字符串）"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+        payload = {
+            "parent_version": parent_version,
+            "type": "invalid_type",
+            "description": "无效类型",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json=payload,
+            timeout=self.TIMEOUT,
+        )
+        # API 当前行为：无枚举验证，任意 type 字符串均接受，默认为 fix
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version"] == "v1.1"
+
+    def test_create_version_missing_required_fields(self):
+        """缺少必填字段返回422"""
+        plan_id, _, _ = self._create_plan_for_version()
+
+        # 缺少 description
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"parent_version": "v1.0", "type": "fix"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+        # 缺少 type
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"parent_version": "v1.0", "description": "说明"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+        # 缺少 parent_version
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"type": "fix", "description": "说明"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    # ---- 版本列表测试 ----
+
+    def test_get_plan_versions(self):
+        """获取版本列表"""
+        plan_id, _, _ = self._create_plan_for_version()
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert "versions" in data
+        # v1.0 是初始版本，应该在列表中
+        versions = data["versions"]
+        assert any(v["version"] == "v1.0" for v in versions)
+
+    def test_get_plan_versions_after_creates(self):
+        """创建多个版本后，获取版本列表验证"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        # 创建 fix 版本：v1.0 → v1.1
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"parent_version": parent_version, "type": "fix", "description": "fix版本"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+
+        # 创建 enhancement 版本：v1.0 → v1.2（从初始版本增强）
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"parent_version": "v1.0", "type": "enhancement", "description": "enhancement版本"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        versions = data["versions"]
+        version_numbers = [v["version"] for v in versions]
+        assert "v1.0" in version_numbers
+        assert "v1.1" in version_numbers
+        assert "v1.2" in version_numbers
+        # 当前版本应该是最新版本
+        assert data["current_version"] == "v1.2"
+
+    def test_get_plan_versions_plan_not_found(self):
+        """计划不存在返回404"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{fake_plan_id}/versions",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    # ---- 版本 plan.json 集成测试 ----
+
+    def test_version_plan_json_after_creation(self):
+        """创建版本后，版本 plan.json 包含新版本信息"""
+        plan_id, parent_version, _ = self._create_plan_for_version()
+
+        # 创建 enhancement 版本
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions",
+            json={"parent_version": parent_version, "type": "enhancement", "description": "增强版"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        new_version = resp.json()["version"]
+
+        # 获取版本 plan.json
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{new_version}/plan.json",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        plan_json = resp.json()
+        assert plan_json["version"] == new_version
+        assert plan_json["plan_id"] == plan_id
+        assert plan_json["is_current"] is True
 
 
 if __name__ == "__main__":

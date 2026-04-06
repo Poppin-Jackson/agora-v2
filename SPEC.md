@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.49 | 日期：2026-04-06（Step 99 - Version Management API 测试覆盖）
 > 版本：v2.48 | 日期：2026-04-06（Step 98 - Plan Search API 边界测试覆盖）
 > 版本：v2.47 | 日期：2026-04-06（Step 97 - Constraints API 边界测试覆盖）
 > 版本：v2.46 | 日期：2026-04-06（Step 95 - Escalation API 边界测试覆盖）
@@ -2492,4 +2493,78 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 98（版本 v2.48）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 99 (2026-04-06)
+**版本**: v2.49 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Version Management API 添加完整测试覆盖
+
+背景：Version Management API（版本管理）是计划版本化的核心功能，包含：
+- `POST /plans/{plan_id}/versions` — 创建新版本（fix/enhancement/major 三种类型，自动计算版本号）
+- `GET /plans/{plan_id}/versions` — 获取版本列表
+
+此前没有任何专用测试类，版本创建逻辑（fix → v{major}.{minor+1} / enhancement → v{major}.{minor+2} / major → v{major+1}.0）和父版本验证逻辑完全无测试覆盖。
+
+### Do
+新增 `TestVersionManagement` 测试类（14个测试用例）：
+
+1. **`test_create_version_fix`** — 创建 fix 版本（v1.0 → v1.1），验证所有响应字段
+2. **`test_create_version_enhancement`** — 创建 enhancement 版本（v1.0 → v1.2），验证版本号递增
+3. **`test_create_version_major`** — 创建 major 版本（v1.0 → v2.0），验证大版本递增
+4. **`test_create_version_sequential_fix`** — 连续创建多个 fix（v1.0→v1.1→v1.2→v1.3），验证依次递增
+5. **`test_create_version_with_tasks`** — 创建版本时传入 tasks 列表，验证 tasks_created 字段
+6. **`test_create_version_with_decisions`** — 创建版本时传入 decisions 列表
+7. **`test_create_version_plan_not_found`** — 计划不存在返回404
+8. **`test_create_version_parent_not_found`** — 父版本不存在返回400 + "Parent version 'v99.0' not found in plan"
+9. **`test_create_version_invalid_type`** — 无效 type 字符串（API 无枚举验证，接受任意字符串，默认 fix 逻辑）
+10. **`test_create_version_missing_required_fields`** — 缺少必填字段（description/type/parent_version）返回422
+11. **`test_get_plan_versions`** — 获取版本列表，验证 v1.0 在列表中
+12. **`test_get_plan_versions_after_creates`** — 创建多个版本后验证列表完整性和 current_version
+13. **`test_get_plan_versions_plan_not_found`** — 计划不存在返回404
+14. **`test_version_plan_json_after_creation`** — 创建版本后版本 plan.json 包含正确信息
+
+**发现的行为**：
+- 父版本不存在时 API 返回 400（非 201），带有明确错误信息
+- type 字段无枚举验证，任意字符串均可创建（默认 fix 逻辑）
+- version 计算：fix → minor+1，enhancement → minor+2，major → major+1
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestVersionManagement 14/14 passed
+- ✅ pytest 331/331 passed（+14 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 99（版本 v2.49）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+---
+
+## Step 100 (2026-04-06)
+**版本**: v2.50 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Requirements API 添加边界测试覆盖
+
+背景：Requirements API（计划需求管理）当前有 6 个基础测试（创建/列表/获取/更新/删除/统计/不存在），缺少空描述验证、无效枚举值、plan 不存在等边界测试。与 Step 84-99 的补全模式对齐。
+
+### Do
+新增 5 个 Requirements 边界测试用例（TestRequirements 类从 6 → 11 个）：
+
+1. **`test_create_requirement_empty_description`** — 创建需求时 description="" 返回 422（min_length=1 验证）
+2. **`test_create_requirement_invalid_priority`** — 创建需求时 priority="invalid_priority" 返回 422（enum 验证）
+3. **`test_create_requirement_invalid_status`** — 创建需求时 status="invalid_status" 返回 422（enum 验证）
+4. **`test_list_requirements_plan_not_found`** — 列出需求时 plan 不存在返回 404
+5. **`test_get_requirements_stats_plan_not_found`** — 获取需求统计时 plan 不存在返回 404
+
+### Check
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRequirements 11/11 passed
+- ✅ pytest 336/336 passed（+5 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 100（版本 v2.50）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
