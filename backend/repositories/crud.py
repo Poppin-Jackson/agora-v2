@@ -379,9 +379,20 @@ async def get_messages(room_id: str, limit: int = 0) -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
-async def search_messages(room_id: str, query: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """搜索讨论室消息内容"""
+async def search_messages(room_id: str, query: str, limit: int = 50) -> tuple:
+    """搜索讨论室消息内容，返回 (结果列表, 总数)"""
     async with get_connection() as conn:
+        # 先获取总数（不受 limit 限制）
+        count_row = await conn.fetchrow(
+            """
+            SELECT COUNT(*) as total FROM messages
+            WHERE room_id = $1
+              AND content ILIKE $2
+            """,
+            room_id, f"%{query}%"
+        )
+        total = count_row["total"]
+
         rows = await conn.fetch(
             """
             SELECT * FROM messages
@@ -392,7 +403,7 @@ async def search_messages(room_id: str, query: str, limit: int = 50) -> List[Dic
             """,
             room_id, f"%{query}%", limit
         )
-        return [dict(r) for r in rows]
+        return [dict(r) for r in rows], total
 
 
 # ========================

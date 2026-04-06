@@ -1,6 +1,6 @@
 # Agora-V2 规格说明书
 
-> 版本：v2.53 | 日期：2026-04-06（Step 103 - PlanCopy API 边界测试覆盖）
+> 版本：v2.54 | 日期：2026-04-06（Step 104 - Room Message Search API 完整测试覆盖）
 > 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
 > 版本：v2.50 | 日期：2026-04-06（Step 100 - Requirements API 边界测试覆盖）
 > 版本：v2.48 | 日期：2026-04-06（Step 98 - Plan Search API 边界测试覆盖）
@@ -2682,4 +2682,49 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 103（版本 v2.53）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 104 (2026-04-06)
+**版本**: v2.54 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Room Message Search API 添加完整测试覆盖
+
+背景：Room Message Search API（`GET /rooms/{room_id}/messages/search?q=...&limit=50`）允许在讨论室内搜索历史消息内容，是讨论历史检索的核心功能。没有任何测试覆盖。
+
+### Do
+新增 `TestRoomMessageSearch` 测试类（6个测试用例）：
+
+1. **`test_search_messages_basic`** — 基本搜索功能，返回包含关键词的消息
+   - 添加3条消息（2条含"项目"），搜索"项目"验证至少2条结果
+
+2. **`test_search_messages_empty_query`** — 空查询字符串返回422验证错误
+   - **Backend Fix**：`q` 参数添加 `Query(..., min_length=1)` 验证
+
+3. **`test_search_messages_no_results`** — 查询无匹配时返回空列表
+   - 搜索"不存在的关键词XYZ"，验证 total=0, results=[]
+
+4. **`test_search_messages_room_not_found`** — 讨论室不存在返回404
+
+5. **`test_search_messages_with_limit`** — limit参数限制返回结果数量
+   - 添加5条含"测试"的消息，limit=2，验证 total=5 但 results=2条
+   - **Backend Fix**：`search_messages` 函数修复 total 计算（分别执行 COUNT 查询获取实际总数，不受 LIMIT 限制）
+
+6. **`test_search_messages_case_insensitive`** — 搜索关键词大小写不敏感
+   - 添加 "Python"/"python"/"PYTHON" 三条消息，搜索"PYTHON"，验证3条全匹配
+
+**Backend Bug Fixes**：
+- `q: str` → `q: str = Query(..., min_length=1)`（空字符串验证）
+- `crud.search_messages` 返回值从 `List[Dict]` 改为 `tuple` (rows, total_count)，分别执行 COUNT 和 LIMIT 查询
+- `main.py` 内存回退逻辑同步修复：先计算全部匹配再取 limit
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ python3 -m py_compile 语法检查通过
+- ✅ pytest TestRoomMessageSearch 6/6 passed
+- ✅ pytest 365/365 passed（+6 new tests）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 104（版本 v2.54）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

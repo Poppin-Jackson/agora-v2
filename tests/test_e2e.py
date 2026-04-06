@@ -8185,5 +8185,420 @@ class TestVersionManagement:
         assert plan_json["is_current"] is True
 
 
+class TestTaskProgressAndMetrics:
+    """Step 105: Task Progress Update & Metrics API — 任务进度更新与统计指标"""
+
+    TIMEOUT = 10.0
+    API_BASE = "http://localhost:8000"
+
+    def _create_plan_and_task(self):
+        """创建 plan 并返回 plan_id, version, task_id"""
+        plan_payload = {
+            "title": f"TaskProgress测试计划-{uuid.uuid4().hex[:8]}",
+            "topic": "测试任务进度与指标",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        # 创建任务
+        task_payload = {
+            "title": "测试任务A",
+            "owner_id": "agent-1",
+            "owner_level": 5,
+            "owner_role": "Developer",
+            "priority": "high",
+            "estimated_hours": 8.0,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["task_id"]
+        return plan_id, version, task_id
+
+    # ========================
+    # Task Metrics API Tests
+    # ========================
+
+    def test_get_task_metrics_empty(self):
+        """任务指标：空计划（无任务）返回全0"""
+        plan_payload = {
+            "title": f"空指标测试-{uuid.uuid4().hex[:8]}",
+            "topic": "空计划",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/metrics",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        assert data["total"] == 0
+        assert data["pending"] == 0
+        assert data["in_progress"] == 0
+        assert data["completed"] == 0
+        assert data["blocked"] == 0
+        assert data["cancelled"] == 0
+        assert data["progress_percentage"] == 0.0
+
+    def test_get_task_metrics_single_task(self):
+        """任务指标：单个任务默认状态"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/metrics",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["pending"] == 1
+        assert data["in_progress"] == 0
+        assert data["completed"] == 0
+        assert data["blocked"] == 0
+        assert data["cancelled"] == 0
+        assert data["progress_percentage"] == 0.0
+
+    def test_get_task_metrics_various_statuses(self):
+        """任务指标：多个任务不同状态正确计数"""
+        plan_payload = {
+            "title": f"多状态指标-{uuid.uuid4().hex[:8]}",
+            "topic": "多状态任务测试",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        version = resp.json()["plan"]["current_version"]
+
+        # 创建多个任务
+        task_ids = []
+        for i, status in enumerate(["pending", "in_progress", "completed", "completed"]):
+            payload = {"title": f"任务-{i+1}", "priority": "medium"}
+            resp = httpx.post(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks",
+                json=payload,
+                timeout=self.TIMEOUT,
+            )
+            assert resp.status_code == 201
+            task_ids.append(resp.json()["task_id"])
+
+        # 将任务2设为 in_progress
+        httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_ids[1]}",
+            json={"status": "in_progress"},
+            timeout=self.TIMEOUT,
+        ).raise_for_status()
+
+        # 任务3和4设为 completed
+        for tid in task_ids[2:]:
+            httpx.patch(
+                f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{tid}",
+                json={"status": "completed"},
+                timeout=self.TIMEOUT,
+            ).raise_for_status()
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/metrics",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 4
+        assert data["pending"] == 1  # task 1
+        assert data["in_progress"] == 1  # task 2
+        assert data["completed"] == 2  # task 3, 4
+
+    def test_get_task_metrics_plan_not_found(self):
+        """任务指标：计划不存在返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{fake_id}/versions/v1.0/tasks/metrics",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_get_task_metrics_version_not_found(self):
+        """任务指标：版本不存在返回404"""
+        plan_id, version, _ = self._create_plan_and_task()
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/v99.99/tasks/metrics",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    # ========================
+    # Get Single Task API Tests
+    # ========================
+
+    def test_get_single_task(self):
+        """获取单个任务：正常返回任务详情"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["task_id"] == task_id
+        assert data["plan_id"] == plan_id
+        assert data["version"] == version
+        assert data["title"] == "测试任务A"
+        assert data["priority"] == "high"
+        assert data["owner_level"] == 5
+        assert data["status"] == "pending"
+
+    def test_get_single_task_not_found(self):
+        """获取单个任务：任务不存在返回404"""
+        plan_id, version, _ = self._create_plan_and_task()
+        fake_task_id = str(uuid.uuid4())
+
+        resp = httpx.get(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}",
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    # ========================
+    # Patch Task API Tests
+    # ========================
+
+    def test_patch_task_update_title(self):
+        """更新任务：修改标题"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        new_title = "更新后的任务标题"
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json={"title": new_title},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == new_title
+
+    def test_patch_task_update_multiple_fields(self):
+        """更新任务：同时修改多个字段"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}",
+            json={
+                "priority": "low",
+                "status": "in_progress",
+                "estimated_hours": 16.0,
+            },
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["priority"] == "low"
+        assert data["status"] == "in_progress"
+        assert data["estimated_hours"] == 16.0
+
+    def test_patch_task_not_found(self):
+        """更新任务：任务不存在返回404"""
+        plan_id, version, _ = self._create_plan_and_task()
+        fake_task_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}",
+            json={"priority": "low"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    # ========================
+    # Update Task Progress API Tests
+    # ========================
+
+    def test_update_task_progress_basic(self):
+        """更新任务进度：基本进度更新"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/progress",
+            json={"progress": 0.5},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["progress"] == 0.5
+
+    def test_update_task_progress_to_complete(self):
+        """更新任务进度：100%进度自动标记为completed"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/progress",
+            json={"progress": 1.0},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["progress"] == 1.0
+        assert data["status"] == "completed"
+
+    def test_update_task_progress_with_status(self):
+        """更新任务进度：同时设置进度和状态"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/progress",
+            json={"progress": 0.75, "status": "in_progress"},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["progress"] == 0.75
+        assert data["status"] == "in_progress"
+
+    def test_update_task_progress_invalid_value(self):
+        """更新任务进度：进度值超出范围返回422"""
+        plan_id, version, task_id = self._create_plan_and_task()
+
+        # progress > 1.0
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{task_id}/progress",
+            json={"progress": 1.5},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_update_task_progress_not_found(self):
+        """更新任务进度：任务不存在返回404"""
+        plan_id, version, _ = self._create_plan_and_task()
+        fake_task_id = str(uuid.uuid4())
+
+        resp = httpx.patch(
+            f"{self.API_BASE}/plans/{plan_id}/versions/{version}/tasks/{fake_task_id}/progress",
+            json={"progress": 0.5},
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+
+class TestRoomMessageSearch:
+    """Room Message Search API — 讨论室消息搜索功能"""
+
+    @staticmethod
+    def _add_speech(room_id: str, agent_id: str, content: str) -> dict:
+        """添加一条发言到讨论室"""
+        payload = {"agent_id": agent_id, "content": content}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_search_messages_basic(self, room_info):
+        """搜索消息：基本搜索功能，返回包含关键词的消息"""
+        room_id = room_info["room_id"]
+
+        # 添加多条消息
+        self._add_speech(room_id, "agent-1", "这是一个关于项目规划的讨论")
+        self._add_speech(room_id, "agent-2", "我们需要讨论技术选型问题")
+        self._add_speech(room_id, "agent-1", "项目规划应该分为三个阶段")
+
+        # 搜索 "项目"
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "项目", "limit": 50},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["room_id"] == room_id
+        assert data["query"] == "项目"
+        assert data["total"] >= 2  # 至少2条消息包含"项目"
+        assert all("项目" in m["content"] for m in data["results"])
+
+    def test_search_messages_empty_query(self, room_info):
+        """搜索消息：空查询字符串返回422验证错误"""
+        room_id = room_info["room_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": ""},
+            timeout=TIMEOUT,
+        )
+        # FastAPI 对空字符串的 Query 参数默认 min_length=1 验证失败
+        assert resp.status_code == 422
+
+    def test_search_messages_no_results(self, room_info):
+        """搜索消息：查询无匹配时返回空列表"""
+        room_id = room_info["room_id"]
+
+        self._add_speech(room_id, "agent-1", "这是一个关于项目规划的讨论")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "不存在的关键词XYZ"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["results"] == []
+
+    def test_search_messages_room_not_found(self):
+        """搜索消息：讨论室不存在返回404"""
+        fake_room_id = str(uuid.uuid4())
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{fake_room_id}/messages/search",
+            params={"q": "测试"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_search_messages_with_limit(self, room_info):
+        """搜索消息：limit参数限制返回结果数量"""
+        room_id = room_info["room_id"]
+
+        # 添加5条消息，都包含"测试"
+        for i in range(5):
+            self._add_speech(room_id, f"agent-{i}", f"这是第{i}条测试消息")
+
+        # limit=2
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "测试", "limit": 2},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 5  # 实际有5条，但只返回2条
+        assert len(data["results"]) == 2
+
+    def test_search_messages_case_insensitive(self, room_info):
+        """搜索消息：搜索关键词大小写不敏感"""
+        room_id = room_info["room_id"]
+
+        self._add_speech(room_id, "agent-1", "Python Programming")
+        self._add_speech(room_id, "agent-2", "python is great")
+        self._add_speech(room_id, "agent-3", "PYTHON")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "PYTHON"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 3  # 大小写不敏感，三条都匹配
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

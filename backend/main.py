@@ -4266,7 +4266,7 @@ async def get_room_history(room_id: str):
 @app.get("/rooms/{room_id}/messages/search")
 async def search_room_messages(
     room_id: str,
-    q: str,
+    q: str = Query(..., min_length=1),
     limit: int = 50,
 ):
     """
@@ -4281,26 +4281,28 @@ async def search_room_messages(
     # PostgreSQL 优先读取
     if _db_active:
         try:
-            rows = await crud.search_messages(room_id, q, limit)
+            rows, total = await crud.search_messages(room_id, q, limit)
             messages = [_row_to_message(r) for r in rows]
             return {
                 "room_id": room_id,
                 "query": q,
-                "total": len(messages),
+                "total": total,
                 "results": messages,
             }
         except Exception as e:
             logger.warning(f"[DB] search_room_messages {room_id}: {e}")
 
     # 内存回退：过滤当前内存中的消息
-    messages = [
+    all_matching = [
         m for m in _messages.get(room_id, [])
         if q.lower() in m.get("content", "").lower()
-    ][:limit]
+    ]
+    total = len(all_matching)
+    messages = all_matching[:limit]
     return {
         "room_id": room_id,
         "query": q,
-        "total": len(messages),
+        "total": total,
         "results": messages,
     }
 
@@ -8674,6 +8676,11 @@ async def update_task_progress(plan_id: str, version: str, task_id: str, data: T
             row = await crud.update_task_progress(task_id, data.progress, data.status)
             if row:
                 task = dict(row)
+                # 如果是完成操作但DB未自动更新status，在此强制设置
+                if is_completing and task.get("status") != "completed":
+                    task["status"] = "completed"
+                    task["progress"] = 1.0
+                    task["completed_at"] = datetime.now().isoformat()
                 # 同步到内存
                 key = (plan_id, version)
                 _tasks.setdefault(key, {})
@@ -8697,6 +8704,11 @@ async def update_task_progress(plan_id: str, version: str, task_id: str, data: T
                         )
                 
                 return task
+            else:
+                # DB返回None说明任务不存在于DB
+                raise HTTPException(status_code=404, detail="Task not found")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning(f"[DB] update_task_progress failed: {e}")
 
