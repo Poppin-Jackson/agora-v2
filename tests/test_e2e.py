@@ -481,6 +481,108 @@ class TestPhaseTimeline:
         sharing_entry = next(e for e in timeline if e["phase"] == "sharing")
         assert sharing_entry["exited_at"] is None
 
+    def test_phase_timeline_room_not_found(self, ensure_api):
+        """不存在的房间返回404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/phase-timeline", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_phase_timeline_chronological_order(self, room_info):
+        """时间线按进入时间正序排列（最早的在前面）"""
+        room_id = room_info["room_id"]
+
+        # SELECTING → THINKING → SHARING → DEBATE
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "sharing"}, timeout=TIMEOUT)
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "debate"}, timeout=TIMEOUT)
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline = resp.json()["timeline"]
+
+        # 验证时间线按 entered_at 正序
+        entered_times = [e["entered_at"] for e in timeline]
+        assert entered_times == sorted(entered_times), "Timeline entries should be in chronological order"
+
+        # 验证各阶段都存在
+        phases = [e["phase"] for e in timeline]
+        assert phases == ["selecting", "thinking", "sharing", "debate"]
+
+    def test_phase_timeline_duration_calculation(self, room_info):
+        """duration_secs = exited_at - entered_at（秒）"""
+        room_id = room_info["room_id"]
+
+        # SELECTING → THINKING（精确验证时长计算）
+        resp1 = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline_before = resp1.json()["timeline"]
+        selecting_entry = next(e for e in timeline_before if e["phase"] == "selecting")
+        entered_at = selecting_entry["entered_at"]
+        assert selecting_entry["exited_at"] is None  # 还未退出
+
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+
+        resp2 = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline_after = resp2.json()["timeline"]
+        selecting_entry_after = next(e for e in timeline_after if e["phase"] == "selecting")
+
+        # exited_at 不为空
+        assert selecting_entry_after["exited_at"] is not None
+        # duration_secs 应该 >= 0
+        assert selecting_entry_after["duration_secs"] >= 0
+        # exited_via 应该是下一个阶段
+        assert selecting_entry_after["exited_via"] == "thinking"
+
+    def test_phase_timeline_all_fields_present(self, room_info):
+        """验证时间线条目所有字段都存在且类型正确"""
+        room_id = room_info["room_id"]
+
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "room_id" in data
+        assert "timeline" in data
+        assert isinstance(data["timeline"], list)
+
+        entry = data["timeline"][0]
+        assert "entry_id" in entry
+        assert "room_id" in entry
+        assert "phase" in entry
+        assert "entered_at" in entry
+        assert "exited_at" in entry
+        assert "exited_via" in entry
+        assert "duration_secs" in entry
+
+        # 验证字段类型
+        assert isinstance(entry["entry_id"], str)
+        assert isinstance(entry["phase"], str)
+        assert isinstance(entry["entered_at"], str)  # ISO format string
+        # exited_at 可以是 None（当前进行中的阶段）或 string
+        assert entry["exited_at"] is None or isinstance(entry["exited_at"], str)
+
+    def test_phase_timeline_exit_updates_existing_entry(self, room_info):
+        """阶段退出时，只更新已存在的条目，不创建重复"""
+        room_id = room_info["room_id"]
+
+        # 初始：只有1条 SELECTING
+        resp1 = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline1 = resp1.json()["timeline"]
+        assert len(timeline1) == 1
+        assert timeline1[0]["phase"] == "selecting"
+        assert timeline1[0]["exited_at"] is None
+
+        # 转换到 THINKING
+        httpx.post(f"{API_BASE}/rooms/{room_id}/phase", params={"to_phase": "thinking"}, timeout=TIMEOUT)
+
+        resp2 = httpx.get(f"{API_BASE}/rooms/{room_id}/phase-timeline", timeout=TIMEOUT)
+        timeline2 = resp2.json()["timeline"]
+        # 应该是2条：SELECTING（已退出）+ THINKING（进行中）
+        assert len(timeline2) == 2
+        # SELECTING 已退出
+        assert timeline2[0]["phase"] == "selecting"
+        assert timeline2[0]["exited_at"] is not None
+        # THINKING 进行中
+        assert timeline2[1]["phase"] == "thinking"
+        assert timeline2[1]["exited_at"] is None
+
 
 class TestSpeech:
     """发言功能"""

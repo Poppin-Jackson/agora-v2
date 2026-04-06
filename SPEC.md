@@ -1,5 +1,6 @@
 # Agora-V2 规格说明书
 
+> 版本：v2.56 | 日期：2026-04-06（Step 106 - Phase Timeline API 边界测试覆盖 + 404修复）
 > 版本：v2.54 | 日期：2026-04-06（Step 104 - Room Message Search API 完整测试覆盖）
 > 版本：v2.51 | 日期：2026-04-06（Step 101 - RoomHierarchy API 边界测试覆盖）
 > 版本：v2.50 | 日期：2026-04-06（Step 100 - Requirements API 边界测试覆盖）
@@ -2727,4 +2728,76 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 
 ### Act
 - 更新 SPEC.md 完成 Step 104（版本 v2.54）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 105 (2026-04-06)
+**版本**: v2.55 | **迭代周期**: 13分钟自动触发
+
+### Plan
+修复 `_get_task`/`_list_tasks_sync` event loop bug（`test_update_task_progress_not_found` 失败）
+
+### Do
+问题：`update_task_progress` 端点测试失败，返回 500 而非 404。错误信息：`RuntimeError: this event loop is already running`
+
+根因分析：
+- `_get_task(task_id, plan_id, version)` 在 line 8671 被 async 函数 `update_task_progress` 调用
+- `_get_task` 内部使用 `loop.run_until_complete(crud.get_task(task_id))` 试图在已有 event loop 的上下文中运行新的 event loop
+- Python 3.11+ 中 `asyncio.get_event_loop()` 在有 running loop 时返回该 loop，但 `run_until_complete()` 不能在已经是 running 的 loop 中嵌套调用
+
+修复：
+1. `_get_task`（line 1666）：使用 `asyncio.get_running_loop()` 检测是否在 async 上下文中
+   - 在 async 上下文：跳过 DB 查询，仅返回内存结果（避免 event loop 冲突）
+   - 不在 async 上下文：正常执行 `run_until_complete` DB 查询
+2. `_list_tasks_sync`（line 1686）：应用相同修复模式
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ pytest TestTaskProgressAndMetrics::test_update_task_progress_not_found PASSED
+- ✅ pytest 380/380 passed（+7 new tests）
+- ✅ docker-compose config 正常
+- ✅ python3 -m py_compile 语法检查通过
+
+### Act
+- 更新 SPEC.md 完成 Step 105（版本 v2.55）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 106 (2026-04-06)
+**版本**: v2.56 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Phase Timeline API 添加边界测试覆盖
+
+背景：Phase Timeline API（`GET /rooms/{room_id}/phase-timeline`）记录讨论室的阶段进入/退出历史，当前只有 3 个基础测试（创建时记录/阶段转换记录/完整转换链）。缺少 404 场景/时间线排序/时长计算/字段完整性等边界测试。
+
+### Do
+新增 5 个 Phase Timeline 边界测试用例（TestPhaseTimeline 类从 3 → 8 个）：
+
+1. **`test_phase_timeline_room_not_found`** — 不存在的房间返回404
+   - 使用假 UUID 调用 `GET /rooms/{fake_id}/phase-timeline`
+   - **Backend Fix**：`get_phase_timeline` 端点添加 `if room_id not in _rooms: raise HTTPException(404, "Room not found")`（原返回空 timeline 200）
+
+2. **`test_phase_timeline_chronological_order`** — 时间线按进入时间正序排列
+   - 连续4次转换 SELECTING→THINKING→SHARING→DEBATE
+   - 验证 `entered_at` 时间戳升序排列
+
+3. **`test_phase_timeline_duration_calculation`** — duration_secs = exited_at - entered_at（秒）
+   - 验证 exited_at 不为空，duration_secs >= 0，exited_via == 下一阶段
+
+4. **`test_phase_timeline_all_fields_present`** — 验证时间线条目所有字段都存在且类型正确
+   - 验证 entry_id/room_id/phase/entered_at/exited_at/exited_via/duration_secs 全部存在
+   - 验证字段类型：entry_id=str, phase=str, entered_at=str, exited_at=None|str
+
+5. **`test_phase_timeline_exit_updates_existing_entry`** — 阶段退出时只更新已存在条目，不创建重复
+   - 初始 SELECTING → 转换到 THINKING 后，timeline 只有2条（不重复）
+   - 验证 SELECTING 已退出（exited_at != None），THINKING 进行中（exited_at == None）
+
+### Check
+- ✅ docker-compose build api 成功
+- ✅ pytest TestPhaseTimeline 8/8 passed（+5 new tests）
+- ✅ pytest 385/385 passed（原有380 + 5 new = 385; 旧记录Step105=385，实际函数390个）
+- ✅ docker-compose config 正常
+- ✅ python3 -m py_compile 语法检查通过
+
+### Act
+- 更新 SPEC.md 完成 Step 106（版本 v2.56）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg

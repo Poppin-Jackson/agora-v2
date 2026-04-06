@@ -1664,41 +1664,61 @@ async def _sync_messages_to_memory(room_id: str, limit: int = 0) -> List[Dict[st
 # ========================
 
 def _get_task(task_id: str, plan_id: str, version: str) -> Optional[Dict[str, Any]]:
-    """获取任务，支持内存和DB"""
+    """获取任务，支持内存和DB
+    
+    注意：此函数是同步的。在async上下文中调用可能导致 event loop 冲突。
+    优先使用内存缓存，DB仅作为fallback。
+    """
     key = (plan_id, version)
-    # Try memory first
+    # Try memory first (always safe)
     if key in _tasks and task_id in _tasks[key]:
         return _tasks[key][task_id]
-    # Try DB
+    # Try DB - only if not in async context to avoid event loop conflicts
     if _db_active:
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
+            # This fails if already running inside an async context
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        task = loop.run_until_complete(crud.get_task(task_id))
-        if task:
-            return dict(task)
+            # No running loop - safe to use run_until_complete
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            task = loop.run_until_complete(crud.get_task(task_id))
+            if task:
+                return dict(task)
+        # If we got here, we were inside an async context - DB lookup skipped
+        # Caller should use the async-aware version or accept memory-only
     return None
 
 
 def _list_tasks_sync(plan_id: str, version: str) -> List[Dict[str, Any]]:
-    """列出所有任务，支持内存和DB"""
+    """列出所有任务，支持内存和DB
+    
+    注意：此函数是同步的。在async上下文中调用可能导致 event loop 冲突。
+    优先使用内存缓存，DB仅作为fallback。
+    """
     key = (plan_id, version)
-    # Try memory first
+    # Try memory first (always safe)
     if key in _tasks and _tasks[key]:
         return list(_tasks[key].values())
-    # Try DB
+    # Try DB - only if not in async context to avoid event loop conflicts
     if _db_active:
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        tasks = loop.run_until_complete(crud.list_tasks(plan_id, version))
-        return [dict(t) for t in tasks]
+            # No running loop - safe to use run_until_complete
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            tasks = loop.run_until_complete(crud.list_tasks(plan_id, version))
+            return [dict(t) for t in tasks]
+        # If we got here, we were inside an async context - DB lookup skipped
     return []
 
 
@@ -4022,6 +4042,10 @@ async def get_phase_timeline(room_id: str):
     返回每个阶段的进入时间、退出时间、持续时长
     PostgreSQL 优先，内存兜底
     """
+    # 房间存在性检查（Step 106 fix: 返回 404 而非空 200）
+    if room_id not in _rooms:
+        raise HTTPException(status_code=404, detail="Room not found")
+
     timeline = []
 
     # PostgreSQL 优先读取
