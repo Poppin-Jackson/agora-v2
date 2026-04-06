@@ -462,6 +462,146 @@ class TestParticipant:
         assert len(room["participants"]) >= 1
 
 
+class TestParticipantBoundary:
+    """Participant API 边界测试"""
+
+    def _create_plan_and_room(self):
+        """创建计划和房间，返回 (plan_id, room_id)
+        POST /plans 返回 {"plan": {...}, "room": {"room_id": "..."}}"""
+        plan_payload = {"title": f"ParticipantBoundary测试-{uuid.uuid4().hex[:8]}", "topic": "测试主题"}
+        plan_resp = httpx.post(f"{API_BASE}/plans", json=plan_payload, timeout=TIMEOUT)
+        assert plan_resp.status_code == 201, f"创建Plan失败: {plan_resp.text}"
+        data = plan_resp.json()
+        plan_id = data["plan"]["plan_id"]
+        room_id = data["room"]["room_id"]
+        return plan_id, room_id
+
+    def test_add_participant_invalid_room_uuid_format(self):
+        """添加参与者: room_id 为无效 UUID 格式"""
+        resp = httpx.post(
+            f"{API_BASE}/rooms/not-a-valid-uuid/participants",
+            json={"agent_id": "agent-1", "name": "测试", "level": 5},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_add_participant_room_not_found(self):
+        """添加参与者: room 不存在"""
+        fake_room_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{fake_room_id}/participants",
+            json={"agent_id": "agent-1", "name": "测试", "level": 5},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 404
+
+    def test_add_participant_level_zero(self):
+        """添加参与者: level=0 超出 L1 下界"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-1", "name": "测试", "level": 0},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422  # ge=1 validation
+
+    def test_add_participant_level_out_of_bounds(self):
+        """添加参与者: level=8 超出 L7 上界"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-1", "name": "测试", "level": 8},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422  # le=7 validation
+
+    def test_add_participant_level_at_boundaries(self):
+        """添加参与者: level=1 和 level=7 边界值"""
+        _, room_id = self._create_plan_and_room()
+        for lvl in [1, 7]:
+            resp = httpx.post(
+                f"{API_BASE}/rooms/{room_id}/participants",
+                json={"agent_id": f"agent-{lvl}", "name": f"测试L{lvl}", "level": lvl},
+                timeout=TIMEOUT,
+            )
+            assert resp.status_code == 200, f"level={lvl} failed: {resp.text}"
+            data = resp.json()
+            assert data["level"] == lvl
+
+    def test_add_participant_level_negative(self):
+        """添加参与者: level=-1 负数"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-1", "name": "测试", "level": -1},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422
+
+    def test_add_participant_missing_agent_id(self):
+        """添加参与者: 缺少必填字段 agent_id"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"name": "测试", "level": 5},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422  # Pydantic required field
+
+    def test_add_participant_missing_name(self):
+        """添加参与者: 缺少必填字段 name"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-1", "level": 5},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422  # Pydantic required field
+
+    def test_add_participant_only_required_fields(self):
+        """添加参与者: 仅提供必填字段 (agent_id + name)"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-required", "name": "必填字段测试"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["agent_id"] == "agent-required"
+        assert data["name"] == "必填字段测试"
+        assert data["level"] == 5  # default value
+        assert data["role"] == "Member"  # default value
+
+    def test_add_participant_default_level_and_role(self):
+        """添加参与者: 不提供 level 和 role 时使用默认值"""
+        _, room_id = self._create_plan_and_room()
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/participants",
+            json={"agent_id": "agent-default", "name": "默认测试"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["level"] == 5
+        assert data["role"] == "Member"
+
+    def test_list_plan_participants_invalid_plan_uuid(self):
+        """列出计划参与者: plan_id 为无效 UUID 格式"""
+        resp = httpx.get(f"{API_BASE}/plans/not-a-uuid/participants", timeout=TIMEOUT)
+        # backend不做UUID格式校验，接受任意字符串，返回空列表
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_plan_participants_plan_not_found(self):
+        """列出计划参与者: plan 不存在"""
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/plans/{fake_plan_id}/participants", timeout=TIMEOUT)
+        # backend不做plan存在性校验，返回空列表
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
 class TestPhaseTransitions:
     """Phase状态机转换"""
 
@@ -8153,6 +8293,210 @@ class TestTaskTemplates:
         for tmpl in templates:
             if tmpl.get("name") == "标签测试任务模板":
                 assert "tag-filter-test" in tmpl.get("tags", [])
+
+
+class TestTaskTemplatesBoundary:
+    """Step 137: TaskTemplates API Boundary Tests"""
+
+    def test_create_task_template_missing_name(self):
+        """创建任务模板: 缺少必填字段 name → 422"""
+        template_data = {
+            "default_title": "测试任务标题",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_template_missing_default_title(self):
+        """创建任务模板: 缺少必填字段 default_title → 422"""
+        template_data = {
+            "name": "测试模板名称",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_template_both_required_fields_present(self):
+        """创建任务模板: 仅提供必填字段（name + default_title）→ 201"""
+        template_data = {
+            "name": "仅必填字段模板",
+            "default_title": "默认任务标题",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        result = resp.json()
+        assert "template_id" in result
+        tmpl = result["template"]
+        assert tmpl["name"] == "仅必填字段模板"
+        assert tmpl["default_title"] == "默认任务标题"
+        assert tmpl["priority"] == "medium"  # default value
+
+    def test_create_task_template_invalid_priority_value(self):
+        """创建任务模板: priority 使用无效值 → 201 (后端无枚举验证，接受任意字符串)"""
+        template_data = {
+            "name": "无效优先级模板",
+            "default_title": "测试任务",
+            "priority": "super-urgent-invalid",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        # Backend has no pattern validation on TaskTemplateCreate.priority
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["template"]["priority"] == "super-urgent-invalid"
+
+    def test_create_task_template_invalid_difficulty_value(self):
+        """创建任务模板: difficulty 使用无效值 → 201 (后端无枚举验证，接受任意字符串)"""
+        template_data = {
+            "name": "无效难度模板",
+            "default_title": "测试任务",
+            "difficulty": "impossible-out-of-range",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["template"]["difficulty"] == "impossible-out-of-range"
+
+    def test_create_task_template_negative_estimated_hours(self):
+        """创建任务模板: estimated_hours 为负数 → 201 (后端无非负验证)"""
+        template_data = {
+            "name": "负工时模板",
+            "default_title": "测试任务",
+            "estimated_hours": -10.0,
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["template"]["estimated_hours"] == -10.0
+
+    def test_create_task_template_owner_level_zero(self):
+        """创建任务模板: owner_level=0 超出 L1 下界 → 201 (后端无层级范围验证)"""
+        template_data = {
+            "name": "L0层级模板",
+            "default_title": "测试任务",
+            "owner_level": 0,
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["template"]["owner_level"] == 0
+
+    def test_create_task_template_owner_level_eight(self):
+        """创建任务模板: owner_level=8 超出 L7 上界 → 201 (后端无层级范围验证)"""
+        template_data = {
+            "name": "L8层级模板",
+            "default_title": "测试任务",
+            "owner_level": 8,
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["template"]["owner_level"] == 8
+
+    def test_get_task_template_not_found(self):
+        """获取任务模板: template 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/task-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_update_task_template_not_found(self):
+        """更新任务模板: template 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.patch(f"{API_BASE}/task-templates/{fake_id}", json={"name": "新名称"}, timeout=TIMEOUT)
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_delete_task_template_not_found(self):
+        """删除任务模板: template 不存在 → 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.delete(f"{API_BASE}/task-templates/{fake_id}", timeout=TIMEOUT)
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_from_template_missing_plan_id(self):
+        """从模板创建任务: 缺少必填参数 plan_id → 422"""
+        # 先创建一个模板
+        template_data = {
+            "name": "缺失plan_id测试模板",
+            "default_title": "测试任务",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 不传 plan_id
+        resp = httpx.post(
+            f"{API_BASE}/task-templates/{template_id}/create-task",
+            params={"version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_from_template_missing_version(self):
+        """从模板创建任务: 缺少必填参数 version → 422"""
+        template_data = {
+            "name": "缺失version测试模板",
+            "default_title": "测试任务",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        # 创建一个计划
+        plan_data = {"title": "测试计划", "topic": "测试"}
+        resp2 = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp2.status_code == 201
+        plan_id = resp2.json()["plan"]["plan_id"]
+
+        # 不传 version
+        resp = httpx.post(
+            f"{API_BASE}/task-templates/{template_id}/create-task",
+            params={"plan_id": plan_id},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_from_template_template_not_found(self):
+        """从模板创建任务: template 不存在 → 404"""
+        fake_template_id = str(uuid.uuid4())
+        plan_data = {"title": "测试计划", "topic": "测试"}
+        resp = httpx.post(f"{API_BASE}/plans", json=plan_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+
+        resp = httpx.post(
+            f"{API_BASE}/task-templates/{fake_template_id}/create-task",
+            params={"plan_id": plan_id, "version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    def test_create_task_from_template_plan_not_found(self):
+        """从模板创建任务: plan 不存在 → 500"""
+        template_data = {
+            "name": "不存在计划模板",
+            "default_title": "测试任务",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        fake_plan_id = str(uuid.uuid4())
+        resp = httpx.post(
+            f"{API_BASE}/task-templates/{template_id}/create-task",
+            params={"plan_id": fake_plan_id, "version": "v1.0"},
+            timeout=TIMEOUT
+        )
+        # Backend doesn't validate plan existence, crud.create_task fails → 500
+        assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
+
+    def test_update_task_template_empty_name(self):
+        """更新任务模板: name 设为空字符串 → 200 (TaskTemplateUpdate.name 为 Optional, 允许空)"""
+        template_data = {
+            "name": "待更新模板",
+            "default_title": "原标题",
+        }
+        resp = httpx.post(f"{API_BASE}/task-templates", json=template_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        template_id = resp.json()["template_id"]
+
+        resp = httpx.patch(
+            f"{API_BASE}/task-templates/{template_id}",
+            json={"name": ""},
+            timeout=TIMEOUT
+        )
+        # TaskTemplateUpdate.name is Optional[str]=None, empty string is accepted
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
 
 
 class TestPlanTags:

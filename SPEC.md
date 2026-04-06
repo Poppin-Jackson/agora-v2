@@ -3988,3 +3988,90 @@ Step 40: Constraints + Stakeholders Tab（约束/干系人 UI） ✅ (2026-04-04
 ### Act
 - 更新 SPEC.md 完成 Step 135（版本 v2.84）
 - 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 136 (2026-04-06)
+**版本**: v2.85 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 Participant API 添加边界测试覆盖
+
+背景：Participant API（参与者管理）包含 `POST /rooms/{room_id}/participants`（添加参与者）、`GET /rooms/{room_id}/participants`（列出房间参与者）、`GET /plans/{plan_id}/participants`（列出计划参与者）等端点。`TestParticipant` 仅有 2 个基础测试（添加参与者/获取含参与者的房间），缺少 level 范围验证/必填字段/无效 UUID/plan 不存在等边界测试。与 Step 84-135 的补全模式对齐。
+
+### Do
+新增 `TestParticipantBoundary` 测试类（12个边界测试用例）：
+
+1. **`test_add_participant_invalid_room_uuid_format`** — 添加参与者: room_id 为无效 UUID 格式 → 404
+2. **`test_add_participant_room_not_found`** — 添加参与者: room 不存在 → 404
+3. **`test_add_participant_level_zero`** — 添加参与者: level=0 超出 L1 下界 → 422（ge=1 验证）
+4. **`test_add_participant_level_out_of_bounds`** — 添加参与者: level=8 超出 L7 上界 → 422（le=7 验证）
+5. **`test_add_participant_level_at_boundaries`** — 添加参与者: level=1 和 level=7 边界值 → 200，验证赋值正确
+6. **`test_add_participant_level_negative`** — 添加参与者: level=-1 负数 → 422
+7. **`test_add_participant_missing_agent_id`** — 添加参与者: 缺少必填字段 agent_id → 422（Pydantic 必填字段验证）
+8. **`test_add_participant_missing_name`** — 添加参与者: 缺少必填字段 name → 422（Pydantic 必填字段验证）
+9. **`test_add_participant_only_required_fields`** — 添加参与者: 仅提供必填字段（agent_id + name）→ 200，level=5/role="Member" 默认值正确
+10. **`test_add_participant_default_level_and_role`** — 添加参与者: 不提供 level 和 role 时使用默认值 → 200，level=5，role="Member"
+11. **`test_list_plan_participants_invalid_plan_uuid`** — 列出计划参与者: plan_id 为无效 UUID 格式 → 200（backend 不做 UUID 格式校验，返回空列表）
+12. **`test_list_plan_participants_plan_not_found`** — 列出计划参与者: plan 不存在 → 200（backend 不做 plan 存在性校验，返回空列表）
+
+**发现的行为**：
+- `level` 字段有 ge=1 和 le=7 验证，0/-1/8 等超界值返回 422
+- `agent_id` 和 `name` 为 Pydantic 必填字段，缺失返回 422
+- `level` 默认值为 5，`role` 默认值为 "Member"
+- `list_plan_participants` 端点不做 plan 存在性校验，不存在的 plan_id 返回空列表 200
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestParticipantBoundary 12/12 passed（+12 new tests）
+- ✅ pytest tests/ 770/770 passed（原有758 + 新增12 = 770）
+- ✅ docker-compose config 正常
+- ✅ docker-compose build api 成功
+- ✅ API health: `{"status":"healthy"}`
+
+### Act
+- 更新 SPEC.md 完成 Step 136（版本 v2.85）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
+
+## Step 137 (2026-04-06)
+**版本**: v2.86 | **迭代周期**: 13分钟自动触发
+
+### Plan
+为 TaskTemplates API 添加边界测试覆盖
+
+背景：TaskTemplates API（任务模板管理）包含 6 个端点（create/list/get/update/delete/create-task-from-template）。`TestTaskTemplates` 仅有 6 个基础测试（创建/列表/更新/删除/不存在/create-task-from-template），缺少必填字段验证/无效枚举值/backend 无范围校验等边界测试。与 Step 84-136 的补全模式对齐。
+
+### Do
+新增 `TestTaskTemplatesBoundary` 测试类（16个边界测试用例）：
+
+1. **`test_create_task_template_missing_name`** — 创建任务模板: 缺少必填字段 name → 422
+2. **`test_create_task_template_missing_default_title`** — 创建任务模板: 缺少必填字段 default_title → 422
+3. **`test_create_task_template_both_required_fields_present`** — 创建任务模板: 仅提供必填字段（name + default_title）→ 201，priority 默认值为 "medium"
+4. **`test_create_task_template_invalid_priority_value`** — 创建任务模板: priority 使用无效值 → 201（后端无枚举验证，接受任意字符串）
+5. **`test_create_task_template_invalid_difficulty_value`** — 创建任务模板: difficulty 使用无效值 → 201（后端无枚举验证，接受任意字符串）
+6. **`test_create_task_template_negative_estimated_hours`** — 创建任务模板: estimated_hours 为负数 → 201（后端无非负验证）
+7. **`test_create_task_template_owner_level_zero`** — 创建任务模板: owner_level=0 超出 L1 下界 → 201（后端无层级范围验证）
+8. **`test_create_task_template_owner_level_eight`** — 创建任务模板: owner_level=8 超出 L7 上界 → 201（后端无层级范围验证）
+9. **`test_get_task_template_not_found`** — 获取任务模板: template 不存在 → 404
+10. **`test_update_task_template_not_found`** — 更新任务模板: template 不存在 → 404
+11. **`test_delete_task_template_not_found`** — 删除任务模板: template 不存在 → 404
+12. **`test_create_task_from_template_missing_plan_id`** — 从模板创建任务: 缺少必填参数 plan_id → 422
+13. **`test_create_task_from_template_missing_version`** — 从模板创建任务: 缺少必填参数 version → 422
+14. **`test_create_task_from_template_template_not_found`** — 从模板创建任务: template 不存在 → 404
+15. **`test_create_task_from_template_plan_not_found`** — 从模板创建任务: plan 不存在 → 500（后端不校验 plan 存在性，crud.create_task 失败返回 500）
+16. **`test_update_task_template_empty_name`** — 更新任务模板: name 设为空字符串 → 200（TaskTemplateUpdate.name 为 Optional[str]，允许空字符串）
+
+**发现的行为**：
+- `name` 和 `default_title` 为 Pydantic 必填字段，缺失返回 422，但空字符串 "" 可以创建成功（无 min_length 验证）
+- `priority` 和 `difficulty` 无枚举/正则验证，任意字符串均可创建成功
+- `estimated_hours` 无非负验证，负数值可以创建成功
+- `owner_level` 无 L1-L7 范围验证，0/8 等超界值可以创建成功
+- `create_task_from_template` 端点不校验 plan 存在性，不存在的 plan_id 导致 crud.create_task 内部失败返回 500
+
+### Check
+- ✅ python3 -m py_compile tests/test_e2e.py 语法检查通过
+- ✅ pytest TestTaskTemplatesBoundary 16/16 passed（+16 new tests）
+- ✅ pytest tests/ 786/786 passed（原有770 + 新增16 = 786）
+- ✅ docker-compose config 正常
+
+### Act
+- 更新 SPEC.md 完成 Step 137（版本 v2.86）
+- 追加飞书文档 RgmodbBvSoKP02xQMdgcyhs1nsg
