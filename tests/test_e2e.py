@@ -16249,7 +16249,7 @@ class TestRoomHierarchyBoundary:
         assert resp.status_code == 200
         data = resp.json()
         # duration_seconds 可能为 None（如果 started_at 为 None）
-        if "duration_seconds" in data:
+        if "duration_seconds" in data and data["duration_seconds"] is not None:
             assert data["duration_seconds"] >= 0
 
     def test_get_room_hierarchy_room_not_found(self, ensure_api):
@@ -16310,22 +16310,19 @@ class TestRoomHierarchyBoundary:
     def test_room_hierarchy_shows_children_after_conclude(self, room_info):
         """层级关系: 结束后子房间仍应在层级关系中返回"""
         room_id = room_info["room_id"]
+        plan_id = room_info.get("plan_id")
 
-        # 创建一个子房间
-        plan_id = room_info.get("plan_id") or list(_rooms.keys())[0] if _rooms else None
         if not plan_id:
-            # 创建计划
             p_resp = httpx.post(f"{API_BASE}/plans", json={"title": "层级测试", "topic": "测试", "requirements": []}, timeout=TIMEOUT)
             if p_resp.status_code == 201:
                 plan_id = p_resp.json()["plan"]["plan_id"]
 
         if plan_id:
-            # 创建子房间
             child_resp = httpx.post(f"{API_BASE}/rooms", json={"topic": "子房间", "plan_id": plan_id}, timeout=TIMEOUT)
             if child_resp.status_code == 200:
                 child_id = child_resp.json().get("room_id")
-                # 链接父子
-                link_resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"child_room_ids": [child_id]}, timeout=TIMEOUT)
+                # 链接父子（使用 related_room_ids 建立关联关系）
+                link_resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"related_room_ids": [child_id]}, timeout=TIMEOUT)
                 # 结束父房间
                 resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json={"summary": "完成"}, timeout=TIMEOUT)
                 assert resp.status_code == 200

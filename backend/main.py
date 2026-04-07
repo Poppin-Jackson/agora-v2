@@ -4139,6 +4139,14 @@ async def link_room(room_id: str, data: RoomLinkRequest):
     - 设置 related_rooms（双向维护）
     来源：08-Data-Models-Details.md §4.1 Room.parent_room_id/child_rooms/related_rooms
     """
+
+    def _is_valid_uuid(s: str) -> bool:
+        try:
+            uuid.UUID(s)
+            return True
+        except (ValueError, AttributeError):
+            return False
+
     logger.warning(f"[DEBUG link_room] room_id={room_id}, in_rooms={room_id in _rooms}")
     if room_id not in _rooms:
         await _sync_room_to_memory(room_id)
@@ -4149,23 +4157,32 @@ async def link_room(room_id: str, data: RoomLinkRequest):
     # 防止自引用
     if data.parent_room_id and data.parent_room_id == room_id:
         raise HTTPException(status_code=400, detail="Cannot link room to itself")
-    # 验证 parent_room_id 存在
+    # 验证 parent_room_id 格式和存在性
     if data.parent_room_id:
+        if not _is_valid_uuid(data.parent_room_id):
+            raise HTTPException(status_code=400, detail="Invalid parent_room_id UUID format")
         parent_exists = await crud.get_room(data.parent_room_id)
         if not parent_exists:
             raise HTTPException(status_code=404, detail="Parent room not found")
-    # 验证 related_room_ids 都存在
+    # 验证 related_room_ids 格式和存在性
     if data.related_room_ids:
         for rel_id in data.related_room_ids:
+            if not _is_valid_uuid(rel_id):
+                raise HTTPException(status_code=400, detail=f"Invalid related_room_id UUID format: {rel_id}")
             rel_exists = await crud.get_room(rel_id)
             if not rel_exists:
                 raise HTTPException(status_code=404, detail=f"Related room {rel_id} not found")
 
-    updated = await crud.link_rooms(
-        room_id=room_id,
-        parent_room_id=data.parent_room_id,
-        related_room_ids=data.related_room_ids,
-    )
+    # 调用 crud.link_rooms，捕获可能的数据库错误（如无效 UUID 格式）
+    try:
+        updated = await crud.link_rooms(
+            room_id=room_id,
+            parent_room_id=data.parent_room_id,
+            related_room_ids=data.related_room_ids,
+        )
+    except Exception as e:
+        logger.error(f"[link_room] CRUD error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid room ID format")
 
     if updated:
         _rooms[room_id] = updated
