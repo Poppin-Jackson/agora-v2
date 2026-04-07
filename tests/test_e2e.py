@@ -8506,6 +8506,97 @@ class TestNotificationAPIBoundary:
         assert result["read"] is False
         assert result["message"] is None
 
+    def test_list_notifications_limit_zero(self):
+        """列出通知时 limit=0 返回空列表或 200"""
+        resp = httpx.get(f"{API_BASE}/notifications", params={"limit": 0}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert isinstance(result, list)
+
+    def test_list_notifications_limit_negative(self):
+        """列出通知时 limit=-1 行为验证"""
+        resp = httpx.get(f"{API_BASE}/notifications", params={"limit": -1}, timeout=TIMEOUT)
+        assert resp.status_code in (200, 422)
+
+    def test_list_notifications_limit_exceeds_reasonable(self):
+        """列出通知时 limit=1000（超大）返回 200"""
+        resp = httpx.get(f"{API_BASE}/notifications", params={"limit": 1000}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_list_notifications_offset_beyond_results(self):
+        """列出通知时 offset 超过结果总数返回空列表"""
+        resp = httpx.get(f"{API_BASE}/notifications", params={"offset": 999999}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        assert isinstance(result, list)
+
+    def test_list_notifications_with_plan_id_filter(self):
+        """列出通知时按 plan_id 过滤"""
+        notification_data = {
+            "recipient_id": "agent-plan-filter-test",
+            "type": "task_assigned",
+            "title": "计划通知",
+            "plan_id": str(uuid.uuid4()),
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = notification_data["plan_id"]
+        resp = httpx.get(f"{API_BASE}/notifications", params={"plan_id": plan_id}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        for n in result:
+            assert n.get("plan_id") == plan_id
+
+    def test_list_notifications_with_room_id_filter(self):
+        """列出通知时按 room_id 过滤"""
+        notification_data = {
+            "recipient_id": "agent-room-filter-test",
+            "type": "task_assigned",
+            "title": "房间通知",
+            "room_id": str(uuid.uuid4()),
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        room_id = notification_data["room_id"]
+        resp = httpx.get(f"{API_BASE}/notifications", params={"room_id": room_id}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        result = resp.json()
+        for n in result:
+            assert n.get("room_id") == room_id
+
+    def test_list_notifications_with_read_filter(self):
+        """列出通知时按 read 状态过滤"""
+        notification_data = {
+            "recipient_id": "agent-read-filter-test",
+            "type": "task_assigned",
+            "title": "未读通知",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        resp = httpx.get(f"{API_BASE}/notifications", params={"recipient_id": "agent-read-filter-test", "read": "false"}, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+    def test_list_notifications_combined_filters(self):
+        """列出通知时组合多个过滤条件"""
+        recipient = f"agent-combined-{uuid.uuid4().hex[:8]}"
+        notification_data = {
+            "recipient_id": recipient,
+            "type": "task_completed",
+            "title": "组合过滤测试",
+        }
+        resp = httpx.post(f"{API_BASE}/notifications", json=notification_data, timeout=TIMEOUT)
+        assert resp.status_code == 201
+        resp = httpx.get(
+            f"{API_BASE}/notifications",
+            params={"recipient_id": recipient, "type": "task_completed", "limit": 10},
+            timeout=TIMEOUT
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        for n in result:
+            assert n.get("recipient_id") == recipient
+            assert n.get("type") == "task_completed"
+
 
 class TestRoomTemplates:
     """Room Templates API 测试"""
