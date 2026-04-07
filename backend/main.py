@@ -4330,7 +4330,7 @@ async def get_room_history(room_id: str):
 async def search_room_messages(
     room_id: str,
     q: str = Query(..., min_length=1),
-    limit: int = 50,
+    limit: int = Query(50, ge=0),
 ):
     """
     搜索讨论室消息内容

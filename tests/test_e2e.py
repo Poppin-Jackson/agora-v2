@@ -14424,6 +14424,142 @@ class TestRoomMessageSearch:
 
 
 # ==============================================================================
+# Step 149: Room Message Search API Boundary Tests
+# ==============================================================================
+class TestRoomMessageSearchBoundary:
+    """Room Message Search API 边界测试 — 搜索功能的边界场景"""
+
+    @staticmethod
+    def _add_speech(room_id: str, agent_id: str, content: str) -> dict:
+        """添加一条发言到讨论室"""
+        payload = {"agent_id": agent_id, "content": content}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/speech", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_search_messages_limit_negative(self, room_info):
+        """搜索消息：limit负数应返回422验证错误（而非500 SQL错误）"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "测试消息内容ABC")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "测试", "limit": -1},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"limit=-1 应返回422，实际{resp.status_code}：{resp.text}"
+
+    def test_search_messages_limit_zero(self, room_info):
+        """搜索消息：limit=0应返回200，total>=实际数量但results为空列表"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "测试消息内容XYZ")
+        self._add_speech(room_id, "agent-2", "另一条测试消息XYZ")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "XYZ", "limit": 0},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"limit=0 应返回200，实际{resp.status_code}"
+        data = resp.json()
+        assert data["total"] >= 2, f"total应>=2，实际{data['total']}"
+        assert data["results"] == [], f"limit=0时results应为空，实际{data['results']}"
+
+    def test_search_messages_limit_very_large(self, room_info):
+        """搜索消息：limit=999999应返回200，正常处理不崩溃"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "测试消息内容BIG")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "BIG", "limit": 999999},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"limit=999999应返回200，实际{resp.status_code}：{resp.text}"
+        data = resp.json()
+        assert "results" in data
+        assert isinstance(data["results"], list)
+
+    def test_search_messages_query_special_chars(self, room_info):
+        """搜索消息：特殊字符<>'\"应被安全处理，不导致500错误"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "普通消息内容")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "<>'\""},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"特殊字符查询应返回200，实际{resp.status_code}：{resp.text}"
+        data = resp.json()
+        assert "results" in data
+        assert isinstance(data["results"], list)
+        assert "total" in data
+
+    def test_search_messages_query_emoji(self, room_info):
+        """搜索消息：Emoji查询应正常处理Unicode，不导致错误"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "这是一个🎉庆祝消息")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "🎉"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200, f"Emoji查询应返回200，实际{resp.status_code}：{resp.text}"
+        data = resp.json()
+        assert data["total"] >= 1, "应匹配到包含🎉的消息"
+        assert all("🎉" in m["content"] for m in data["results"])
+
+    def test_search_messages_results_structure(self, room_info):
+        """搜索消息：results每项必须包含必需字段（message_id/content/agent_id/timestamp）"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "结构验证测试消息")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "结构验证"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] >= 1, "应有至少1条匹配消息"
+        msg = data["results"][0]
+        assert "message_id" in msg, "消息缺少message_id"
+        assert "content" in msg, "消息缺少content"
+        assert "agent_id" in msg, "消息缺少agent_id"
+        assert "timestamp" in msg, "消息缺少timestamp"
+
+    def test_search_messages_response_is_object(self, room_info):
+        """搜索消息：响应是dict而非list，验证顶层结构"""
+        room_id = room_info["room_id"]
+        self._add_speech(room_id, "agent-1", "类型验证消息")
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            params={"q": "类型验证"},
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict), f"响应应为dict，实际为{type(data)}"
+        assert "room_id" in data
+        assert "query" in data
+        assert "total" in data
+        assert "results" in data
+
+    def test_search_messages_missing_query_param(self, room_info):
+        """搜索消息：缺少必需参数q应返回422验证错误"""
+        room_id = room_info["room_id"]
+
+        resp = httpx.get(
+            f"{API_BASE}/rooms/{room_id}/messages/search",
+            timeout=TIMEOUT,
+        )
+        assert resp.status_code == 422, f"缺少q参数应返回422，实际{resp.status_code}"
+
+
+# ==============================================================================
 # Step 118: Edict API Boundary Tests
 # ==============================================================================
 class TestEdictAPIBoundary:
