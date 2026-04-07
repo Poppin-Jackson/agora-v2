@@ -4160,7 +4160,7 @@ async def link_room(room_id: str, data: RoomLinkRequest):
     # 验证 parent_room_id 格式和存在性
     if data.parent_room_id:
         if not _is_valid_uuid(data.parent_room_id):
-            raise HTTPException(status_code=400, detail="Invalid parent_room_id UUID format")
+            raise HTTPException(status_code=422, detail="Invalid parent_room_id UUID format")
         parent_exists = await crud.get_room(data.parent_room_id)
         if not parent_exists:
             raise HTTPException(status_code=404, detail="Parent room not found")
@@ -4168,7 +4168,7 @@ async def link_room(room_id: str, data: RoomLinkRequest):
     if data.related_room_ids:
         for rel_id in data.related_room_ids:
             if not _is_valid_uuid(rel_id):
-                raise HTTPException(status_code=400, detail=f"Invalid related_room_id UUID format: {rel_id}")
+                raise HTTPException(status_code=422, detail=f"Invalid related_room_id UUID format: {rel_id}")
             rel_exists = await crud.get_room(rel_id)
             if not rel_exists:
                 raise HTTPException(status_code=404, detail=f"Related room {rel_id} not found")
