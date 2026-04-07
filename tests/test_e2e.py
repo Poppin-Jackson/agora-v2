@@ -338,6 +338,91 @@ class TestDashboard:
         assert len(body["recent_activities"]) <= 10
 
 
+# ========================
+# Step 148: Dashboard API Boundary Tests
+# ========================
+class TestDashboardBoundary:
+    """Dashboard API Boundary Tests"""
+
+    def test_dashboard_all_count_fields_non_negative(self, ensure_api):
+        """Dashboard: 所有计数字段必须为非负整数"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        # 所有计数字段必须 >= 0
+        assert body["total_plans"] >= 0
+        assert body["active_plans"] >= 0
+        assert body["total_rooms"] >= 0
+        assert body["pending_action_items"] >= 0
+        assert body["pending_approvals"] >= 0
+
+    def test_dashboard_active_plans_not_exceed_total(self, ensure_api):
+        """Dashboard: active_plans 不能超过 total_plans"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["active_plans"] <= body["total_plans"]
+
+    def test_dashboard_rooms_by_phase_values_non_negative(self, ensure_api):
+        """Dashboard: rooms_by_phase 的值必须为非负整数"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        for phase, count in body["rooms_by_phase"].items():
+            assert isinstance(count, int), f"phase {phase} count must be int, got {type(count)}"
+            assert count >= 0, f"phase {phase} count must be >= 0, got {count}"
+
+    def test_dashboard_recent_plans_items_have_required_fields(self, ensure_api):
+        """Dashboard: recent_plans 每项必须包含 plan_id 和 title"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        for plan in body.get("recent_plans", []):
+            assert "plan_id" in plan, "recent_plans item missing plan_id"
+            assert "title" in plan, "recent_plans item missing title"
+
+    def test_dashboard_recent_rooms_items_have_required_fields(self, ensure_api):
+        """Dashboard: recent_rooms 每项必须包含 room_id, topic, plan_id, phase"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        for room in body.get("recent_rooms", []):
+            assert "room_id" in room, "recent_rooms item missing room_id"
+            assert "topic" in room, "recent_rooms item missing topic"
+            assert "plan_id" in room, "recent_rooms item missing plan_id"
+            assert "phase" in room, "recent_rooms item missing phase"
+
+    def test_dashboard_recent_activities_items_have_required_fields(self, ensure_api):
+        """Dashboard: recent_activities 每项必须包含 activity_id, action_type"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        for activity in body.get("recent_activities", []):
+            assert "activity_id" in activity, "recent_activities item missing activity_id"
+            assert "action_type" in activity, "recent_activities item missing action_type"
+
+    def test_dashboard_response_is_object_not_array(self, ensure_api):
+        """Dashboard: 响应是 dict 而非 list"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, dict)
+        assert not isinstance(body, list)
+
+    def test_dashboard_all_top_level_fields_present(self, ensure_api):
+        """Dashboard: 验证所有顶层字段存在"""
+        resp = httpx.get(f"{API_BASE}/dashboard/stats", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        body = resp.json()
+        required_fields = [
+            "total_plans", "active_plans", "total_rooms",
+            "rooms_by_phase", "recent_plans", "recent_rooms",
+            "recent_activities", "pending_action_items", "pending_approvals"
+        ]
+        for field in required_fields:
+            assert field in body, f"Missing required field: {field}"
+
+
 class TestPlanCreation:
     """Plan创建 + 自动Room创建"""
 

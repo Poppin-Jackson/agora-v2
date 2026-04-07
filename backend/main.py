@@ -7779,8 +7779,8 @@ async def list_notifications(
     room_id: Optional[str] = None,
     type: Optional[str] = None,
     read: Optional[bool] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=0),
+    offset: int = Query(0, ge=0),
 ):
     """
     列出通知（支持过滤）
