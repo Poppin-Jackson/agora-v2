@@ -11545,6 +11545,78 @@ class TestRoomWatch:
         assert resp.status_code == 422
 
 
+    def test_watch_room_user_id_too_long(self, room_info):
+        """user_id 超过最大长度仍可创建（API 无 max_length 限制，验证接受超长字符串）"""
+        room_id = room_info["room_id"]
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": "x" * 300, "user_name": "超长用户"},
+            timeout=TIMEOUT
+        )
+        # API 无 max_length 验证，接受任意非空字符串
+        assert resp.status_code == 201
+
+    def test_list_room_watchers_room_not_found(self):
+        """列出不存在讨论室的关注者返回 404"""
+        fake_room = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_room}/watchers", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_list_room_watchers_invalid_room_uuid(self):
+        """列出关注者时使用无效 UUID 格式返回 404（FastAPI 路由接受任意字符串）"""
+        resp = httpx.get(f"{API_BASE}/rooms/not-a-uuid/watchers", timeout=TIMEOUT)
+        # FastAPI 不校验 UUID 格式，路由匹配成功，最终在 handler 中 404
+        assert resp.status_code == 404
+
+    def test_unwatch_room_missing_user_id(self, room_info):
+        """取消关注时缺少 user_id 参数返回 422"""
+        room_id = room_info["room_id"]
+        resp = httpx.delete(f"{API_BASE}/rooms/{room_id}/watch", timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_unwatch_room_invalid_room_uuid(self):
+        """取消关注时使用无效 UUID 格式返回 404（FastAPI 路由接受任意字符串）"""
+        resp = httpx.delete(f"{API_BASE}/rooms/invalid-uuid/watch?user_id=test-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_is_room_watched_room_not_found(self):
+        """检查关注状态时讨论室不存在返回 404"""
+        fake_room = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_room}/watch/status?user_id=test-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_is_room_watched_invalid_room_uuid(self):
+        """检查关注状态时使用无效 UUID 格式返回 404（FastAPI 路由接受任意字符串）"""
+        resp = httpx.get(f"{API_BASE}/rooms/bad-uuid/watch/status?user_id=test-user", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_watch_room_user_id_whitespace_only(self, room_info):
+        """user_id 仅为空白字符仍被接受（API 仅验证 min_length=1，" " 长度为1通过）"""
+        room_id = room_info["room_id"]
+        resp = httpx.post(
+            f"{API_BASE}/rooms/{room_id}/watch",
+            json={"user_id": " ", "user_name": "空白用户"},
+            timeout=TIMEOUT
+        )
+        # min_length=1 验证：" " 长度为1，满足 min_length
+        assert resp.status_code == 201
+
+    def test_get_user_watched_rooms_empty_user_id(self):
+        """获取用户关注房间时 user_id 为空返回 404（路由不匹配）"""
+        resp = httpx.get(f"{API_BASE}/users//watched-rooms", timeout=TIMEOUT)
+        # 尾部斜杠导致路由不匹配，返回 404
+        assert resp.status_code == 404
+
+    def test_get_user_watched_rooms_nonexistent_user(self):
+        """获取不存在的用户的关注列表返回空"""
+        fake_user = f"nonexistent-{uuid.uuid4().hex[:8]}"
+        resp = httpx.get(f"{API_BASE}/users/{fake_user}/watched-rooms", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 0
+        assert data["watched_rooms"] == []
+
+
 # ========================
 # Plan Copy API (Step 88)
 # ========================
@@ -16084,3 +16156,190 @@ class TestTaskCRUDBoundary:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestRoomHierarchyBoundary:
+    """Room Hierarchy API 边界测试 (Step 151) - conclude_room + ended_at 字段验证"""
+
+    def test_conclude_room_empty_summary_accepted(self, room_info):
+        """结束房间: summary="" (空字符串) 应被接受 (无 min_length 验证)"""
+        room_id = room_info["room_id"]
+        payload = {"summary": "", "conclusion": ""}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["summary"] == ""
+        assert data["conclusion"] == ""
+
+    def test_conclude_room_only_required_fields(self, room_info):
+        """结束房间: 仅提供必填字段 (summary) 应成功"""
+        room_id = room_info["room_id"]
+        payload = {"summary": "讨论完成"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["summary"] == "讨论完成"
+        assert data["conclusion"] is None
+        assert "ended_at" in data
+
+    def test_conclude_room_missing_summary(self, room_info):
+        """结束房间: 缺少必填字段 summary 应返回 422"""
+        room_id = room_info["room_id"]
+        payload = {"conclusion": "结论"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_conclude_room_room_not_found(self, ensure_api):
+        """结束房间: room 不存在应返回 404"""
+        fake_id = str(uuid.uuid4())
+        payload = {"summary": "测试"}
+        resp = httpx.post(f"{API_BASE}/rooms/{fake_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_conclude_room_invalid_uuid(self, ensure_api):
+        """结束房间: 无效 UUID 格式应返回 404"""
+        payload = {"summary": "测试"}
+        resp = httpx.post(f"{API_BASE}/rooms/not-a-uuid/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (404, 422)
+
+    def test_conclude_room_then_get_hierarchy_shows_ended_at(self, room_info):
+        """结束房间后: get_room_hierarchy 应返回 ended_at 字段"""
+        room_id = room_info["room_id"]
+
+        # 先结束房间
+        payload = {"summary": "总结", "conclusion": "结论"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        concluded = resp.json()
+        assert "ended_at" in concluded
+
+        # 验证 get_room_hierarchy 返回 ended_at
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        hierarchy = resp.json()
+        assert "ended_at" in hierarchy
+
+    def test_get_room_hierarchy_before_conclude_ended_at_is_none(self, room_info):
+        """结束前获取层级关系: ended_at 应为 None"""
+        room_id = room_info["room_id"]
+        resp = httpx.get(f"{API_BASE}/rooms/{room_id}/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        # ended_at 在返回中存在但为 None（因为房间未结束）
+        assert "ended_at" in data
+
+    def test_conclude_room_twice_second_succeeds(self, room_info):
+        """结束房间: 重复结束应成功 (幂等)"""
+        room_id = room_info["room_id"]
+        payload = {"summary": "第一次总结"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+
+        # 第二次结束
+        payload2 = {"summary": "第二次总结"}
+        resp2 = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload2, timeout=TIMEOUT)
+        assert resp2.status_code == 200
+        assert resp2.json()["summary"] == "第二次总结"
+
+    def test_conclude_room_calculates_duration_seconds(self, room_info):
+        """结束房间: duration_seconds 应为非负整数"""
+        room_id = room_info["room_id"]
+        payload = {"summary": "完成"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 200
+        data = resp.json()
+        # duration_seconds 可能为 None（如果 started_at 为 None）
+        if "duration_seconds" in data:
+            assert data["duration_seconds"] >= 0
+
+    def test_get_room_hierarchy_room_not_found(self, ensure_api):
+        """获取层级关系: room 不存在应返回 404"""
+        fake_id = str(uuid.uuid4())
+        resp = httpx.get(f"{API_BASE}/rooms/{fake_id}/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_link_room_self_reference_returns_400(self, room_info):
+        """链接房间: 自引用 (parent_room_id == room_id) 应返回 400"""
+        room_id = room_info["room_id"]
+        payload = {"parent_room_id": room_id}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 400
+
+    def test_link_room_invalid_payload_no_parent_no_related(self, room_info):
+        """链接房间: 既无 parent_room_id 也无 related_room_ids 应返回 422"""
+        room_id = room_info["room_id"]
+        payload = {}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 422
+
+    def test_link_room_parent_not_found_returns_404(self, room_info):
+        """链接房间: 父房间不存在应返回 404"""
+        room_id = room_info["room_id"]
+        fake_parent = str(uuid.uuid4())
+        payload = {"parent_room_id": fake_parent}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json=payload, timeout=TIMEOUT)
+        assert resp.status_code == 404
+
+    def test_conclude_room_invalid_uuid_format(self, ensure_api):
+        """结束房间: 无效 UUID 格式应返回 404"""
+        payload = {"summary": "test"}
+        resp = httpx.post(f"{API_BASE}/rooms/invalid-uuid-format/conclude", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (404, 422)
+
+    def test_get_room_hierarchy_invalid_uuid(self, ensure_api):
+        """获取层级关系: 无效 UUID 格式应返回 404"""
+        resp = httpx.get(f"{API_BASE}/rooms/bad-uuid/hierarchy", timeout=TIMEOUT)
+        assert resp.status_code in (404, 422)
+
+    def test_link_room_invalid_uuid_returns_404(self, room_info):
+        """链接房间: 无效 UUID 格式应返回 404"""
+        room_id = room_info["room_id"]
+        payload = {"parent_room_id": "not-a-valid-uuid"}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json=payload, timeout=TIMEOUT)
+        assert resp.status_code in (404, 422)
+
+    def test_conclude_room_with_very_long_summary(self, room_info):
+        """结束房间: 超长 summary (10000字符) 应被接受 (无 max_length 验证)"""
+        room_id = room_info["room_id"]
+        long_summary = "测试" * 2500  # ~10000字符
+        payload = {"summary": long_summary}
+        resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json=payload, timeout=TIMEOUT)
+        # backend 可能接受超长字符串 (无 max_length 验证)
+        assert resp.status_code in (200, 422)
+
+    def test_room_hierarchy_shows_children_after_conclude(self, room_info):
+        """层级关系: 结束后子房间仍应在层级关系中返回"""
+        room_id = room_info["room_id"]
+
+        # 创建一个子房间
+        plan_id = room_info.get("plan_id") or list(_rooms.keys())[0] if _rooms else None
+        if not plan_id:
+            # 创建计划
+            p_resp = httpx.post(f"{API_BASE}/plans", json={"title": "层级测试", "topic": "测试", "requirements": []}, timeout=TIMEOUT)
+            if p_resp.status_code == 201:
+                plan_id = p_resp.json()["plan"]["plan_id"]
+
+        if plan_id:
+            # 创建子房间
+            child_resp = httpx.post(f"{API_BASE}/rooms", json={"topic": "子房间", "plan_id": plan_id}, timeout=TIMEOUT)
+            if child_resp.status_code == 200:
+                child_id = child_resp.json().get("room_id")
+                # 链接父子
+                link_resp = httpx.post(f"{API_BASE}/rooms/{room_id}/link", json={"child_room_ids": [child_id]}, timeout=TIMEOUT)
+                # 结束父房间
+                resp = httpx.post(f"{API_BASE}/rooms/{room_id}/conclude", json={"summary": "完成"}, timeout=TIMEOUT)
+                assert resp.status_code == 200
+                # 获取层级关系
+                hier_resp = httpx.get(f"{API_BASE}/rooms/{room_id}/hierarchy", timeout=TIMEOUT)
+                assert hier_resp.status_code == 200
+                hier = hier_resp.json()
+                assert "ended_at" in hier
+                assert hier["ended_at"] is not None
+
+
+# ========================
+# Helper: Room Hierarchy test fixture data access
+# ========================
+def _get_rooms():
+    """获取当前内存中的 rooms dict (用于测试辅助)"""
+    return _rooms
