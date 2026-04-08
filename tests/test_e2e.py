@@ -3512,6 +3512,606 @@ class TestProblemHandling:
 
 
 # ========================
+# 问题处理流程边界测试（ProblemHandling API 边界）
+# 来源: Step 152 - ProblemHandling API 边界测试
+# ========================
+
+
+class TestProblemHandlingBoundary:
+    """Step 152: ProblemHandling API 边界测试"""
+
+    TIMEOUT = 10.0
+    API_BASE = "http://localhost:8000"
+
+    def _create_reported_problem(self):
+        """创建 plan 并报告问题，返回 (plan_id, room_id, issue_id)"""
+        plan_payload = {
+            "title": f"ProblemBoundary测试-{uuid.uuid4().hex[:8]}",
+            "topic": "问题边界测试",
+            "requirements": [],
+        }
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        data = resp.json()
+        plan_id = data["plan"]["plan_id"]
+        room_id = data["room"]["room_id"]
+
+        # 推进到 EXECUTING：创建任务
+        task_payload = {
+            "title": "测试任务",
+            "owner_id": "agent-1",
+            "owner_level": 5,
+            "owner_role": "Developer",
+            "priority": "high",
+            "estimated_hours": 8.0,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/plans/{plan_id}/versions/v1.0/tasks",
+            json=task_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 201
+
+        # 报告问题
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "type": "blocking",
+            "title": "测试问题",
+            "description": "测试问题描述",
+            "severity": "high",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 200
+        issue_id = resp.json()["issue_id"]
+        return plan_id, room_id, issue_id
+
+    # --- report_problem 边界测试 ---
+
+    def test_report_problem_invalid_type_rejected(self, ensure_api):
+        """报告问题：type="crash"（无效枚举值）→ 422"""
+        plan_payload = {"title": "边界测试计划", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "type": "crash",  # 无效值
+            "title": "测试标题",
+            "description": "测试描述",
+            "severity": "high",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_invalid_severity_rejected(self, ensure_api):
+        """报告问题：severity="fatal"（无效枚举值）→ 422"""
+        plan_payload = {"title": "边界测试计划2", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "type": "blocking",
+            "title": "测试标题",
+            "description": "测试描述",
+            "severity": "fatal",  # 无效值
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_all_valid_types(self, ensure_api):
+        """报告问题：全部5种 type 枚举值均可创建成功"""
+        plan_payload = {"title": "边界测试计划3", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        for ptype in ["blocking", "bug", "enhancement", "risk", "dependency"]:
+            problem_payload = {
+                "plan_id": plan_id,
+                "room_id": room_id,
+                "type": ptype,
+                "title": f"测试-{ptype}",
+                "description": "测试描述",
+                "severity": "medium",
+                "detected_by": "Tester",
+            }
+            resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+            assert resp.status_code == 200, f"type={ptype} 应返回200，实际 {resp.status_code}"
+
+    def test_report_problem_all_valid_severities(self, ensure_api):
+        """报告问题：全部4种 severity 枚举值均可创建成功"""
+        plan_payload = {"title": "边界测试计划4", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        for severity in ["low", "medium", "high", "critical"]:
+            problem_payload = {
+                "plan_id": plan_id,
+                "room_id": room_id,
+                "type": "bug",
+                "title": f"测试-{severity}",
+                "description": "测试描述",
+                "severity": severity,
+                "detected_by": "Tester",
+            }
+            resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+            assert resp.status_code == 200, f"severity={severity} 应返回200，实际 {resp.status_code}"
+
+    def test_report_problem_empty_title_accepted(self, ensure_api):
+        """报告问题：title=""（空字符串，backend 无 min_length 验证）→ 201"""
+        plan_payload = {"title": "边界测试计划5", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "type": "bug",
+            "title": "",  # 空字符串
+            "description": "描述",
+            "severity": "medium",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        # ProblemReport.title 无 min_length 验证，接受空字符串
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_empty_description_accepted(self, ensure_api):
+        """报告问题：description=""（空字符串，backend 无 min_length 验证）→ 201"""
+        plan_payload = {"title": "边界测试计划6", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "type": "bug",
+            "title": "标题",
+            "description": "",  # 空字符串
+            "severity": "medium",
+            "detected_by": "Tester",
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        # ProblemReport.description 无 min_length 验证，接受空字符串
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+
+    def test_report_problem_missing_type_field(self, ensure_api):
+        """报告问题：缺少必填字段 type → 422"""
+        plan_payload = {"title": "边界测试计划7", "topic": "测试"}
+        resp = httpx.post(f"{self.API_BASE}/plans", json=plan_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 201
+        plan_id = resp.json()["plan"]["plan_id"]
+        room_id = resp.json()["room"]["room_id"]
+
+        problem_payload = {
+            "plan_id": plan_id,
+            "room_id": room_id,
+            "title": "测试标题",
+            "description": "测试描述",
+            "severity": "high",
+            "detected_by": "Tester",
+            # 缺少 type
+        }
+        resp = httpx.post(f"{self.API_BASE}/problems/report", json=problem_payload, timeout=self.TIMEOUT)
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    # --- analyze_problem 边界测试 ---
+
+    def test_analyze_problem_not_found(self, ensure_api):
+        """分析问题：issue_id 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{fake_uuid}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_confidence_negative(self, ensure_api):
+        """分析问题：root_cause_confidence=-0.1 → 422（ge=0.0 验证）"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": -0.1,  # 超出下界
+            "severity_reassessment": "high",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_confidence_above_one(self, ensure_api):
+        """分析问题：root_cause_confidence=1.5 → 422（le=1.0 验证）"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 1.5,  # 超出上界
+            "severity_reassessment": "high",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_confidence_at_boundary_low(self, ensure_api):
+        """分析问题：root_cause_confidence=0.0（边界值）→ 200"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "最小置信度",
+            "root_cause_confidence": 0.0,  # 下边界
+            "severity_reassessment": "low",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_confidence_at_boundary_high(self, ensure_api):
+        """分析问题：root_cause_confidence=1.0（边界值）→ 200"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "最大置信度",
+            "root_cause_confidence": 1.0,  # 上边界
+            "severity_reassessment": "critical",
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200, f"期望200，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_invalid_severity_reassessment(self, ensure_api):
+        """分析问题：severity_reassessment="urgent"（无效枚举）→ 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "urgent",  # 无效值
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_missing_root_cause(self, ensure_api):
+        """分析问题：缺少必填字段 root_cause → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            # 缺少 root_cause
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_analyze_problem_missing_severity_reassessment(self, ensure_api):
+        """分析问题：缺少必填字段 severity_reassessment → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            # 缺少 severity_reassessment
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    # --- discuss_problem 边界测试 ---
+
+    def test_discuss_problem_not_found(self, ensure_api):
+        """讨论问题：issue_id 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        discuss_payload = {
+            "participants": [{"id": "agent-1", "name": "Agent 1"}],
+            "discussion_focus": [{"aspect": "影响范围", "concerns": ["成本"]}],
+            "proposed_solutions": [{"id": 1, "description": "方案1"}],
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{fake_uuid}/discuss",
+            json=discuss_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_discuss_problem_missing_participants(self, ensure_api):
+        """讨论问题：缺少必填字段 participants → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        # 先分析问题（推进到 PLAN_UPDATE 状态）
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": True,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        discuss_payload = {
+            "discussion_focus": [{"aspect": "影响范围", "concerns": ["成本"]}],
+            "proposed_solutions": [{"id": 1, "description": "方案1"}],
+            # 缺少 participants
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/discuss",
+            json=discuss_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_discuss_problem_missing_discussion_focus(self, ensure_api):
+        """讨论问题：缺少必填字段 discussion_focus → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": True,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        discuss_payload = {
+            "participants": [{"id": "agent-1", "name": "Agent 1"}],
+            "proposed_solutions": [{"id": 1, "description": "方案1"}],
+            # 缺少 discussion_focus
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/discuss",
+            json=discuss_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    # --- update-plan 边界测试 ---
+
+    def test_update_plan_not_found(self, ensure_api):
+        """更新方案：issue_id 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        update_payload = {
+            "new_version": "v1.1",
+            "parent_version": "v1.0",
+            "description": "修复问题",
+            "changes": {"description": "更新描述"},
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{fake_uuid}/update-plan",
+            json=update_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_update_plan_missing_new_version(self, ensure_api):
+        """更新方案：缺少必填字段 new_version → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": False,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        update_payload = {
+            "parent_version": "v1.0",
+            "description": "修复问题",
+            "changes": {"description": "更新描述"},
+            # 缺少 new_version
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/update-plan",
+            json=update_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_update_plan_missing_parent_version(self, ensure_api):
+        """更新方案：缺少必填字段 parent_version → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": False,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        update_payload = {
+            "new_version": "v1.1",
+            "description": "修复问题",
+            "changes": {"description": "更新描述"},
+            # 缺少 parent_version
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/update-plan",
+            json=update_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    # --- resume 边界测试 ---
+
+    def test_resume_not_found(self, ensure_api):
+        """恢复执行：issue_id 不存在 → 404"""
+        fake_uuid = str(uuid.uuid4())
+        resume_payload = {
+            "new_version": "v1.1",
+            "resuming_from_task": 1,
+            "checkpoint": "已完成数据迁移",
+            "resume_instructions": {"next": "开始API对接"},
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{fake_uuid}/resume",
+            json=resume_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_resume_missing_resuming_from_task(self, ensure_api):
+        """恢复执行：缺少必填字段 resuming_from_task → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        # 推进到 RESUMING 状态
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": False,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        update_payload = {
+            "new_version": "v1.1",
+            "parent_version": "v1.0",
+            "description": "修复",
+            "changes": {},
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/update-plan",
+            json=update_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        resume_payload = {
+            "new_version": "v1.1",
+            "checkpoint": "已完成数据迁移",
+            "resume_instructions": {"next": "开始API对接"},
+            # 缺少 resuming_from_task
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/resume",
+            json=resume_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    def test_resume_missing_checkpoint(self, ensure_api):
+        """恢复执行：缺少必填字段 checkpoint → 422"""
+        plan_id, room_id, issue_id = self._create_reported_problem()
+
+        analysis_payload = {
+            "root_cause": "根本原因",
+            "root_cause_confidence": 0.8,
+            "severity_reassessment": "high",
+            "requires_discussion": False,
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/analyze",
+            json=analysis_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        update_payload = {
+            "new_version": "v1.1",
+            "parent_version": "v1.0",
+            "description": "修复",
+            "changes": {},
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/update-plan",
+            json=update_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 200
+
+        resume_payload = {
+            "new_version": "v1.1",
+            "resuming_from_task": 1,
+            "resume_instructions": {"next": "开始API对接"},
+            # 缺少 checkpoint
+        }
+        resp = httpx.post(
+            f"{self.API_BASE}/problems/{issue_id}/resume",
+            json=resume_payload,
+            timeout=self.TIMEOUT,
+        )
+        assert resp.status_code == 422, f"期望422，实际 {resp.status_code}: {resp.text}"
+
+    # --- GET 边界测试 ---
+
+    def test_get_problem_invalid_uuid(self, ensure_api):
+        """获取问题：无效 UUID 格式 → 404（路由匹配但 handler 返回404）"""
+        resp = httpx.get(f"{self.API_BASE}/problems/not-a-uuid", timeout=self.TIMEOUT)
+        assert resp.status_code == 404, f"期望404，实际 {resp.status_code}: {resp.text}"
+
+    def test_get_plan_problems_nonexistent_plan(self, ensure_api):
+        """获取方案问题：方案不存在 → 返回200空列表（backend 不验证plan存在性）"""
+        fake_uuid = str(uuid.uuid4())
+        resp = httpx.get(f"{self.API_BASE}/plans/{fake_uuid}/problems", timeout=self.TIMEOUT)
+        # backend 在 plan 不存在时返回空列表（不抛404）
+        assert resp.status_code in (200, 404), f"期望200或404，实际 {resp.status_code}"
+        if resp.status_code == 200:
+            assert isinstance(resp.json(), list), "返回应为列表"
+
+
+# ========================
 # 层级汇报/升级测试（05-Hierarchy-Roles.md §7.2）
 # 来源: Step 20 - 层级汇报/升级系统
 # ========================
